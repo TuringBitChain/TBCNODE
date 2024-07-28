@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Verify that dust and non-dust tx outputs are rejected and accepted as expected,
 when the dustrelayfee setting changes between releases or is configured manually.

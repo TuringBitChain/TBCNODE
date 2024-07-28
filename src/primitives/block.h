@@ -1,11 +1,11 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_PRIMITIVES_BLOCK_H
 #define BITCOIN_PRIMITIVES_BLOCK_H
-
 #include "primitives/transaction.h"
 #include "serialize.h"
 #include "uint256.h"

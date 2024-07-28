@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "amount.h"
 
@@ -10,8 +10,8 @@
 const std::string CURRENCY_UNIT = "BSV";
 
 std::string Amount::ToString() const {
-    return strprintf("%d.%08d %s", amount / COIN.GetSatoshis(),
-                     amount % COIN.GetSatoshis(), CURRENCY_UNIT);
+    return strprintf("%d.%06d %s", amount / TBCCOIN.GetSatoshis(),
+                     amount % TBCCOIN.GetSatoshis(), CURRENCY_UNIT);
 }
 
 CFeeRate::CFeeRate(const Amount nFeePaid, size_t nBytes_) {
@@ -45,6 +45,6 @@ Amount CFeeRate::GetFee(size_t nBytes_) const {
 
 std::string CFeeRate::ToString() const {
     return strprintf(
-        "%d.%08d %s/kB", nSatoshisPerK.GetSatoshis() / COIN.GetSatoshis(),
-        nSatoshisPerK.GetSatoshis() % COIN.GetSatoshis(), CURRENCY_UNIT);
+        "%d.%06d %s/kB", nSatoshisPerK.GetSatoshis() / TBCCOIN.GetSatoshis(),
+        nSatoshisPerK.GetSatoshis() % TBCCOIN.GetSatoshis(), CURRENCY_UNIT);
 }

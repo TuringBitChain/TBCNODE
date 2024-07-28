@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Tests setting required parameters in bitcoin.conf configuration file.
 """

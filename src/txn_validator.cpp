@@ -538,6 +538,8 @@ CTxnValResult CTxnValidator::executeTxnValidationNL(
     return result;
 }
 
+//zws!!!
+
 /**
 * Process all new transactions.
 */

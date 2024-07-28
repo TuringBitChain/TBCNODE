@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2018-2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_SCRIPT_SCRIPT_H
 #define BITCOIN_SCRIPT_SCRIPT_H
@@ -305,6 +305,8 @@ std::ostream &operator<<(std::ostream &, const CScript &);
 std::string to_string(const CScript&);
 
 bool IsP2SH(bsv::span<const uint8_t>);
+
+bool IsP2PKH(bsv::span<const uint8_t>);
 
 size_t CountOp(bsv::span<const uint8_t>, opcodetype);
 

@@ -77,6 +77,7 @@ size_t CCoinsViewCache::DynamicMemoryUsage() const {
 
 CCoinsMap::iterator
 CCoinsViewCache::FetchCoinNL(const COutPoint &outpoint) const {
+    // here to get coin info zws!!!
     CCoinsMap::iterator it = cacheCoins.find(outpoint);
     if (it != cacheCoins.end()) {
         return it;

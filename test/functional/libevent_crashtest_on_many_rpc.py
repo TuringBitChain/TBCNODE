@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 # Test many rpc calls against bitcoind to reveal a
 # crash regression introduced by libevent-2.1.7

@@ -1,6 +1,6 @@
 // Copyright (c) 2018 The Bitcoin developers
 // Copyright (c) 2018-2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "test/test_bitcoin.h"
 #include "script/limitedstack.h"

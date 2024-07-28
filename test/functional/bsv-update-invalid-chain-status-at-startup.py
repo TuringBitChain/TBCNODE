@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Test that at startup node updates header-only tip statuses of forks that contain invalid blocks.
 Chain was generated with old version of node that in some cases did not correctly set block status

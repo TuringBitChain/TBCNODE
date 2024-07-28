@@ -2,7 +2,7 @@
 # Copyright (c) 2014-2016 The Bitcoin Core developers
 # Copyright (c) 2017 The Bitcoin developers
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """Run regression test suite.
 
 This module calls down into individual test cases via subprocess. It will
@@ -190,6 +190,11 @@ def main():
 
     # Build list of tests
     all_scripts = get_all_scripts_from_disk(tests_dir, NON_SCRIPTS)
+
+    # Check for large block tests parameter 
+    if args.large_block_tests:
+        tests = LARGE_BLOCK_TESTS
+        args.jobs = 1
 
     if tests:
         # Individual tests have been specified. Run specified tests that exist

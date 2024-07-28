@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_AMOUNT_H
 #define BITCOIN_AMOUNT_H
@@ -142,7 +142,9 @@ public:
 };
 
 static const Amount COIN(100000000);
+static const Amount TBCCOIN(1000000);
 static const Amount CENT(1000000);
+static const Amount TBCCENT(10000);
 
 extern const std::string CURRENCY_UNIT;
 

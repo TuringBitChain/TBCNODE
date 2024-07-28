@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Test genesis activation gracefull period sending transactions.
 The test checks 4 scenarios that can occur around genesis activation height that would normally mean the 

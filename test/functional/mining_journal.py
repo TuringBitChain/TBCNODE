@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 '''
 Feed transactions into the mempool and check the block candidate building journal

@@ -1,7 +1,8 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_SERIALIZE_H
 #define BITCOIN_SERIALIZE_H
@@ -56,7 +57,9 @@ template <typename T> inline T &REF(const T &val) {
 template <typename T> inline T *NCONST_PTR(const T *val) {
     return const_cast<T *>(val);
 }
-
+template <typename T> inline T *NCONST_PTR_OpNoCSize(const T *val) {
+    return const_cast<T *>(val);
+}
 /*
  * Lowest-level serialization and conversion.
  * @note Sizes of these types are verified in the tests
@@ -146,6 +149,7 @@ enum {
     SER_GETHASH = (1 << 2),
 };
 
+#define READWRITE_OpNoCSize(obj) (::SerReadWrite_OpNoCSize(s, (obj), ser_action))
 #define READWRITE(obj) (::SerReadWrite(s, (obj), ser_action))
 #define READWRITECOMPACTSIZE(obj) (::SerReadWriteCompactSize(s, (obj), ser_action))
 #define READWRITEMANY(...) (::SerReadWriteMany(s, ser_action, __VA_ARGS__))
@@ -162,7 +166,7 @@ enum {
     }                                                                          \
     template <typename Stream> void Unserialize(Stream &s) {                   \
         SerializationOp(s, CSerActionUnserialize());                           \
-    }
+    }      
 
 template <typename Stream> inline void Serialize(Stream &s, char a) {
     ser_writedata8(s, a);
@@ -636,10 +640,21 @@ void Serialize_impl(Stream &os, const prevector<N, T> &v, const V &) {
         ::Serialize(os, i);
     }
 }
+template <typename Stream, unsigned int N, typename T, typename V>
+void Serialize_impl_OpNoCSize(Stream &os, const prevector<N, T> &v, const V &) {
+    for (const T &i : v) {
+        ::Serialize(os, i);
+    }
+}
 
 template <typename Stream, unsigned int N, typename T>
 inline void Serialize(Stream &os, const prevector<N, T> &v) {
     Serialize_impl(os, v, T());
+}
+
+template <typename Stream, unsigned int N, typename T>
+inline void Serialize_OpNoCSize(Stream &os, const prevector<N, T> &v) {
+    Serialize_impl_OpNoCSize(os, v, T());
 }
 
 constexpr size_t STARTING_CHUNK_SIZE = 16000000; // 16MB
@@ -856,6 +871,12 @@ inline void SerReadWrite(Stream &s, const T &obj,
                          CSerActionSerialize ser_action) {
     ::Serialize(s, obj);
 }
+template <typename Stream, typename T>
+inline void SerReadWrite_OpNoCSize(Stream &s, const T &obj,
+                         CSerActionSerialize ser_action) {
+    ::Serialize_OpNoCSize(s, obj);
+}
+
 
 template <typename Stream, typename T>
 inline void SerReadWrite(Stream &s, T &obj, CSerActionUnserialize ser_action) {

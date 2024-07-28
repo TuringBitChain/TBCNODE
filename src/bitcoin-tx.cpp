@@ -1,6 +1,6 @@
+// Copyright (c) 2024 TBCNODE DEV GROUP
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+// Distributed under the Open TBC License, see https://github.com/TuringBitChain/TBCNODE/blob/main/LICENSE.
 
 #if defined(HAVE_CONFIG_H)
 #include "config/bitcoin-config.h"
@@ -538,7 +538,7 @@ static Amount AmountFromValue(const UniValue &value) {
     }
 
     int64_t n;
-    if (!ParseFixedPoint(value.getValStr(), 8, &n)) {
+    if (!ParseFixedPoint(value.getValStr(), 6, &n)) {
         throw std::runtime_error("Invalid amount");
     }
     Amount amount = Amount(n);

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 # 1. Genesis height is 104. Current height is 102.
 # 2. Send tx1 and tx2 that are valid before Genesis (multiple ELSEs). They are accepted to mempool. (tx2: SCRIPT_GENESIS flag is off)

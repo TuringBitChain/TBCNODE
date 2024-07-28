@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Test that sending blocks after already sending headers does not trigger exiting safe mode.
 Test that sending another branch after already entering safe mode because of other branch does not trigger exiting safe mode.

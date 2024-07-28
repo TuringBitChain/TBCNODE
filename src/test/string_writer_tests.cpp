@@ -1,5 +1,5 @@
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "test/test_bitcoin.h"
 #include "rpc/text_writer.h"

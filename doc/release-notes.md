@@ -1,7 +1,7 @@
-# TuringBitChain Node software version 2.0.0 Release Notes
+# TBCNODE software version 2.0.0 Release Notes
 
-## List of Changes since v1.9.9
-* LICENSE, README.md, etc.
+## List of Changes
+* Many, see git diff
 
 ## Scaling Test Network (STN) Reset
 N/A
@@ -19,3 +19,4 @@ N/A
 * [Version 1.0.4](release-notes-v1.0.4.md) - [Download](https://download.bitcoinsv.io/bitcoinsv/1.0.4/) - [Source](https://github.com/bitcoin-sv/bitcoin-sv/tree/v1.0.4) - 2020-07-01
 * [Version 1.0.5RC](release-notes-v1.0.5RC.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/598ad0124854abe9a8293735f51593d83b15a292)  
 * [Version 1.9.9](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/1f32b20c446f31ac07f12790e3ef7b3b27b3cfa6)  
+* [Version 2.0.0](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/a28b623d95852fa7d6246f41f74c990eebb4f4b8)  

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Testing scenario: our node has one active chain and then connects to node with longer chain but invalid for our
 software. We then check whether the node detects block that violates TTOR (Topological Transaction Ordering Rule).

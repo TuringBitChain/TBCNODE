@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying LICENSE.
+// Distributed under the Open TBC software license, see the accompanying LICENSE.
 
 #if defined(HAVE_CONFIG_H)
 #include "config/bitcoin-config.h"
@@ -65,7 +65,7 @@ void WaitForShutdown(boost::thread_group *threadGroup, const task::CCancellation
 // Start
 //
 bool AppInit(int argc, char *argv[]) {
-    RenameThread("bitcoin-main");
+    RenameThread("tbc-main");
     boost::thread_group threadGroup;
     CScheduler scheduler;
 
@@ -176,7 +176,7 @@ bool AppInit(int argc, char *argv[]) {
         }
         if (gArgs.GetBoolArg("-daemon", false)) {
 #if HAVE_DECL_DAEMON
-            fprintf(stdout, "Bitcoin server starting\n");
+            fprintf(stdout, "TuringBitChain starting\n");
 
             // Daemonize
             if (daemon(1, 0)) {
