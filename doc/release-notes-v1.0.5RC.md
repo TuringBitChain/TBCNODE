@@ -1,4 +1,4 @@
-# Bitcoin SV version 1.0.5 Release Notes
+# Bitcoin SV version 1.0.5 Release Candidate Release Notes
 
 ## List of Changes since 1.0.4
 * Make Journaling block assembler the default. The legacy block assembler is scheduled for removal in a future release.
