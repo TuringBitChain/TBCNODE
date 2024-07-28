@@ -1,22 +1,18 @@
 TBCNODE
 ===========
 
-This is the node software for TuringBitChain and BitcoinSV blockchain.
+This is the node software for TuringBitChain blockchain.
+
 
 What is TuringBitChain?
 -------------------
 
-TuringBitChain is BitcoinSV as well as Bitcoin, and includes three major technical improvements that will fully demonstrate the benefits of the UTXO model in terms of legality, Turing completeness, and high performance.
+TuringBitChain is a side chain of the Bitcoin. It creatively developing TuringTXID, TuringContract,etc. TuringBitChain has the advantages of sha256 POW+UTXO model, and also has better scaling capabilities, data cutting capabilities. TuringBitChain suits for Web3 application development and deployment, and has practical Turing-complete smart contract capabilities.
 
 License
 -------
 
-This version (see git log of commits) of Node Software is released under the terms of the Open BSV license. See [LICENSE](LICENSE) for more information.
-
-Security
---------
-
-Security is core to our values, and we value the input of security researchers acting in good faith to help us maintain high standards of security and privacy for our users and the TuringBitChain blockchain.
+This TBCNODE software is released under the terms of the Open TBC license. See [LICENSE](LICENSE) for more information.
 
 Development Process
 -------------------
@@ -28,7 +24,8 @@ At this stage in TBCNODE's development, We welcome any developer who agrees to d
 Contacting the Developer Team
 ------------------------------
 
-If you want to report a non-confidential issue with TuringBitChain, please use the GitHub issue system.
+If you want to report a non-confidential issue, please use the 
+[GitHub issue system](https://github.com/TuringBitChain/TBCNODE/issues).
 
 If you want to report a security vulnerability and any other key problem, please send an email that includes "**TBCNODE**" in the subject line to **recent developer email shown in the git log**.
 

@@ -1,5 +1,24 @@
-Current version (1.9.9) of the TBCNODE software were licensed under the Open BSV License, 
-which is included below.
+Open TBC License
+Copyright (c) 2024 TBCNODE DEV GROUP 
+
+Any person obtaining a copy of this software and associated documentation files (the "Software"), 
+are free to copy and redistribute the material (software and documentation files) as a whole, 
+and are free to use the program as a whole to provide non-profit public services without denying specific users.
+
+The licensor cannot revoke these freedoms if you follow the following terms:
+* Attribution: You must give appropriate credit (the name of the creator and attribution parties, 
+  a copyright notice, a license notice, a disclaimer notice), provide a link to the license. 
+  You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+* NonCommercial: You may not use the material for commercial purposes. A commercial use is one primarily 
+  intended for commercial advantage or monetary compensation.
+* NoDerivatives: If you remix, transform, or build upon the material (software and documentation files), 
+  you may not distribute the modified material and the related binary program.
+
+If the above terms are not explicit to you, you can found futher interpretation in the documentation 
+having the SPDX specification identifier "CC-BY-NC-ND-4.0".
+
+
+Git version (1.9.9) of the TBCNODE software were licensed under the Open BSV License, which is included below.
 
 Open BSV License
 Copyright (c) 2019 Bitcoin Association
