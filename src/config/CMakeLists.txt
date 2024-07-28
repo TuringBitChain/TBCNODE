@@ -9,12 +9,12 @@ include(CheckIncludeFiles)
 include(CheckSymbolExists)
 
 # Package informations
-set(PACKAGE_NAME "Bitcoin SV")
+set(PACKAGE_NAME "TBCNODE")
 
 # Version
 set(CLIENT_VERSION_MAJOR 1)
-set(CLIENT_VERSION_MINOR 0)
-set(CLIENT_VERSION_REVISION 5) 
+set(CLIENT_VERSION_MINOR 9)
+set(CLIENT_VERSION_REVISION 9) 
 set(CLIENT_VERSION_BUILD 0)
 
 if(ENABLE_PROD_BUILD)
