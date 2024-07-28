@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Test getblock RPCs on pregenerated data with node version 1.0.0.
 Blocks that were created before the introduction of CDiskBlockMetaData class, don't have information about block size written to disk.

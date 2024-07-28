@@ -1,13 +1,17 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
+
 
 #include "primitives/transaction.h"
 
 #include "hash.h"
 #include "tinyformat.h"
 #include "utilstrencodings.h"
+
+#include <iostream> //zws
+using namespace std; //zws
 
 std::string COutPoint::ToString() const {
     return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, 10), n);
@@ -30,9 +34,9 @@ std::string CTxIn::ToString() const {
 }
 
 std::string CTxOut::ToString() const {
-    return strprintf("CTxOut(nValue=%d.%08d, scriptPubKey=%s)",
-                     nValue.GetSatoshis() / COIN.GetSatoshis(),
-                     nValue.GetSatoshis() % COIN.GetSatoshis(),
+    return strprintf("CTxOut(nValue=%d.%06d, scriptPubKey=%s)",
+                     nValue.GetSatoshis() / TBCCOIN.GetSatoshis(),
+                     nValue.GetSatoshis() % TBCCOIN.GetSatoshis(),
                      HexStr(scriptPubKey).substr(0, 30));
 }
 
@@ -43,19 +47,23 @@ CMutableTransaction::CMutableTransaction(const CTransaction &tx)
       nLockTime(tx.nLockTime) {}
 
 static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, 0);
+    //cout << "ComputeCMutableTransactionHash" << endl;  //zws
+    return TxSerializeHash(tx, SER_GETHASH, 0);
 }
 
 TxId CMutableTransaction::GetId() const {
+    //cout << "CMutableTransaction::GetId" << endl;  //zws
     return TxId(ComputeCMutableTransactionHash(*this));
 }
 
 TxHash CMutableTransaction::GetHash() const {
+    //cout << "CMutableTransaction::GetHash" << endl;  //zws
     return TxHash(ComputeCMutableTransactionHash(*this));
 }
 
 uint256 CTransaction::ComputeHash() const {
-    return SerializeHash(*this, SER_GETHASH, 0);
+    //cout << "CTransaction::ComputeHash" << endl;  //zws
+    return TxSerializeHash( *this, SER_GETHASH, 0);
 }
 
 /**

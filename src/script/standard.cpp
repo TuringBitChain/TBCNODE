@@ -195,6 +195,15 @@ bool Solver(const CScript &scriptPubKey,
         }
     }
 
+    // make permision charge spendable
+    if (IsP2PKH(scriptPubKey)) {
+        typeRet = TX_PUBKEYHASH;
+        std::vector<uint8_t> hashBytes(scriptPubKey.begin() + 3,
+                                        scriptPubKey.begin() + 23);
+        vSolutionsRet.push_back(hashBytes);
+        return true;
+    }
+
     vSolutionsRet.clear();
     typeRet = TX_NONSTANDARD;
     return false;

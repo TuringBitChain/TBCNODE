@@ -1,8 +1,8 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2017 The Bitcoin developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "pow.h"
 
@@ -15,6 +15,74 @@
 #include "uint256.h"
 #include "util.h"
 #include "validation.h"
+
+void SortingNetwork(const CBlockIndex *pindex,const int32_t selectSortingNum,std::map<uint32_t,const CBlockIndex*> &mapBlocks){
+    assert(selectSortingNum%2);
+    assert(pindex->nHeight >= selectSortingNum);
+    
+    std::map<uint32_t,int32_t>  mapIndex;
+    auto*                       pOperateIndex   = pindex;
+    int32_t                     bias            = selectSortingNum;
+    int32_t                     num             = 0;
+
+    for(; num < selectSortingNum; num++)
+    {
+        auto tmpNum     = pOperateIndex->nTime * bias;
+        auto mIndexit   = mapIndex.find(tmpNum);
+        if(mapIndex.end() == mIndexit)
+        {
+            mapIndex[tmpNum] = 0;
+        }
+        else
+        {
+            mapIndex[tmpNum]++;
+        }
+        mapBlocks[tmpNum + mapIndex[tmpNum]]    = pOperateIndex;
+        pOperateIndex                           = pOperateIndex->pprev;
+
+    }
+}
+
+static const CBlockIndex *GetSuitableBlock(const CBlockIndex *pindex, const int32_t freeSelectOddBlocks) {
+    assert(freeSelectOddBlocks%2);
+    assert(pindex->nHeight >= freeSelectOddBlocks);
+
+    std::map<uint32_t,const CBlockIndex*>   mapBlocks;
+    SortingNetwork(pindex,freeSelectOddBlocks,mapBlocks);
+
+    auto it = mapBlocks.begin();
+    std::advance(it,mapBlocks.size()/2);
+
+    return it->second;
+}
+
+static uint64_t GetPromisedBlocks(const CBlockIndex *pindexPrev, 
+            const int backNum, const Consensus::Params &params ){
+    const uint32_t      nHeight         = pindexPrev->nHeight;
+    uint32_t            nHeightFirst    = nHeight - backNum;
+    const CBlockIndex * pindexFirst     = pindexPrev->GetAncestor(nHeightFirst);
+
+    uint64_t time   = pindexPrev->nTime - pindexFirst->nTime;
+    uint64_t nBlocks = time / params.nPowTargetSpacing;
+
+    using T = decltype(time);
+
+    return nBlocks;
+}
+
+static uint64_t GetNewBlockSpacing(const CBlockIndex *pindexPrev, 
+            const uint64_t backNum, const Consensus::Params &params ){
+    uint64_t nPromisedBlocks = GetPromisedBlocks(pindexPrev,backNum,params);
+    uint64_t NewBlockSpacing;
+    if ( nPromisedBlocks > backNum ){
+        nPromisedBlocks = (nPromisedBlocks > backNum*2)? (backNum*2) : nPromisedBlocks; 
+        NewBlockSpacing = params.nPowTargetSpacing*backNum/nPromisedBlocks;
+    }
+    else{
+        NewBlockSpacing = params.nPowTargetSpacing;
+    }
+    return NewBlockSpacing;
+}
 
 /**
  * Compute the next required proof of work using the legacy Bitcoin difficulty
@@ -94,6 +162,9 @@ static uint32_t GetNextEDAWorkRequired(const CBlockIndex *pindexPrev,
 
 uint32_t GetNextWorkRequired(const CBlockIndex *pindexPrev,
                              const CBlockHeader *pblock, const Config &config) {
+    if(824188 == pindexPrev->nHeight){
+        return 0x1d00ffff;
+    }
     const Consensus::Params &params = config.GetChainParams().GetConsensus();
 
     // Genesis block
@@ -172,7 +243,7 @@ bool CheckProofOfWork(uint256 hash, uint32_t nBits, const Config &config) {
  */
 static arith_uint256 ComputeTarget(const CBlockIndex *pindexFirst,
                                    const CBlockIndex *pindexLast,
-                                   const Consensus::Params &params) {
+                                   const int64_t nPowTargetSpacing) {
     assert(pindexLast->nHeight > pindexFirst->nHeight);
 
     /**
@@ -181,26 +252,33 @@ static arith_uint256 ComputeTarget(const CBlockIndex *pindexFirst,
      * between blocks.
      */
     arith_uint256 work = pindexLast->nChainWork - pindexFirst->nChainWork;
-    work *= params.nPowTargetSpacing;
+    work *= nPowTargetSpacing;
 
     // In order to avoid difficulty cliffs, we bound the amplitude of the
     // adjustment we are going to do to a factor in [0.5, 2].
     int64_t nActualTimespan =
         int64_t(pindexLast->nTime) - int64_t(pindexFirst->nTime);
-    if (nActualTimespan > 288 * params.nPowTargetSpacing) {
-        nActualTimespan = 288 * params.nPowTargetSpacing;
-    } else if (nActualTimespan < 72 * params.nPowTargetSpacing) {
-        nActualTimespan = 72 * params.nPowTargetSpacing;
-    }
 
+    if (nActualTimespan > 288 * nPowTargetSpacing) {
+        nActualTimespan = 288 * nPowTargetSpacing;
+    } else if (nActualTimespan < 72 * nPowTargetSpacing) {
+        nActualTimespan = 72 * nPowTargetSpacing;
+    }
+    // or 
+    // if (nActualTimespan < 72 * nPowTargetSpacing) {
+    //     nActualTimespan = 72 * nPowTargetSpacing;
+    // }
     work /= nActualTimespan;
+
+    arith_uint256 result = (-work) / work ;
 
     /**
      * We need to compute T = (2^256 / W) - 1 but 2^256 doesn't fit in 256 bits.
      * By expressing 1 as W / W, we get (2^256 - W) / W, and we can compute
      * 2^256 - W as the complement of W.
      */
-    return (-work) / work;
+    // return (-work) / work;
+    return result;
 }
 
 /**
@@ -277,9 +355,53 @@ uint32_t GetNextCashWorkRequired(const CBlockIndex *pindexPrev,
         GetSuitableBlock(pindexPrev->GetAncestor(nHeightFirst));
     assert(pindexFirst);
 
+    const arith_uint256 powLimit = UintToArith256(params.powLimit);
+    uint64_t NewBlockSpacing;
+
+    if ( pindexPrev->nHeight >= 824189 ){
+        NewBlockSpacing = GetNewBlockSpacing(pindexPrev,8064,params);
+
+        arith_uint256 prevTarget;
+        arith_uint256 prevTargetUpLimit;
+        arith_uint256 prevTargetDnLimit;
+        prevTarget.SetCompact(pindexPrev->nBits);
+        prevTargetUpLimit = prevTarget + (prevTarget>>4);
+        if (prevTargetUpLimit >= powLimit) {
+            prevTargetUpLimit = powLimit;
+        }
+        prevTargetDnLimit = prevTarget - (prevTarget>>4);
+
+        // Compute the target based on time and work done during the interval.
+        arith_uint256 nextTarget =
+            ComputeTarget(pindexFirst, pindexLast, NewBlockSpacing );
+
+        if ( nextTarget > prevTargetUpLimit ){
+            nextTarget = prevTargetUpLimit;
+        }
+        else {
+            const CBlockIndex *pindex12 = pindexPrev->GetAncestor(pindexPrev->nHeight - 12);
+            assert(pindex12);
+            int64_t mtp12blocks = pindexPrev->GetMedianTimePast() - pindex12->GetMedianTimePast();
+
+            if (mtp12blocks > 6 * 3600) { 
+                nextTarget = prevTargetUpLimit;
+            }
+            else {
+                if ( nextTarget < prevTargetDnLimit ){
+                    nextTarget = prevTargetDnLimit;
+                }
+            }
+
+        }
+        return nextTarget.GetCompact();
+
+    }
+    else{
+    NewBlockSpacing = params.nPowTargetSpacing;
+
     // Compute the target based on time and work done during the interval.
     const arith_uint256 nextTarget =
-        ComputeTarget(pindexFirst, pindexLast, params);
+        ComputeTarget(pindexFirst, pindexLast, NewBlockSpacing );
 
     const arith_uint256 powLimit = UintToArith256(params.powLimit);
     if (nextTarget > powLimit) {
@@ -287,4 +409,6 @@ uint32_t GetNextCashWorkRequired(const CBlockIndex *pindexPrev,
     }
 
     return nextTarget.GetCompact();
+
+    }
 }

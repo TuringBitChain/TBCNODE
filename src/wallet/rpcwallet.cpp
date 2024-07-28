@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019-2020 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "amount.h"
 #include "chain.h"
@@ -2691,7 +2691,7 @@ static UniValue encryptwallet(const Config &config,
     // slack space in .dat files; that is bad if the old data is
     // unencrypted private keys. So:
     StartShutdown();
-    return "wallet encrypted; Bitcoin server stopping, restart to run with "
+    return "wallet encrypted; TuringBitChain stopping, restart to run with "
            "encrypted wallet. The keypool has been flushed and a new HD seed "
            "was generated (if you are using HD). You need to make a new "
            "backup.";

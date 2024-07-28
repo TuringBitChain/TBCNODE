@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 # Are we in a git repo?
 if ! [ -d .git ]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2016-2019 The Bitcoin Core developers
 # Copyright (c) 2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 ###   This script attempts to download the signature file SHA256SUMS.asc from bitcoinsv.io.
 ###   It first checks if the signature passes, and then downloads the files specified in

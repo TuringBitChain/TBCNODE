@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "base58.h"
 #include "chain.h"
@@ -659,7 +659,7 @@ void decoderawtransaction(const Config& config,
     CTransaction tx(std::move(mtx));
     //treat as after genesis if no output is P2SH
     const bool genesisEnabled =
-        std::none_of(tx.vout.begin(), tx.vout.end(), [](const CTxOut& out) {
+        std::none_of(mtx.vout.begin(), mtx.vout.end(), [](const CTxOut& out) {
             return IsP2SH(out.scriptPubKey);
         });
     CJSONWriter jWriter(textWriter, false);

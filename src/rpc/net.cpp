@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "rpc/server.h"
 
@@ -382,7 +382,7 @@ static UniValue getaddednodeinfo(const Config &config,
             "when connected = true\n"
             "       {\n"
             "         \"address\" : \"192.168.0.201:8333\",  (string) The "
-            "bitcoin server IP and port we're connected to\n"
+            "TuringBitChain IP and port we're connected to\n"
             "         \"connected\" : \"outbound\"           (string) "
             "connection, inbound or outbound\n"
             "       }\n"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Test genesis activation height when sending transactions.
 Test accepts transaction that tries to spend transaction with OP_RETURN which was sent to mempool before genesis activation but was mined after genesis activation.

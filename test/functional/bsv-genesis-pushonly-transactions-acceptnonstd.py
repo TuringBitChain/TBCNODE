@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Check that transactions that contain op codes in unlock scripts are accepted
 before AND rejected after genesis activation with acceptnonstdtxn=1 parameter
