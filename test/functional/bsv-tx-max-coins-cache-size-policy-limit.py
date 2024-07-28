@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 # Test makes sure that -maxcoinsviewcachesize prevents transactions that spend
 # inputs with too large input transactions size from being accepted.

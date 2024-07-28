@@ -1,5 +1,5 @@
 // Copyright (c) 2020 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file
+// Distributed under the Open TBC software license, see the accompanying file
 // LICENSE.
 #pragma once
 

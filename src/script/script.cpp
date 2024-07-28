@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2018-2020 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file
+// Distributed under the Open TBC software license, see the accompanying file
 // LICENSE.
 
 #include "script.h"
@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <logging.h>
 
 uint64_t CScript::GetSigOpCount(bool fAccurate, bool isGenesisEnabled, bool& sigOpCountError) const
 {
@@ -133,7 +134,12 @@ bool IsP2SH(const bsv::span<const uint8_t> script) {
            script[1] == 0x14 && script[22] == OP_EQUAL;
 }
 
-bool CScript::IsPushOnly(const_iterator pc) const {
+bool IsP2PKH(bsv::span<const uint8_t> script) {
+    return script.size() > 26 && script[0] == OP_DUP && script[1] == OP_HASH160 &&
+            script[2] == 0x14 && script[23] == OP_EQUALVERIFY && script[24] == OP_CHECKSIG && script[25] == OP_RETURN;
+}
+
+bool CScript::IsPushOnly(const_iterator pc) const { 
     while (pc < end()) {
         opcodetype opcode;
         if (!GetOp(pc, opcode)) return false;

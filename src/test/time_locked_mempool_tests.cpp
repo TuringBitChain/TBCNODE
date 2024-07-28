@@ -1,5 +1,5 @@
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include <time_locked_mempool.h>
 #include <txn_validation_data.h>

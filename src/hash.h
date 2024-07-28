@@ -1,7 +1,8 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
+
 
 #ifndef BITCOIN_HASH_H
 #define BITCOIN_HASH_H
@@ -12,10 +13,15 @@
 #include "serialize.h"
 #include "uint256.h"
 #include "version.h"
+#include "logging.h"
 
 #include <vector>
 
 typedef uint256 ChainCode;
+
+#include <iostream> //zws
+using namespace std; //zws
+#include "primitives/transaction.h"  //zws
 
 /** A hasher class for Bitcoin's 256-bit hash (double SHA-256). */
 class CHash256 {
@@ -29,6 +35,12 @@ public:
         uint8_t buf[CSHA256::OUTPUT_SIZE];
         sha.Finalize(buf);
         sha.Reset().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(hash);
+    }
+    void SingleFinalize(uint8_t hash[OUTPUT_SIZE]) {
+        //uint8_t buf[CSHA256::OUTPUT_SIZE];
+        //sha.Finalize(buf);
+        //sha.Reset().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(hash);
+        sha.Finalize(hash);
     }
 
     CHash256 &Write(const uint8_t *data, size_t len) {
@@ -158,12 +170,19 @@ public:
         return result;
     }
 
+    uint256 GetSingleHash() {
+        uint256 result;
+        ctx.SingleFinalize((uint8_t *)&result);
+        return result;
+    }
+
     template <typename T> CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
         ::Serialize(*this, obj);
         return (*this);
     }
 };
+
 
 /**
  * Reads data from an underlying stream, while hashing the read data.
@@ -198,14 +217,101 @@ public:
     }
 };
 
+
 /** Compute the 256-bit hash of an object's serialization. */
 template <typename T>
 uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
                       int nVersion = PROTOCOL_VERSION) {
+    //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
     CHashWriter ss(nType, nVersion);
     ss << obj;
     return ss.GetHash();
 }
+/** Compute the 256-bit hash of an object's serialization. */
+template <typename T>
+uint256 SerializeSingleHash(const T &obj, int nType = SER_GETHASH,
+                      int nVersion = PROTOCOL_VERSION) {
+    //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
+    CHashWriter ss(nType, nVersion);
+    ss.write( (char *) obj, obj.size() );
+    return ss.GetSingleHash();
+}
+/** Compute the 256-bit hash of an object's serialization. */
+template <typename T>
+uint256 SerializeSingleHash_OpNoCSize(const T &obj, int nType = SER_GETHASH,
+                      int nVersion = PROTOCOL_VERSION) {
+    //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
+    CHashWriter ss(nType, nVersion);
+    SerReadWrite_OpNoCSize(ss, obj, CSerActionSerialize() ) ;
+    return ss.GetSingleHash();
+}
+
+
+template <typename T> //zws
+uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
+                      int nVersion = PROTOCOL_VERSION) {
+    // cout << "TxSerializeHash::nType:" << nType << ", nVersion:" << nVersion << ", obj.nVersion:" << obj.nVersion << endl;
+    // cout << "obj.vin.size():"  << obj.vin.size() << ", obj.vout.size():" << obj.vout.size()  << " sizeof(.size())" << sizeof(obj.vin.size()) << endl;  //zws
+    
+    uint256 result;
+    uint256 hash_ss_in;
+    uint256 hash_ss_in_unlock;
+
+    if ( obj.nVersion >=10) {
+        CHashWriter ss_root(nType, nVersion);
+        ss_root << obj.nVersion; 
+        ss_root << obj.nLockTime;
+        
+        // WriteCompactSize(ss_root, obj.vin.size() );
+        // WriteCompactSize(ss_root, obj.vout.size() );
+        //Serialize(ss_root, obj.vin.size() ) ;
+        //Serialize(ss_root, obj.vout.size() );
+        ser_writedata32(ss_root, obj.vin.size() );
+        ser_writedata32(ss_root, obj.vout.size() );
+
+        CHashWriter ss_in(nType, nVersion);
+        CHashWriter ss_in_unlock(nType, nVersion);
+        for (const CTxIn &iin : obj.vin) {
+            ss_in << iin.prevout;
+            ss_in << iin.nSequence;
+
+            //CHashWriter ss_in_unlock_one(nType, nVersion);
+            //SerReadWrite_OpNoCSize(ss_in_unlock_one, iin.scriptSig, CSerActionSerialize() );
+            //ss_in_unlock << ss_in_unlock_one.GetSingleHash();
+            //ss_in_unlock << SerializeHash( iin.scriptSig, SER_GETHASH, 0); 
+            ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, SER_GETHASH, 0 );
+        }
+        hash_ss_in = ss_in.GetSingleHash();
+        // cout << "TuringTXID TxSerializeHash: ss_in.GetSingleHash().GetHex() :" << hash_ss_in.GetHex() << endl;  //zws        
+        ss_root << hash_ss_in;
+
+        hash_ss_in_unlock = ss_in_unlock.GetSingleHash();
+        // cout << "TuringTXID TxSerializeHash: ss_in_unlock.GetSingleHash().GetHex() :" << hash_ss_in_unlock.GetHex() << endl;  //zws        
+        ss_root << hash_ss_in_unlock;
+
+        CHashWriter ss_out(nType, nVersion);
+        for (const CTxOut &iout : obj.vout) {
+            ss_out << iout.nValue;
+
+            //ss_out << SerializeHash( iout.scriptPubKey, SER_GETHASH, 0);
+            ss_out << SerializeSingleHash_OpNoCSize( iout.scriptPubKey, SER_GETHASH, 0);
+        }
+        ss_root << ss_out.GetSingleHash();
+        
+        //result = ss_root.GetSingleHash();
+        result = ss_root.GetHash();
+
+    }
+    else {
+        CHashWriter ss(nType, nVersion);
+        ss << obj;
+        result = ss.GetHash();
+
+    }
+
+    return result ;
+}
+
 
 unsigned int MurmurHash3(unsigned int nHashSeed,
                          const std::vector<uint8_t> &vDataToHash);

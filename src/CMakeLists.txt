@@ -1,6 +1,6 @@
 # Copyright (c) 2017 The Bitcoin developers
 # Copyright (c) 2019-2020 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 cmake_minimum_required(VERSION 3.5)
 project(BitcoinSV)

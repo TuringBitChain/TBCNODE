@@ -1,6 +1,7 @@
 // Copyright (c) 2012-2016 The Bitcoin Core developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "clientversion.h"
 
@@ -10,7 +11,7 @@
 
 /**
  * Name of client reported in the 'version' message. Report the same name
- * for both bitcoind and bitcoin-sv, to make it harder for attackers to
+ * for both bitcoind and bitcoin-sv and TBCNODE, to make it harder for attackers to
  * target servers.
  */
 const std::string CLIENT_NAME("TBCNODE");
@@ -48,7 +49,7 @@ const std::string CLIENT_NAME("TBCNODE");
 #endif
 
 //! git will put "#define GIT_ARCHIVE 1" on the next line inside archives.
-//! $Format:%n#define GIT_ARCHIVE 1$
+//! 
 #define GIT_ARCHIVE 1
 #ifdef GIT_ARCHIVE
 #define GIT_COMMIT_ID "$Format:%h$"

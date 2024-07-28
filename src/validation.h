@@ -2,7 +2,8 @@
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2017 The Bitcoin developers
 // Copyright (c) 2018-2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_VALIDATION_H
 #define BITCOIN_VALIDATION_H
@@ -79,7 +80,7 @@ static const bool DEFAULT_WHITELISTFORCERELAY = true;
 /** Default for DEFAULT_REJECTMEMPOOLREQUEST. */
 static const bool DEFAULT_REJECTMEMPOOLREQUEST = false;
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
-static constexpr Amount DEFAULT_MIN_RELAY_TX_FEE(250);
+static constexpr Amount DEFAULT_MIN_RELAY_TX_FEE(80);
 //! -maxtxfee default
 static const Amount DEFAULT_TRANSACTION_MAXFEE(COIN / 10);
 //! Discourage users to set fees higher than this amount (in satoshis) per kB
@@ -861,6 +862,9 @@ void UpdateCoins(const CTransaction &tx, CCoinsViewCache &inputs,
 
 /** Context-independent validity checks for coinbase and non-coinbase transactions */
 bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled);
+
+void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight);
+
 bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled);
 
 namespace Consensus {

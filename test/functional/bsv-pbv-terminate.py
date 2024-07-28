@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 """
 Testing whether a newer (better) block with more chain work terminates validation of one
 older block that is currently validating

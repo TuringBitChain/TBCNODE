@@ -117,7 +117,7 @@ Amount AmountFromValue(const UniValue &value) {
         throw JSONRPCError(RPC_TYPE_ERROR, "Amount is not a number or string");
 
     int64_t n;
-    if (!ParseFixedPoint(value.getValStr(), 8, &n))
+    if (!ParseFixedPoint(value.getValStr(), 6, &n))
         throw JSONRPCError(RPC_TYPE_ERROR, "Invalid amount");
 
     Amount amt(n);
@@ -130,9 +130,9 @@ UniValue ValueFromAmount(const Amount &amount) {
     int64_t amt = amount.GetSatoshis();
     bool sign = amt < 0;
     int64_t n_abs = (sign ? -amt : amt);
-    int64_t quotient = n_abs / COIN.GetSatoshis();
-    int64_t remainder = n_abs % COIN.GetSatoshis();
-    return UniValue(UniValue::VNUM, strprintf("%s%d.%08d", sign ? "-" : "",
+    int64_t quotient = n_abs / TBCCENT.GetSatoshis();
+    int64_t remainder = n_abs % TBCCENT.GetSatoshis();
+    return UniValue(UniValue::VNUM, strprintf("%s%d.%06d", sign ? "-" : "",
                                               quotient, remainder));
 }
 
@@ -257,14 +257,14 @@ static UniValue stop(const Config &config, const JSONRPCRequest &jsonRequest) {
     // Accept the deprecated and ignored 'detach' boolean argument
     if (jsonRequest.fHelp || jsonRequest.params.size() > 1)
         throw std::runtime_error("stop\n"
-                                 "\nStop Bitcoin server.");
+                                 "\nStop TuringBitChain.");
 
     LogPrintf("Received RPC call stop()\n");
 
     // Event loop will exit after current HTTP requests have been handled, so
     // this reply will get back to the client.
     StartShutdown();
-    return "Bitcoin server stopping";
+    return "TuringBitChain stopping";
 }
 
 static UniValue uptime(const Config &config,

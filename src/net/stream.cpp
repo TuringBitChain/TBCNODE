@@ -1,5 +1,5 @@
 // Copyright (c) 2020 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include <net/net.h>
 #include <net/netbase.h>
@@ -153,7 +153,7 @@ void Stream::ServiceSocket(fd_set& setRecv, fd_set& setSend, fd_set& setError,
             {
                 if (!mNode.GetDisconnect())
                 {
-                    LogPrintf("stream socket recv error %s\n", NetworkErrorString(nErr));
+                    LogPrintf("stream socket recv addr:%s error %s\n", peerAddr.ToStringIP(),NetworkErrorString(nErr));
                 }
                 mNode.CloseSocketDisconnect();
             }

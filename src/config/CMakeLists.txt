@@ -1,6 +1,6 @@
 # Copyright (c) 2017 The Bitcoin developers
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 # This generates config.h which provides numerous defines
 # about the state of the plateform we are building on.
@@ -13,8 +13,8 @@ set(PACKAGE_NAME "TBCNODE")
 
 # Version
 set(CLIENT_VERSION_MAJOR 2)
-set(CLIENT_VERSION_MINOR 0)
-set(CLIENT_VERSION_REVISION 0) 
+set(CLIENT_VERSION_MINOR 1)
+set(CLIENT_VERSION_REVISION 0)
 set(CLIENT_VERSION_BUILD 0)
 
 if(ENABLE_PROD_BUILD)

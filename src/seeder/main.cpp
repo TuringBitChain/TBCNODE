@@ -1,5 +1,5 @@
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "bitcoin.h"
 #include "clientversion.h"
@@ -445,12 +445,10 @@ extern "C" void *ThreadStats(void *) {
 }
 
 static const std::string mainnet_seeds[] = {
-    "seed.bitcoinsv.io", "seed.bitprim.org",
-    "seed.deadalnix.me",   "seeder.criptolayer.net",    ""};
+     "seed.metatbcnode.top","seed.metatbcnod.life",""};
+    
 static const std::string testnet_seeds[] = {
-    "testnet-seed.bitcoinsv.io",
-    "testnet-seed.bitprim.org",       "testnet-seed.deadalnix.me",
-    "testnet-seeder.criptolayer.net", ""};
+    "testnet-seed.metatbcnode.top",""};
 static const std::string *seeds = mainnet_seeds;
 
 const static unsigned int MAX_HOSTS_PER_SEED = 128;

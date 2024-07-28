@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 from genesis_upgrade_tests.test_base import GenesisHeightBasedSimpleTestsCase
 from test_framework.height_based_test_framework import SimpleTestDefinition
 from test_framework.script import CScript, OP_DROP, OP_1, OP_CHECKSEQUENCEVERIFY, OP_CHECKLOCKTIMEVERIFY

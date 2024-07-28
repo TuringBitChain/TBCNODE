@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2019-2020 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #ifndef BITCOIN_POLICY_POLICY_H
 #define BITCOIN_POLICY_POLICY_H
@@ -104,7 +104,7 @@ static const unsigned int DEFAULT_MAX_SCRIPT_SIZE_POLICY_AFTER_GENESIS = 10000;
  * We will statically assert this to be the same value as DEFAULT_MIN_RELAY_TX_FEE
  * because of CORE-647
  */
-static constexpr Amount DUST_RELAY_TX_FEE(250);
+static constexpr Amount DUST_RELAY_TX_FEE(80);
 
 /*
 * Number of blocks around GENESIS activation (72 blocks before and 72 blocks after) when

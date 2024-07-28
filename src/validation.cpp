@@ -2,7 +2,8 @@
 // Copyright (c) 2009-2016 The Bitcoin Core developers
 // Copyright (c) 2017-2018 The Bitcoin developers
 // Copyright (c) 2019 Bitcoin Association
-// Distributed under the Open BSV software license, see the accompanying file LICENSE.
+// Copyright (c) 2024 TBCNODE DEV GROUP
+// Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "validation.h"
 
@@ -47,6 +48,7 @@
 #include "versionbits.h"
 #include "warnings.h"
 #include "blockfileinfostore.h"
+#include "time_consuming.h"
 
 #include <atomic>
 #include <sstream>
@@ -57,6 +59,10 @@
 #include <boost/math/distributions/poisson.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/thread.hpp>
+#include <boost/bind.hpp>
+#include "script/script_num.h"
+#include <key.h>
+#include <pubkey.h>
 
 #if defined(NDEBUG)
 #error "Bitcoin cannot be compiled without assertions."
@@ -505,7 +511,7 @@ uint64_t GetP2SHSigOpCount(const Config &config,
 
     uint64_t nSigOps = 0;
     for (auto &i : tx.vin) {
-        const Coin &coin = inputs.AccessCoin(i.prevout);
+        const Coin &coin = inputs.AccessCoin(i.prevout);  //zws!!!
         assert(!coin.IsSpent());
 
         bool genesisEnabled = true;
@@ -600,8 +606,210 @@ static bool CheckTransactionCommon(const CTransaction& tx,
     return true;
 }
 
+bool FilledMinerBill(const CTransaction& tx)
+{
+    const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
+    const CScript &chargeInputScript = tx.vin[0].scriptSig;
+
+    if (chargeOutputScript.empty() || chargeInputScript.empty()) throw std::runtime_error("Empty coinbase charge input/output script");
+
+    if (chargeOutputScript.size() < 130) {
+        LogPrintf("unsatisfied chargeOutputScript length.\n");
+        return false;
+    }
+    // default pubkeyA
+    std::vector<uint8_t> pubkeyA = {0x03, 0x18, 0xa2, 0x74, 0x33, 0x7b, 0x8f, 0x52, 0x72, 0x6e,
+                                    0xe6, 0x08, 0x0e, 0x64, 0x32, 0xa6, 0x43, 0xdb, 0xaf, 0xfd,
+                                    0x8f, 0x18, 0x3c, 0x5b, 0x52, 0x33, 0x8a, 0xcf, 0xa9, 0x0c,
+                                    0xd9, 0x2f, 0x43};
+
+    // get script data
+    uint8_t scriptSize = 26;
+
+    // get KYC flag
+    std::vector<uint8_t> vecKycFlag;
+    vecKycFlag.resize(3);
+    vecKycFlag[0] = chargeOutputScript[scriptSize++];
+    vecKycFlag[1] = chargeOutputScript[scriptSize++];
+    vecKycFlag[2] = chargeOutputScript[scriptSize++];
+
+    bool ifCheckChargeAddress = false;
+    if (vecKycFlag[0] == 0x4C && vecKycFlag[2] == 0x01) {
+        ifCheckChargeAddress = true;
+    }
+
+    // get now height
+    uint8_t heightBits = 3;
+    std::vector<uint8_t> vecNowHeight;
+    for (uint8_t i = heightBits; i > 0; i--) {
+        vecNowHeight.push_back(chargeInputScript[i]);
+    }
+
+   // get charge address script
+   std::vector<uint8_t> chargeAddressScript;
+    for (size_t i = 3; i < 23; i++)
+    {
+        chargeAddressScript.push_back(chargeOutputScript[i]);
+    }
+    
+
+    // get pubkeyB
+    std::vector<uint8_t> pubkeyB;   
+    pubkeyB.resize(33);
+    for (size_t i = 0; i < 33; i++) {
+        pubkeyB[i] = chargeOutputScript[scriptSize++];
+    }
+    LogPrintf("\n");
+
+    // get sigA
+    uint8_t sigALen = chargeOutputScript[scriptSize++];
+    if (sigALen < 70) {
+        return false;
+    }
+    std::vector<uint8_t> sigA;
+    sigA.resize(sigALen - 4);
+    for (size_t i = 0; i < sigALen - 4; i++) {
+        sigA[i] = chargeOutputScript[scriptSize++];
+    }
+
+    std::vector<uint8_t> vecPermissionHeight;
+    vecPermissionHeight.resize(3);
+    vecPermissionHeight[0] = chargeOutputScript[scriptSize++];
+    vecPermissionHeight[1] = chargeOutputScript[scriptSize++];
+    vecPermissionHeight[2] = chargeOutputScript[scriptSize++];
+
+    // ensure permissin is still validate
+    uint32_t perHeight = vecPermissionHeight[0] * 256 * 256 + vecPermissionHeight[1] * 256 + vecPermissionHeight[2];
+    uint32_t nowHeight = vecNowHeight[0] * 256 * 256 + vecNowHeight[1] * 256 + vecNowHeight[2];
+    if (perHeight < nowHeight) {
+        LogPrintf("The invoice of this block is overdue !!! (%d < %d) \n", perHeight, nowHeight);
+        return false;
+    }
+    else if ( perHeight - 2016 < nowHeight ) {
+        LogPrintf("The invoice of this block will be overdue in %d blocks !!!\n", perHeight-nowHeight  );
+    }
+
+    // ensure coinbase fees are within the permitted range. 
+    uint8_t minerFeeRate = chargeOutputScript[scriptSize++];
+    uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
+    uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
+    if (coinbaseFee < lowestLimitCoinbaseFee) {
+        LogPrintf("Coinbase fees are not within the permitted range.\n");
+        return false;
+    }
+
+    // get sigB
+    std::vector<uint8_t> sigB;
+    uint8_t sigBLen;
+    if (ifCheckChargeAddress == true) {
+        // get sigB from inputScript
+        sigBLen = chargeInputScript[4];
+        if (sigBLen < 68) {
+            return false;
+        }
+        for (uint8_t i = 0; i < sigBLen; i++) {
+            sigB.push_back(chargeInputScript[i + 5]);
+        }
+    } else {
+        // get sigB from outputScript
+        sigBLen = chargeOutputScript[scriptSize++];
+        if (sigBLen < 68) {
+            return false;
+        }
+        for (size_t i = 0; i < sigBLen; i++) {
+            sigB.push_back(chargeOutputScript[scriptSize++]);
+        }
+    }
+
+    CPubKey *cPubkeyA = new CPubKey(pubkeyA.begin(), pubkeyA.end());
+    CPubKey *cPubkeyB = new CPubKey(pubkeyB.begin(), pubkeyB.end());
+
+    // get message and hash
+    uint256 TMsgBHash = Hash(vecNowHeight.begin(), vecNowHeight.end());
+
+    std::vector<uint8_t> TMsgA;
+    for (auto a = cPubkeyB->begin(); a != cPubkeyB->end(); a++) {
+        TMsgA.push_back(*a);
+    }
+    for (auto a : vecPermissionHeight) {
+        TMsgA.push_back(a);
+    }
+    TMsgA.push_back(minerFeeRate);
+
+    // if check charge address
+    if (ifCheckChargeAddress == true) {
+        for(auto a : chargeAddressScript) {
+            TMsgA.push_back(a);
+        }
+    }
+
+    uint256 TMsgAHash = Hash(TMsgA.begin(), TMsgA.end());
+
+    bool ret = cPubkeyB->Verify(TMsgBHash, sigB);
+    if (ret) {
+        ret = cPubkeyA->Verify(TMsgAHash, sigA);
+        if (ret) {
+            return true;
+        } else {
+            LogPrintf("verify sigA failed!!\n");
+        }
+    } else {
+        LogPrintf("verify sigB failed!!\n");
+    }
+
+    return false;
+}
+
+void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
+{
+    const CScript &chargeOutputScript = tx.vin[0].scriptSig;
+
+    uint8_t numlen = chargeOutputScript[0];
+    // Get length of height number
+    if (chargeOutputScript.empty()) {
+        throw std::runtime_error("Empty coinbase scriptSig");
+    }
+    // Parse height as CScriptNum
+    if (numlen == OP_0){
+        scriptSigHeight = 0;
+    }
+    else if ((numlen >= OP_1) && (numlen <= OP_16)){
+        scriptSigHeight = numlen - OP_1 + 1;
+    }
+    else{
+        if (chargeOutputScript.size() - 1 < (uint64_t)numlen){
+            std::stringstream error_message;
+            error_message << "Badly formatted height in coinbase!chargeOutputScript size:" << chargeOutputScript.size() << " numlen:" << (uint64_t)numlen;
+            throw std::runtime_error(error_message.str());
+        }
+        std::vector<unsigned char> heightScript(numlen);
+        copy(chargeOutputScript.begin() + 1, chargeOutputScript.begin() + 1 + numlen, heightScript.begin());
+        CScriptNum coinbaseHeight(heightScript, false, numlen);
+        scriptSigHeight = coinbaseHeight.getint();
+    }
+
+}
+
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled)
 {
+    if (isGenesisEnabled) {
+        uint64_t scriptSigHeight{0};
+        HeightFormScript(tx,scriptSigHeight);
+
+        if ((chainActive.Height() >= 824189) && (scriptSigHeight >= 824189) && tx.nVersion != 10) {
+            std::stringstream error_message;
+            error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
+                << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
+            return state.Invalid(false, 0, "", error_message.str());
+        }
+
+        if ((chainActive.Height() >= 824189) && (scriptSigHeight >= 824189) && !FilledMinerBill(tx)) {
+            LogPrintf("chainHeight type:%s sigHeight:%s 824189 num type:%s\n",\
+                typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+            return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
+        }
+    }
+    
     if (!tx.IsCoinBase()) {
         return state.DoS(100, false, REJECT_INVALID, "bad-cb-missing", false,
                          "first tx is not coinbase");
@@ -814,6 +1022,7 @@ static bool CheckTxInputExists(
     const CCoinsViewCache& view,
     CValidationState &state,
     std::vector<COutPoint> &vCoinsToUncache) {
+    // zws!!!
     // Do all inputs exist?
     for (const CTxIn& txin : tx.vin) {
         // Check if txin.prevout available as a UTXO tx.
@@ -1082,6 +1291,7 @@ static bool IsGenesisGracefulPeriod(const Config& config, int spendHeight)
     return false;
 }
 
+///zws!!!
 CTxnValResult TxnValidation(
     const TxInputDataSPtr& pTxInputData,
     const Config& config,
@@ -1891,6 +2101,7 @@ static void HandleOrphanAndRejectedP2PTxns(
 }
 
 void CreateTxRejectMsgForP2PTxn(
+    // zws!!!
     const TxInputDataSPtr& pTxInputData,
     unsigned int nRejectCode,
     const std::string& sRejectReason) {
@@ -2243,6 +2454,7 @@ bool GetTransaction(const Config &config, const TxId &txid,
             }
             isGenesisEnabled = IsGenesisEnabled(config, foundBlockIndex->second->nHeight);
             return true;
+            //zws!!!
         }
     }
 
@@ -2972,6 +3184,7 @@ std::pair<int,int> GetSpendHeightAndMTP(const CCoinsViewCache &inputs) {
     return { pindexPrev->nHeight + 1, pindexPrev->GetMedianTimePast() };
 }
 
+/// zws!!!!!!
 namespace Consensus {
 bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
                    const CCoinsViewCache &inputs, int nSpendHeight) {
@@ -3055,6 +3268,18 @@ std::optional<bool> CheckInputs(
 
     const auto [ spendHeight, mtp ] = GetSpendHeightAndMTP(inputs);
     (void)mtp;  // Silence unused variable warning
+
+    if (spendHeight >= 824190) {
+        if (tx.nVersion != 10 ) {
+            // return state.DoS(100, false, REJECT_INVALID, "bad-rgtx-nVersion");
+            
+            // This doesn't trigger the DoS code on purpose; if it did, it would make it
+            // easier for an attacker to attempt to split the network.
+            LogPrintf("CheckInputs::spendHeight: %s\n", spendHeight );
+            return state.Invalid(false, 0, "", "bad-rgtx-nVersion");
+        }
+    }
+
     if (!Consensus::CheckTxInputs(tx, state, inputs, spendHeight)) 
     {
         return false;
@@ -3104,7 +3329,9 @@ std::optional<bool> CheckInputs(
         const Amount amount = coin.GetTxOut().nValue;
 
         uint32_t perInputScriptFlags = 0;
+
         int inputScriptBlockHeight = GetInputScriptBlockHeight(coin.GetHeight());
+
         bool isGenesisEnabled = IsGenesisEnabled(config, inputScriptBlockHeight);
         if (isGenesisEnabled)
         {
@@ -3116,6 +3343,16 @@ std::optional<bool> CheckInputs(
         // Verify signature
         CScriptCheck check(config, consensus, scriptPubKey, amount, tx, i, flags | perInputScriptFlags, sigCacheStore,
                            txdata);
+        
+        if (spendHeight >= 824190 && inputScriptBlockHeight <= 824190)
+        {
+            LogPrintf("spendHeight >= 824190 && inputScriptBlockHeight <= 824190\n" );
+            return state.DoS(
+                100, false, REJECT_INVALID,
+                strprintf("mandatory-verify-flag-failed (%s)",
+                          ScriptErrorString(check.GetScriptError())));
+        }
+
         if (pvChecks) 
         {
             pvChecks->push_back(std::move(check));
@@ -6049,7 +6286,6 @@ std::function<bool()> ProcessNewBlockWithAsyncBestChainActivation(
                 return {};
             }
         }
-
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
         bool ret = CheckBlock(config, *pblock, state, pindexPrev->nHeight + 1);
@@ -6057,12 +6293,15 @@ std::function<bool()> ProcessNewBlockWithAsyncBestChainActivation(
         LOCK(cs_main);
 
         if (ret) {
-            // Store to disk
+            TimeConsuming timeConsuming;
             ret = AcceptBlock(config, pblock, state, &pindex, fForceProcessing,
                               nullptr, fNewBlock);
+            timeConsuming.timingEnded();
+            LogPrintf("AcceptBlock, Store to disk. time consuming:%ld\n",timeConsuming.obtainTimePeriod());
         }
         CheckBlockIndex(chainparams.GetConsensus());
         if (!ret) {
+            LogPrintf("GetMainSignals().BlockChecked \n");//
             GetMainSignals().BlockChecked(*pblock, state);
             error("%s: AcceptBlock FAILED", __func__);
 
