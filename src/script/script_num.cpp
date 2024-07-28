@@ -9,6 +9,7 @@
 #include <iterator>
 
 #include "int_serialization.h"
+#include <limits>
 
 using bsv::bint;
 using namespace std;

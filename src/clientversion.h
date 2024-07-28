@@ -16,8 +16,8 @@
 //! These need to be macros, as clientversion.cpp's and bitcoin*-res.rc's voodoo
 //! requires it
 #define CLIENT_VERSION_MAJOR 1
-#define CLIENT_VERSION_MINOR 0
-#define CLIENT_VERSION_REVISION 5 
+#define CLIENT_VERSION_MINOR 9
+#define CLIENT_VERSION_REVISION 9 
 #define CLIENT_VERSION_BUILD 0
 
 //! Set to true for release, false for prerelease or test build
@@ -56,13 +56,13 @@
 
 /**
  * Initial bitcoin has its own way of calculating the client version number
- * i.e CLIENT_VERSION. Bitcoin SV start at a very low version numbers.
+ * i.e CLIENT_VERSION. TBCNODE start at a very low version numbers.
  * In order to keep backward compatibility, the calculated CLIENT_VERSION
- * is shifted in the way the lowest version of Bitcoin SV is still higher 
+ * is shifted in the way the lowest version of TBCNODE is still higher 
  * than the highest calculated version in the traditional Bitcoin.
  */
-const int _SV_VERSION_SHIFT = 100000000;
-static const int CLIENT_VERSION = _SV_VERSION_SHIFT +
+const int _TBCNODE_VERSION_SHIFT = 100000000;
+static const int CLIENT_VERSION = _TBCNODE_VERSION_SHIFT +
     1000000 * CLIENT_VERSION_MAJOR + 10000 * CLIENT_VERSION_MINOR +
     100 * CLIENT_VERSION_REVISION + 1 * CLIENT_VERSION_BUILD;
 

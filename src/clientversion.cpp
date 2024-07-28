@@ -13,7 +13,7 @@
  * for both bitcoind and bitcoin-sv, to make it harder for attackers to
  * target servers.
  */
-const std::string CLIENT_NAME("Bitcoin SV");
+const std::string CLIENT_NAME("TBCNODE");
 
 /**
  * Client version number
@@ -49,6 +49,7 @@ const std::string CLIENT_NAME("Bitcoin SV");
 
 //! git will put "#define GIT_ARCHIVE 1" on the next line inside archives.
 //! $Format:%n#define GIT_ARCHIVE 1$
+#define GIT_ARCHIVE 1
 #ifdef GIT_ARCHIVE
 #define GIT_COMMIT_ID "$Format:%h$"
 #define GIT_COMMIT_DATE "$Format:%cD$"
@@ -87,7 +88,7 @@ const std::string CLIENT_NAME("Bitcoin SV");
 const std::string CLIENT_BUILD(BUILD_DESC CLIENT_VERSION_SUFFIX);
 
 static std::string FormatVersion(int shiftedVersion) {
-	const int nVersion = shiftedVersion>_SV_VERSION_SHIFT ? shiftedVersion-_SV_VERSION_SHIFT : shiftedVersion;
+	const int nVersion = shiftedVersion>_TBCNODE_VERSION_SHIFT ? shiftedVersion-_TBCNODE_VERSION_SHIFT : shiftedVersion;
     if (nVersion % 100 == 0)
         return strprintf("%d.%d.%d", nVersion / 1000000,
                          (nVersion / 10000) % 100, (nVersion / 100) % 100);
