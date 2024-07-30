@@ -415,7 +415,7 @@ public:
         vSeeds.clear();
         // nodes with support for servicebits filtering should be at the top
         // TBC seeder
-        vSeeds.push_back(CDNSSeedData("metatbcnode.top", "testnet-seed.metatbcnode.top", true));
+        vSeeds.push_back(CDNSSeedData("tbctestnet.top", "test.tbctestnet.top", true));
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
