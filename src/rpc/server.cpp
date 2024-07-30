@@ -130,8 +130,8 @@ UniValue ValueFromAmount(const Amount &amount) {
     int64_t amt = amount.GetSatoshis();
     bool sign = amt < 0;
     int64_t n_abs = (sign ? -amt : amt);
-    int64_t quotient = n_abs / TBCCENT.GetSatoshis();
-    int64_t remainder = n_abs % TBCCENT.GetSatoshis();
+    int64_t quotient = n_abs / TBCCOIN.GetSatoshis();
+    int64_t remainder = n_abs % TBCCOIN.GetSatoshis();
     return UniValue(UniValue::VNUM, strprintf("%s%d.%06d", sign ? "-" : "",
                                               quotient, remainder));
 }
