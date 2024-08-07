@@ -445,10 +445,10 @@ extern "C" void *ThreadStats(void *) {
 }
 
 static const std::string mainnet_seeds[] = {
-     "seed.metatbcnode.top","seed.metatbcnod.life",""};
+     "seed.tbcnode.org","seed.tbcnode.com",""};
     
 static const std::string testnet_seeds[] = {
-    "testnet-seed.metatbcnode.top",""};
+    "test.tbctestnet.top",""};
 static const std::string *seeds = mainnet_seeds;
 
 const static unsigned int MAX_HOSTS_PER_SEED = 128;
