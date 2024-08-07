@@ -18,7 +18,7 @@ brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
 ## How To Build
 
 C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
-memory available when compiling Bitcoin SV. 
+memory available when compiling. 
 
 For Memory > 1.5GB:
 ```bash
