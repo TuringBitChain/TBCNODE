@@ -2,14 +2,31 @@
 
 
 ## How To Install Dependencies :
-```
+
 For Ubuntu 20.04 LTS:
+```
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
-sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-program-options-dev libboost-test-dev libboost-thread-dev
 sudo apt-get install libdb-dev
 sudo apt-get install libdb++-dev
 
-For Mac OSX 13.1, after installed Xcode and brew:
+sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-program-options-dev libboost-test-dev libboost-thread-dev
+```
+
+For Ubuntu 22.04 LTS:
+```
+sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
+sudo apt-get install libdb-dev
+sudo apt-get install libdb++-dev
+
+# Manually install boost (version 1.66.0):
+tar -xzf boost_1_66_0.tar.gz
+cd boost_1_66_0
+./bootstrap.sh --prefix=/home/.../boost-1.66.0
+./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
+```
+
+For Mac OSX 13.1 with Xcode and brew installed:
+```
 brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
 (failed to compile on OSX when using new boost version, such as boost@1.83)
 ```
@@ -20,37 +37,51 @@ brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
 C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
 memory available when compiling. 
 
-For Memory > 1.5GB:
+### Firstly
+
 ```bash
 ./autogen.sh
+```
+
+### Secondly
+
+**For Memory > 1.5GB:**
 
 For UBUNTU 20.04 LTS:
+```bash
 ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --prefix=/home/$USER/TBCNODE
-or for Mac OSX:
-./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --with-boost=/opt/homebrew/opt/boost@1.76
-
-(Sometimes, you need to specify the LDFLAGS or CPPFLAGS before ./configure to let the compiler recognize custom paths, such as: CPPFLAGS=" -I/opt/homebrew/opt/libevent/include ./configure ..." )
-
-make -j 8
-make install  # optional: install bin file to the path specified by --prefix=
 ```
 
-For UBUNTU 22.04 LTS 
--  Firstly manually install boost (version 1.66.0):
-```
-tar -xzf boost_1_66_0.tar.gz
-cd boost_1_66_0
-./bootstrap.sh --prefix=/home/.../boost-1.66.0
-./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
-```
-- Then, compile the TBCNODE with the following configure:
+For UBUNTU 22.04 LTS: 
 ```
 CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --prefix=/home/$USER/TBCNODE   --with-boost=/home/.../boost-1.66.0 
 ```
 
-On systems with less memory, gcc can be tuned to conserve memory with additional CXXFLAGS:
+For Mac OSX 13.1:
+```bash
+./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --with-boost=/opt/homebrew/opt/boost@1.76
+```
+
+
+**On systems with less memory, gcc can be tuned to conserve memory with additional CXXFLAGS:**
+
 ```
 ./configure CXXFLAGS="--param ggc-min-expand=1 --param ggc-min-heapsize=32768 ... "
+```
+
+Sometimes, you need to specify the LDFLAGS or CPPFLAGS before ./configure to let the compiler recognize custom paths, 
+such as:
+```
+CPPFLAGS=" -I/opt/homebrew/opt/libevent/include"      ./configure ... 
+CPPFLAGS=" -I/opt/homebrew/Cellar/libevent/2.1.12_1"  ./configure ... 
+```
+
+
+### Finally
+
+```bash
+make -j 8
+make install  # optional: install bin file to the path specified by --prefix=
 ```
 
 
