@@ -161,8 +161,8 @@ public:
         // Note that of those with the service bits flag, most only support a
         // subset of possible options.
         // TBC seeder
-        vSeeds.push_back(CDNSSeedData("metatbcnode.top", "seed.metatbcnode.top", true));
-        vSeeds.push_back(CDNSSeedData("metatbcnod.life", "seed.metatbcnod.life", true));
+        vSeeds.push_back(CDNSSeedData("tbcnode.org", "seed.tbcnode.org", true));
+        vSeeds.push_back(CDNSSeedData("tbcnode.com", "seed.tbcnode.com", true));
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
@@ -307,7 +307,7 @@ public:
 
         vFixedSeeds.clear();
         vSeeds.clear();
-        vSeeds.push_back(CDNSSeedData("metatbcnode.top", "stn-seed.metatbcnode.top", true));
+        vSeeds.push_back(CDNSSeedData("tbctestnet.top", "test.tbctestnet.top", true));
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
