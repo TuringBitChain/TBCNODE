@@ -170,7 +170,7 @@ threadsperblock=6
 
 #Other Tx Conf:
 maxscriptsizepolicy=0
-blockmintxfee=0.00000250
+blockmintxfee=0.000080
  
 # Network-related settings:
 
