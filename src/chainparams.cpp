@@ -18,9 +18,16 @@
 
 #include "chainparamsseeds.h"
 
+
+/** main-dev
+#define GENESIS_ACTIVATION_MAIN                 1
+#define GENESIS_ACTIVATION_TESTNET              1
+*/
 #define GENESIS_ACTIVATION_MAIN                 620538
-#define GENESIS_ACTIVATION_STN                  100
 #define GENESIS_ACTIVATION_TESTNET              1344302
+
+
+#define GENESIS_ACTIVATION_STN                  100
 #define GENESIS_ACTIVATION_REGTEST              10000
 
 static CBlock CreateGenesisBlock(const char *pszTimestamp,
@@ -46,9 +53,17 @@ static CBlock CreateGenesisBlock(const char *pszTimestamp,
     genesis.nNonce = nNonce;
     genesis.nVersion = nVersion;
     genesis.vtx.push_back(MakeTransactionRef(std::move(txNew)));
+
+  
+    /** for main-dev
+    genesis.hashPrevBlock.SetHex("00000000000000000102d94fde9bd0807a2cc7582fe85dd6349b73ce4e8d9322");
+    genesis.hashMerkleRoot.SetHex("da2b9eb7e8a3619734a17b55c47bdd6fd855b0afa9c7e14e3a164a279e51bba9");
+    */
     genesis.hashPrevBlock.SetNull();
     genesis.hashMerkleRoot = BlockMerkleRoot(genesis);
-    return genesis;
+
+  
+  return genesis;
 }
 
 /**
@@ -93,6 +108,69 @@ public:
     CMainParams() {
         strNetworkID = "main";
         consensus.nSubsidyHalvingInterval = 210000;
+        consensus.powLimit = uint256S(
+            "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        // two weeks
+        consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
+        consensus.nPowTargetSpacing = 10 * 60;
+        consensus.fPowAllowMinDifficultyBlocks = true;
+        consensus.fPowNoRetargeting = false;
+        // 95% of 2016
+        consensus.nRuleChangeActivationThreshold = 1916;
+        // nPowTargetTimespan / nPowTargetSpacing
+        consensus.nMinerConfirmationWindow = 2016;
+
+        // By default assume that the signatures in ancestors of this block are
+        // valid.
+        consensus.defaultAssumeValid = uint256S(
+            "000000000000000000e45ad2fbcc5ff3e85f0868dd8f00ad4e92dffabe28f8d2");
+
+      
+      
+        /** for main-dev
+
+        // The best chain should have at least this much work.
+        consensus.nMinimumChainWork = uint256S(
+            "0000000000000000000000000000000000000000000000000000000000ffffff");
+        // August 1, 2017 hard fork
+        consensus.uahfHeight = 1;
+        // November 13, 2017 hard fork
+        consensus.daaHeight = 0;
+        // February 2020, Genesis Upgrade
+        consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
+        genesis = CreateGenesisBlock(1231006505, 2083236893, 0x1d00ffff, 0x20000000,
+                                     50 * COIN);
+        consensus.hashGenesisBlock = genesis.GetHash();
+        assert(consensus.hashGenesisBlock ==
+               uint256S("000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b"));
+        assert(genesis.hashMerkleRoot ==
+               uint256S("da2b9eb7e8a3619734a17b55c47bdd6fd855b0afa9c7e14e3a164a279e51bba9"));
+
+        // Note that of those with the service bits flag, most only support a
+        // subset of possible options.
+        // MicroVisionChain seeder
+        vSeeds.push_back(CDNSSeedData("", "", true));
+       
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
+        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 128);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x88, 0xB2, 0x1E};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
+
+        vFixedSeeds = std::vector<SeedSpec6>(
+            pnSeed6_main, pnSeed6_main + ARRAYLEN(pnSeed6_main));
+
+        fMiningRequiresPeers = true;
+        fDefaultConsistencyChecks = false;
+        fRequireStandard = true;
+        fMineBlocksOnDemand = true;
+
+        checkpointData = { {
+                {0       ,uint256S("000000000000000001d956714215d96ffc00e0afda4cd0a96c96f8d802b1662b")},
+            }};
+            
+        */
+
         consensus.BIP34Height = 227931;
         consensus.BIP34Hash = uint256S(
             "000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8");
@@ -102,36 +180,18 @@ public:
         consensus.BIP66Height = 363725;
         // 000000000000000004a1b34462cb8aeebd5799177f7a29cf28f2d1961716b5b5
         consensus.CSVHeight = 419328;
-        consensus.powLimit = uint256S(
-            "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        // two weeks
-        consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
-        consensus.nPowTargetSpacing = 10 * 60;
-        consensus.fPowAllowMinDifficultyBlocks = false;
-        consensus.fPowNoRetargeting = false;
-        // 95% of 2016
-        consensus.nRuleChangeActivationThreshold = 1916;
-        // nPowTargetTimespan / nPowTargetSpacing
-        consensus.nMinerConfirmationWindow = 2016;
 
         // The best chain should have at least this much work.
         consensus.nMinimumChainWork = uint256S(
             "000000000000000000000000000000000000000000a0f3064330647e2f6c4828");
 
-        // By default assume that the signatures in ancestors of this block are
-        // valid.
-        consensus.defaultAssumeValid = uint256S(
-            "000000000000000000e45ad2fbcc5ff3e85f0868dd8f00ad4e92dffabe28f8d2");
-
         // August 1, 2017 hard fork
         consensus.uahfHeight = 478558;
-
         // November 13, 2017 hard fork
         consensus.daaHeight = 504031;
-
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
-
+      
         /**
          * The message start string is designed to be unlikely to occur in
          * normal data. The characters are rarely used upper ASCII, not valid as
@@ -157,13 +217,12 @@ public:
         assert(genesis.hashMerkleRoot ==
                uint256S("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b"
                         "7afdeda33b"));
-
         // Note that of those with the service bits flag, most only support a
         // subset of possible options.
         // TBC seeder
         vSeeds.push_back(CDNSSeedData("tbcnode.org", "seed.tbcnode.org", true));
         vSeeds.push_back(CDNSSeedData("tbcnode.com", "seed.tbcnode.com", true));
-
+      
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
         base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 128);
@@ -176,7 +235,7 @@ public:
         fMiningRequiresPeers = true;
         fDefaultConsistencyChecks = false;
         fRequireStandard = true;
-        fMineBlocksOnDemand = false;
+        fMineBlocksOnDemand = true;  
 
         checkpointData = { {
                 {11111, uint256S("0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee"
@@ -218,6 +277,13 @@ public:
                                   "33dc231cdd4cc4fd861d")}
             }};
 
+
+
+
+      
+
+
+      
         // Data as of block
         // 000000000000000001d2ce557406b017a928be25ee98906397d339c3f68eec5d
         // (height 523992).
