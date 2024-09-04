@@ -4363,18 +4363,18 @@ static void UpdateTip(const Config &config, CBlockIndex *pindexNew) {
         }
     }
 
-    LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu "
-              "date='%s' progress=%f cache=%.1fMiB(%utxo)",
-              __func__, chainActive.Tip()->GetBlockHash().ToString(),
-              chainActive.Height(), chainActive.Tip()->nVersion,
-              log(chainActive.Tip()->nChainWork.getdouble()) / log(2.0),
-              (unsigned long)chainActive.Tip()->nChainTx,
-              DateTimeStrFormat("%Y-%m-%d %H:%M:%S",
-                                chainActive.Tip()->GetBlockTime()),
-              GuessVerificationProgress(config.GetChainParams().TxData(),
-                                        chainActive.Tip()),
-              pcoinsTip->DynamicMemoryUsage() * (1.0 / (1 << 20)),
-              pcoinsTip->GetCacheSize());
+    // LogPrintf("%s: new best=%s height=%d version=0x%08x log2_work=%.8g tx=%lu "
+    //           "date='%s' progress=%f cache=%.1fMiB(%utxo)",
+    //           __func__, chainActive.Tip()->GetBlockHash().ToString(),
+    //           chainActive.Height(), chainActive.Tip()->nVersion,
+    //           log(chainActive.Tip()->nChainWork.getdouble()) / log(2.0),
+    //           (unsigned long)chainActive.Tip()->nChainTx,
+    //           DateTimeStrFormat("%Y-%m-%d %H:%M:%S",
+    //                             chainActive.Tip()->GetBlockTime()),
+    //           GuessVerificationProgress(config.GetChainParams().TxData(),
+    //                                     chainActive.Tip()),
+    //           pcoinsTip->DynamicMemoryUsage() * (1.0 / (1 << 20)),
+    //           pcoinsTip->GetCacheSize());
 
     if (!warningMessages.empty()) {
         LogPrintf(" warning='%s'",
@@ -6297,7 +6297,7 @@ std::function<bool()> ProcessNewBlockWithAsyncBestChainActivation(
             ret = AcceptBlock(config, pblock, state, &pindex, fForceProcessing,
                               nullptr, fNewBlock);
             timeConsuming.timingEnded();
-            LogPrintf("AcceptBlock, Store to disk. time consuming:%ld\n",timeConsuming.obtainTimePeriod());
+            //LogPrintf("AcceptBlock, Store to disk. time consuming:%ld\n",timeConsuming.obtainTimePeriod());
         }
         CheckBlockIndex(chainparams.GetConsensus());
         if (!ret) {

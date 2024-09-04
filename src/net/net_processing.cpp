@@ -1399,6 +1399,7 @@ static void ProcessGetData(const Config &config, const CNodePtr& pfrom,
                              pfrom->GetId());
 
                     // disconnect node
+                    LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
                     pfrom->fDisconnect = true;
                     send = false;
                 }
@@ -1676,6 +1677,7 @@ static bool ProcessVersionMessage(const CNodePtr& pfrom, const std::string& strC
                 .Make(NetMsgType::REJECT, strCommand, REJECT_NONSTANDARD,
                       strprintf("Expected to offer services %08x",
                                 pfrom->nServicesExpected)));
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return false;
     }
@@ -1690,6 +1692,7 @@ static bool ProcessVersionMessage(const CNodePtr& pfrom, const std::string& strC
                 .Make(NetMsgType::REJECT, strCommand, REJECT_OBSOLETE,
                       strprintf("Version must be %d or greater",
                                 MIN_PEER_PROTO_VERSION)));
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return false;
     }
@@ -1752,6 +1755,7 @@ static bool ProcessVersionMessage(const CNodePtr& pfrom, const std::string& strC
 
     // Change version
     pfrom->SetSendVersion(nSendVersion);
+    LogPrintf("call code set node version:%d\n",nVersion);
     pfrom->nVersion = nVersion;
 
     // Potentially mark this peer as a preferred download peer.
@@ -1822,6 +1826,7 @@ static bool ProcessVersionMessage(const CNodePtr& pfrom, const std::string& strC
     // Feeler connections exist only to verify if address is online.
     if(pfrom->fFeeler) {
         assert(pfrom->fInbound == false);
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
     }
 
@@ -1979,6 +1984,7 @@ static bool ProcessAddrMessage(const CNodePtr& pfrom, const std::atomic<bool>& i
     }
     connman.AddNewAddresses(vAddrOk, peerAddr, 2 * 60 * 60);
     if (pfrom->fOneShot) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
     }
 
@@ -3120,6 +3126,7 @@ static void ProcessMempoolMessage(const CNodePtr& pfrom,
     if (gArgs.GetBoolArg("-rejectmempoolrequest", DEFAULT_REJECTMEMPOOLREQUEST) && !pfrom->fWhitelisted) {
         LogPrint(BCLog::NET, "mempool request from nonwhitelisted peer disabled, disconnect peer=%d\n",
                  pfrom->GetId());
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return;
     }
@@ -3127,6 +3134,7 @@ static void ProcessMempoolMessage(const CNodePtr& pfrom,
     if(!(pfrom->GetLocalServices() & NODE_BLOOM) && !pfrom->fWhitelisted) {
         LogPrint(BCLog::NET, "mempool request with bloom filters disabled, disconnect peer=%d\n",
                  pfrom->GetId());
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return;
     }
@@ -3134,6 +3142,7 @@ static void ProcessMempoolMessage(const CNodePtr& pfrom,
     if(connman.OutboundTargetReached(false) && !pfrom->fWhitelisted) {
         LogPrint(BCLog::NET, "mempool request with bandwidth limit reached, disconnect peer=%d\n",
                  pfrom->GetId());
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return;
     }
@@ -3318,6 +3327,7 @@ static void ProcessFeeFilterMessage(const CNodePtr& pfrom, CDataStream& vRecv)
 static bool ProcessProtoconfMessage(const CNodePtr& pfrom, CDataStream& vRecv, const std::string& strCommand)
 {
     if (pfrom->protoconfReceived) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return false;
     }
@@ -3331,6 +3341,7 @@ static bool ProcessProtoconfMessage(const CNodePtr& pfrom, CDataStream& vRecv, c
     } catch (const std::ios_base::failure &e) {
         LogPrint(BCLog::NET, "Invalid protoconf received \"%s\" from peer=%d, exception = %s\n",
             SanitizeString(strCommand), pfrom->id, e.what());
+            LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return false;
     }
@@ -3341,6 +3352,7 @@ static bool ProcessProtoconfMessage(const CNodePtr& pfrom, CDataStream& vRecv, c
         if (protoconf.maxRecvPayloadLength < LEGACY_MAX_PROTOCOL_PAYLOAD_LENGTH) {
             LogPrint(BCLog::NET, "Invalid protoconf received \"%s\" from peer=%d, peer's proposed maximal message size is too low (%d).\n",
             SanitizeString(strCommand), pfrom->id, protoconf.maxRecvPayloadLength);
+            LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
             pfrom->fDisconnect = true;
             return false;
         }
@@ -3366,6 +3378,7 @@ static bool ProcessMessage(const Config& config, const CNodePtr& pfrom,
                            const CChainParams& chainparams, CConnman& connman,
                            const std::atomic<bool>& interruptMsgProc)
 {
+    LogPrintf("SanitizeString received:%s received:%s\n",SanitizeString(strCommand),strCommand);
     LogPrint(BCLog::NET, "received: %s (%u bytes) peer=%d\n",
              SanitizeString(strCommand), vRecv.size(), pfrom->id);
     if (gArgs.IsArgSet("-dropmessagestest") && GetRand(gArgs.GetArg("-dropmessagestest", 0)) == 0) {
@@ -3375,6 +3388,7 @@ static bool ProcessMessage(const Config& config, const CNodePtr& pfrom,
 
     if (!(pfrom->GetLocalServices() & NODE_BLOOM) &&
         (strCommand == NetMsgType::FILTERLOAD || strCommand == NetMsgType::FILTERADD)) {
+        LogPrintf("node addrName:%s nVersion:%d\n",pfrom->GetAddrName(),pfrom->nVersion);
         if (pfrom->nVersion >= NO_BLOOM_VERSION) {
             Misbehaving(pfrom, 100, "no-bloom-version");
             return false;
@@ -3547,6 +3561,7 @@ static bool SendRejectsAndCheckIfBanned(const CNodePtr& pnode, CConnman &connman
             LogPrintf("Warning: not punishing addnoded peer %s!\n",
                       peerAddr.ToString());
         } else {
+            LogPrintf("node addrName:%s disconnecting line:%d\n",pnode->GetAddrName(),__LINE__);
             pnode->fDisconnect = true;
             if (peerAddr.IsLocal()) {
                 LogPrintf("Warning: not banning local peer %s!\n",
@@ -3632,6 +3647,7 @@ bool ProcessMessages(const Config &config, const CNodePtr& pfrom, CConnman &conn
         // Make sure we ban where that come from for some time.
         connman.Ban(pfrom->GetAssociation().GetPeerAddr(), BanReasonNodeMisbehaving);
 
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pfrom->GetAddrName(),__LINE__);
         pfrom->fDisconnect = true;
         return false;
     }
