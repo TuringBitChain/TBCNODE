@@ -530,6 +530,7 @@ void CConnman::Ban(const CSubNet &subNet, const BanReason &banReason,
         LOCK(cs_vNodes);
         for (const CNodePtr& pnode : vNodes) {
             if (subNet.Match((CNetAddr)pnode->GetAssociation().GetPeerAddr())) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pnode->GetAddrName(),__LINE__);
                 pnode->fDisconnect = true;
             }
         }
@@ -925,22 +926,32 @@ void CNode::ServiceSockets(fd_set& setRecv, fd_set& setSend, fd_set& setError, C
         if (nLastRecv == 0 || nLastSend == 0) {
             LogPrint(BCLog::NET, "socket no message in first 60 seconds, %d %d from %d\n",
                      nLastRecv != 0, nLastSend != 0, id);
+        LogPrintf("node addrName:%s disconnecting line:%d\n",GetAddrName(),__LINE__);
+    //LogPrintf("node addrName:%s nLastSend:%ld nLastRecv:%ld\n", GetAddrName(), nLastSend, nLastRecv);
             fDisconnect = true;
         }
         else if (nTime - nLastSend > timeout) {
             LogPrintf("socket sending timeout: %is\n", nTime - nLastSend);
+        LogPrintf("node addrName:%s disconnecting line:%d\n",GetAddrName(),__LINE__);
+    LogPrintf("node addrName:%s nLastSend:%ld nLastRecv:%ld\n", GetAddrName(), nLastSend, nLastRecv);
             fDisconnect = true;
         }
         else if (nTime - nLastRecv > (nVersion > BIP0031_VERSION ? timeout : 90 * 60)) {
             LogPrintf("socket receive timeout: %is\n", nTime - nLastRecv);
+        LogPrintf("node addrName:%s disconnecting line:%d\n",GetAddrName(),__LINE__);
+    LogPrintf("node addrName:%s nLastSend:%ld nLastRecv:%ld\n", GetAddrName(), nLastSend, nLastRecv);
             fDisconnect = true;
         }
         else if (nPingNonceSent && nPingUsecStart + (timeout * MICROS_PER_SECOND) < GetTimeMicros()) {
             LogPrintf("ping timeout: %fs\n", 0.000001 * (GetTimeMicros() - nPingUsecStart));
+        LogPrintf("node addrName:%s disconnecting line:%d\n",GetAddrName(),__LINE__);
+    LogPrintf("node addrName:%s nLastSend:%ld nLastRecv:%ld\n", GetAddrName(), nLastSend, nLastRecv);
             fDisconnect = true;
         }
         else if (!fSuccessfullyConnected) {
             LogPrintf("version handshake timeout from %d\n", id);
+        LogPrintf("node addrName:%s disconnecting line:%d\n",GetAddrName(),__LINE__);
+    LogPrintf("node addrName:%s nLastSend:%ld nLastRecv:%ld\n", GetAddrName(), nLastSend, nLastRecv);
             fDisconnect = true;
         }
     }
@@ -1136,6 +1147,7 @@ bool CConnman::AttemptToEvictConnection() {
     LOCK(cs_vNodes);
     for(const CNodePtr& node : vNodes) {
         if (node->GetId() == evicted) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",node->GetAddrName(),__LINE__);
             node->fDisconnect = true;
             return true;
         }
@@ -1255,15 +1267,21 @@ void CConnman::ThreadSocketHandler() {
         {
             LOCK(cs_vNodes);
             // Disconnect unused nodes
-            auto pred = [](const CNodePtr& node) { return node->fDisconnect.load(); };
+            auto pred = [](const CNodePtr& node) { 
+                if(node->fDisconnect.load())
+                LogPrintf("remove addrname:%s fDisconnect:%d\n",node->GetAddrName(),node->fDisconnect.load());
+                return node->fDisconnect.load(); };
             std::vector<CNodePtr> toBeRemoved {};
             for(const CNodePtr& node : vNodes)
             {
                 if(pred(node))
                     toBeRemoved.emplace_back(node);
             }
+            auto tmp1 = vNodes.size();
             // Remove from vNodes
             vNodes.erase(std::remove_if(vNodes.begin(), vNodes.end(), pred), vNodes.end());
+            if(tmp1 != vNodes.size())
+                LogPrintf("remove vNodes old size:%d size:%d\n", tmp1, vNodes.size());
 
             for(const CNodePtr& node : toBeRemoved)
             {
@@ -1271,6 +1289,7 @@ void CConnman::ThreadSocketHandler() {
                 node->grantOutbound.Release();
 
                 // Close socket and cleanup
+                LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",node->GetAddrName(),__LINE__);
                 node->CloseSocketDisconnect();
 
                 // Hold in disconnected pool until all refs are released
@@ -1592,6 +1611,7 @@ void CConnman::ThreadDNSAddressSeed() {
                         requiredServiceBits);
                     // Use a random age between 3 and 7 days old.
                     addr.nTime = GetTime() - 3 * nOneDay - GetRand(4 * nOneDay);
+                    LogPrintf("push_back addr:%s\n",addr.ToStringIPPort());
                     vAdd.push_back(addr);
                     found++;
                 }
@@ -1601,11 +1621,17 @@ void CConnman::ThreadDNSAddressSeed() {
             // from different seeds. This should switch to a hard-coded stable
             // dummy IP for each seed name, so that the resolve is not required
             // at all.
-            if (!vIPs.empty()) {
+            //if (!vIPs.empty()) {
                 CService seedSource;
                 Lookup(seed.name.c_str(), seedSource, 0, true);
+                for(int i =0;i<vAdd.size();++i)
+                {
+                    LogPrintf("vAdd[i]:%s\n",vAdd[i].ToStringIPPort());
+                    
+                }
                 addrman.Add(vAdd, seedSource);
-            }
+                    LogPrintf("addrman size:%d\n",addrman.size());
+            //}
         }
     }
 
@@ -1648,6 +1674,7 @@ void CConnman::ProcessOneShot() {
 }
 
 void CConnman::ThreadOpenConnections() {
+    LogPrintf("start ThreadOpenConnections\n");
     // Connect to specific addresses
     if (gArgs.IsArgSet("-connect") && gArgs.GetArgs("-connect").size() > 0) {
         for (int64_t nLoop = 0;; nLoop++) {
@@ -1818,6 +1845,8 @@ void CConnman::ThreadOpenConnections() {
                          addrConnect.ToString());
             }
 
+            LogPrintf("OpenNetworkConnection addrConnect:%s\n",
+                        addrConnect.ToString());
             OpenNetworkConnection(addrConnect,
                                   (int)setConnected.size() >=
                                       std::min(nMaxConnections - 1, 2),
@@ -1976,6 +2005,8 @@ bool CConnman::OpenNetworkConnection(const CAddress &addrConnect,
     {
         LOCK(cs_vNodes);
         vNodes.push_back(pnode);
+        LogPrintf("addr:%s connect ok vNodes size:%d fDisconnect:%d\n",addrConnect.ToStringIPPort(),vNodes.size(),pnode->fDisconnect);
+        
     }
 
     return true;
@@ -2279,6 +2310,7 @@ void CConnman::SetNetworkActive(bool active) {
         LOCK(cs_vNodes);
         // Close sockets to all nodes
         for (const CNodePtr& pnode : vNodes) {
+            LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",pnode->GetAddrName(),__LINE__);
             pnode->CloseSocketDisconnect();
         }
     } else {
@@ -2530,6 +2562,7 @@ void CConnman::Stop() {
 
     // Close sockets
     for (const CNodePtr& pnode : vNodes) {
+        LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",pnode->GetAddrName(),__LINE__);
         pnode->CloseSocketDisconnect();
     }
     for (ListenSocket &hListenSocket : vhListenSocket) {
@@ -2654,6 +2687,7 @@ void CConnman::GetNodeStats(std::vector<NodeStats> &vstats) {
 bool CConnman::DisconnectNode(const std::string &strNode) {
     LOCK(cs_vNodes);
     if (const CNodePtr& pnode = FindNode(strNode)) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pnode->GetAddrName(),__LINE__);
         pnode->fDisconnect = true;
         return true;
     }
@@ -2663,6 +2697,7 @@ bool CConnman::DisconnectNode(NodeId id) {
     LOCK(cs_vNodes);
     for (const CNodePtr& pnode : vNodes) {
         if (id == pnode->id) {
+        LogPrintf("node addrName:%s disconnecting line:%d\n",pnode->GetAddrName(),__LINE__);
             pnode->fDisconnect = true;
             return true;
         }

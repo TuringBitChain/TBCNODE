@@ -128,6 +128,7 @@ void Stream::ServiceSocket(fd_set& setRecv, fd_set& setSend, fd_set& setError,
             const RECV_STATUS status = ReceiveMsgBytes(config, pchBuf, bytesRecv, gotNewMsgs);
             if (status != RECV_OK)
             {   
+                LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",mNode.GetAddrName(),__LINE__);
                 mNode.CloseSocketDisconnect();
                 if (status == RECV_BAD_LENGTH)
                 {   
@@ -143,6 +144,7 @@ void Stream::ServiceSocket(fd_set& setRecv, fd_set& setSend, fd_set& setError,
             {   
                 LogPrint(BCLog::NET, "stream socket closed\n");
             }
+            LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",mNode.GetAddrName(),__LINE__);
             mNode.CloseSocketDisconnect();
         }
         else if (nBytes < 0)
@@ -155,6 +157,7 @@ void Stream::ServiceSocket(fd_set& setRecv, fd_set& setSend, fd_set& setError,
                 {
                     LogPrintf("stream socket recv addr:%s error %s\n", peerAddr.ToStringIP(),NetworkErrorString(nErr));
                 }
+        LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",mNode.GetAddrName(),__LINE__);
                 mNode.CloseSocketDisconnect();
             }
         }
@@ -430,6 +433,7 @@ Stream::CSendResult Stream::SendMessage(CForwardAsyncReadonlyStream& data, size_
             if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
             {
                 LogPrintf("socket send error %s\n", NetworkErrorString(nErr));
+        LogPrintf("node addrName:%s CloseSocketDisconnect line:%d\n",mNode.GetAddrName(),__LINE__);
                 mNode.CloseSocketDisconnect();
             }
 

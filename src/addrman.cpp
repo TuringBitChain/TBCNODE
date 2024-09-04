@@ -337,6 +337,21 @@ void CAddrMan::Attempt_(const CService &addr, bool fCountFailure,
 }
 
 CAddrInfo CAddrMan::Select_(bool newOnly) {
+    // struct in_addr ipv4Addr;
+    // inet_pton(AF_INET, "192.168.2.3", &ipv4Addr);  // 将字符串形式的IP地址转换为 in_addr
+    // CNetAddr netAddr(ipv4Addr);
+
+    // // 2. 创建一个 CService 对象，假设端口号为 8333
+    // CService service(netAddr, 8333);
+
+    // // 3. 创建一个 CAddress 对象，将 CService 传递进去
+    // ServiceFlags nServices = NODE_NETWORK;  // 假设服务标志为 NODE_NETWORK
+    // CAddress address(service, nServices);
+
+    // // 4. 使用 CAddress 和 CNetAddr 构造 CAddrInfo 对象
+    // CAddrInfo addrInfo(address, netAddr);
+    // return addrInfo;
+
     if (size() == 0) return CAddrInfo();
 
     if (newOnly && nNew == 0) return CAddrInfo();
@@ -387,8 +402,10 @@ CAddrInfo CAddrMan::Select_(bool newOnly) {
             assert(mapInfo.count(nId) == 1);
             CAddrInfo &info = mapInfo[nId];
             if (RandomInt(1 << 30) <
-                fChanceFactor * info.GetChance() * (1 << 30))
+                fChanceFactor * info.GetChance() * (1 << 30)){
                 return info;
+                LogPrintf("call if return info:%s\n",info.ToStringIPPort());
+            }
             fChanceFactor *= 1.2;
         }
     }
