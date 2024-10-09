@@ -584,8 +584,43 @@ std::optional<bool> EvalScript(
                         break;
                     }
 
-                    case OP_NOP1:
-                    case OP_NOP4:
+                    case OP_NOP1:{
+                        if (stack.size() < 3) {
+                            return set_error(
+                                serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
+                        LimitedVector vch = stack.stacktop(-3);
+                        LimitedVector vchPartHash = stack.stacktop(-2);
+                        LimitedVector vchSize = stack.stacktop(-1);
+
+                        stack.pop_back();
+                        stack.pop_back();
+                        stack.pop_back();
+                        valtype vchHash(32);
+
+                        CSHA256(vchPartHash.GetElement().data(), vchSize.GetElement().data())
+                            .Write(vch.GetElement().data(), vch.size())
+                            .Finalize(vchHash.data());
+
+
+                        stack.push_back(vchHash);
+                    } break;
+                    case OP_NOP4://{//push tx input_hash into stack
+                    //     valtype vchHash(32);
+                    //     auto tx=checker.GetTx();
+                    //     uint256 vinHash=tx->vinHash;
+                    //     uint8_t *s=vinHash.begin();
+                    //     WriteBE32(vchHash.data(), s[0]);
+                    //     WriteBE32(vchHash.data() + 4, s[1]);
+                    //     WriteBE32(vchHash.data() + 8, s[2]);
+                    //     WriteBE32(vchHash.data() + 12, s[3]);
+                    //     WriteBE32(vchHash.data() + 16, s[4]);
+                    //     WriteBE32(vchHash.data() + 20, s[5]);
+                    //     WriteBE32(vchHash.data() + 24, s[6]);
+                    //     WriteBE32(vchHash.data() + 28, s[7]);
+                    //     stack.push_back(vchHash);
+                    // }break;
+
                     case OP_NOP5:
                     case OP_NOP6:
                     case OP_NOP7:
