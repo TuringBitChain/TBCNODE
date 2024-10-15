@@ -1,5 +1,5 @@
 ---
-name: "TBCNODE-2.1.0-linux" 
+name: "TBCNODE-3.0.0-linux" 
 enable_cache: true
 suites:
 - "bionic"
