@@ -584,7 +584,139 @@ std::optional<bool> EvalScript(
                         break;
                     }
 
-                    case OP_NOP1:
+                    case OP_PUSH_META: {
+                        // Ensure there is at least one element on the stack
+                        if (stack.size() < 1) {
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION); 
+                        }
+                        // Get the top element of the stack
+                        LimitedVector &vch = stack.stacktop(-1);
+                        if (vch.size() > 1) {
+                        return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
+                                    }
+                        if (vch.size() == 1&&(vch[0] <1 ||vch[0] >7)) {
+                            return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
+                        //uint8_t condition = stack.stacktop(-1).GetElement().data();
+                        uint8_t condition = static_cast<uint8_t>(vch[0]);
+                        stack.pop_back(); 
+                        
+                        const CTransaction *tx =checker.GetTx(); 
+                        uint256 result;
+                        switch (condition) {
+                        case 1:
+                        {
+                            uint32_t temp32;
+                            temp32 = tx->nVersion; 
+                            valtype nVersionBytes(4);
+                            memcpy(nVersionBytes.data(), (char *)&temp32, 4); 
+                            stack.push_back(nVersionBytes);
+                            break;
+                        }
+                        case 2:
+                        {
+                            uint32_t temp32;
+                            temp32 = tx->nLockTime; 
+                            valtype nLockTimeBytes(4);
+                            memcpy(nLockTimeBytes.data(), (char *)&temp32, 4); 
+                            stack.push_back(nLockTimeBytes);
+                            break;
+                        }
+                        case 3:
+                        {
+                            uint32_t temp32;
+                            temp32 = tx->vin.size(); 
+                            valtype vinSizeBytes(4);
+                            memcpy(vinSizeBytes.data(), (char *)&temp32, 4); 
+                            stack.push_back(vinSizeBytes);
+                            break;
+                        }
+                        case 4:
+                        {
+                            uint32_t temp32;
+                            temp32 = tx->vout.size(); 
+                            valtype voutSizeBytes(4);
+                            memcpy(voutSizeBytes.data(), (char *)&temp32, 4); 
+                            stack.push_back(voutSizeBytes);
+                            break;
+                        }
+                        case 5:
+                        {
+                            result = checker.getSha256Inputs();
+                            valtype sha256InputsBytes(32);
+                            memcpy(sha256InputsBytes.data(), result.begin(), 32);
+                            stack.push_back(sha256InputsBytes);
+                            break;
+                        }
+                        case 6:
+                        {
+                                valtype combinedResult;
+                                uint32_t temp32;
+                                uint8_t n =checker.GetnIn();
+                                result = tx->vin[n].prevout.GetTxId();
+                                valtype txidBytes(32);
+                                memcpy(txidBytes.data(), result.begin(), 32);
+                                //reverse(txidBytes.begin(), txidBytes.end());
+                                combinedResult.insert(combinedResult.end(), txidBytes.begin(), txidBytes.end());
+                                temp32 =tx->vin[n].prevout.GetN();
+                                valtype prevoutNBytes(4);
+                                memcpy(prevoutNBytes.data(), (char *)&temp32, 4);
+                                combinedResult.insert(combinedResult.end(), prevoutNBytes.begin(), prevoutNBytes.end());
+                    
+                                temp32 = tx->vin[n].nSequence;
+                                valtype nSequenceBytes(4);
+                                memcpy(nSequenceBytes.data(), (char *)&temp32, 4);
+                                combinedResult.insert(combinedResult.end(), nSequenceBytes.begin(), nSequenceBytes.end());
+                                stack.push_back(combinedResult);
+                            break;
+                        }
+                        case 7:
+                        {
+                            result = checker.getSha256Outputs();
+                            valtype sha256OutputsBytes(32);
+                            memcpy(sha256OutputsBytes.data(), result.begin(), 32);
+                            stack.push_back(sha256OutputsBytes);
+                            break;
+                        }
+                        default:
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION); 
+                        }
+                    } break;
+
+                    case OP_NOP1:{
+                        if (stack.size() < 3) {
+                            return set_error(
+                                serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
+                        LimitedVector vch = stack.stacktop(-3);
+                        LimitedVector vchPartHash = stack.stacktop(-2);
+                        LimitedVector vchSize = stack.stacktop(-1);
+                        stack.pop_back();
+                        stack.pop_back();
+                        stack.pop_back();
+                        valtype vchHash(32);
+                        uint64_t vchSizeUint64 = 0;
+                        for (size_t i = 0; i < vchSize.size(); ++i) {
+                            vchSizeUint64 |= static_cast<uint64_t>(vchSize.GetElement()[i]) << (8 * i);
+                        }
+                        uint64_t remainVchSizeUint64 = vch.size();
+                        if (vchPartHash.size() == 0) {
+                            if (vchSizeUint64 != remainVchSizeUint64) {
+                                return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            } else {
+                                CSHA256().Write(vch.GetElement().data(), vch.size()).Finalize(vchHash.data());
+                            }
+                        } else {
+                            size_t partHashSize = static_cast<size_t>(vchSizeUint64 - remainVchSizeUint64);
+                            uint8_t partHashSizeArray[8];
+                            WriteLE64(partHashSizeArray, partHashSize);
+                            CSHA256(vchPartHash.GetElement().data(), partHashSizeArray)
+                            .Write(vch.GetElement().data(), vch.size())
+                            .Finalize(vchHash.data());
+                        }
+                        stack.push_back(vchHash);
+
+                    } break;
                     case OP_NOP4:
                     case OP_NOP5:
                     case OP_NOP6:
@@ -1841,13 +1973,32 @@ uint256 GetOutputsHash(const CTransaction &txTo) {
     return ss.GetHash();
 }
 
+uint256 GetOutputsSha256(const CTransaction &txTo) {
+    CHashWriter ss(SER_GETHASH, 0);
+     for (const CTxOut &iout : txTo.vout) {
+            ss << iout.nValue;  
+            ss << SerializeSingleHash_OpNoCSize(iout.scriptPubKey, SER_GETHASH, 0);
+        }
+    return ss.GetSingleHash();
+}
+uint256 GetInputsSha256(const CTransaction &txTo) {
+    CHashWriter ss(SER_GETHASH, 0);
+     for (const CTxIn &iin : txTo.vin) {
+            ss << iin.prevout;  
+            ss << iin.nSequence; 
+        }
+    return ss.GetSingleHash();
+}
+
 } // namespace
 
 PrecomputedTransactionData::PrecomputedTransactionData(
     const CTransaction &txTo) {
     hashPrevouts = GetPrevoutHash(txTo);
     hashSequence = GetSequenceHash(txTo);
-    hashOutputs = GetOutputsHash(txTo);
+    hashOutputs  = GetOutputsHash(txTo);
+    Sha256Inputs  = GetInputsSha256(txTo);
+    Sha256Outputs = GetOutputsSha256(txTo);
 }
 
 uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
@@ -1930,6 +2081,17 @@ bool TransactionSignatureChecker::VerifySignature(
     const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
     const uint256 &sighash) const {
     return pubkey.Verify(sighash, vchSig);
+}
+
+uint256 TransactionSignatureChecker::getSha256Inputs() const {
+    uint256 Sha256Inputs;
+    Sha256Inputs = this->txdata ? this->txdata->Sha256Inputs : GetInputsSha256(*(this->GetTx()) );
+    return Sha256Inputs;
+}
+uint256 TransactionSignatureChecker::getSha256Outputs() const {
+    uint256 Sha256Outputs;
+    Sha256Outputs = this->txdata ? this->txdata->Sha256Outputs : GetOutputsSha256(*(this->GetTx()) );
+    return Sha256Outputs;
 }
 
 bool TransactionSignatureChecker::CheckSig(
