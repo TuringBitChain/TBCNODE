@@ -45,6 +45,13 @@ public:
         return false;
     }
 
+    virtual uint256 getSha256Inputs() const {
+        return uint256(); 
+    }
+    virtual uint256 getSha256Outputs() const {
+        return uint256(); 
+    }
+
     virtual bool CheckLockTime(const CScriptNum &nLockTime) const {
         return false;
     }
@@ -53,6 +60,12 @@ public:
         return false;
     }
 
+    virtual const CTransaction* GetTx() const{
+        return NULL; 
+    }
+    virtual unsigned int GetnIn() const {
+        return 0;
+    }
     virtual ~BaseSignatureChecker() {}
 };
 
@@ -79,8 +92,16 @@ public:
     bool CheckSig(const std::vector<uint8_t> &scriptSig,
                   const std::vector<uint8_t> &vchPubKey,
                   const CScript &scriptCode, bool enabledSighashForkid) const override;
+    uint256 getSha256Inputs() const override;
+    uint256 getSha256Outputs() const override;
     bool CheckLockTime(const CScriptNum &nLockTime) const override;
     bool CheckSequence(const CScriptNum &nSequence) const override;
+    const CTransaction* GetTx() const override {
+        return txTo;
+    }
+    unsigned int GetnIn() const override {
+        return nIn;
+    }
 };
 
 class MutableTransactionSignatureChecker : public TransactionSignatureChecker {
