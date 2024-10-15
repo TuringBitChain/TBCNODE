@@ -141,7 +141,7 @@ enum opcodetype
     OP_NOP8 = 0xb7,
     OP_NOP9 = 0xb8,
     OP_NOP10 = 0xb9,
-
+    OP_PUSH_META=0xba,
     // The first op_code value after all defined opcodes
     FIRST_UNDEFINED_OP_VALUE,
 

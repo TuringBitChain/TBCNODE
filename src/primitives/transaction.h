@@ -396,8 +396,9 @@ static inline CTransactionRef MakeTransactionRef(Tx &&txIn) {
 
 /** Precompute sighash midstate to avoid quadratic hashing */
 struct PrecomputedTransactionData {
-    uint256 hashPrevouts, hashSequence, hashOutputs;
+    //uint256 hashPrevouts, hashSequence, hashOutputs;
 
+    uint256 hashPrevouts, hashSequence, Sha256Inputs, Sha256Outputs, hashOutputs;
     PrecomputedTransactionData() = default;
     PrecomputedTransactionData(const PrecomputedTransactionData&) = default;
     PrecomputedTransactionData& operator=(const PrecomputedTransactionData&) = default;
