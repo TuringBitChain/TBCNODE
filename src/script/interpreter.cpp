@@ -682,8 +682,7 @@ std::optional<bool> EvalScript(
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION); 
                         }
                     } break;
-
-                    case OP_NOP1:{
+                    case OP_PARTIAL_HASH: {
                         if (stack.size() < 3) {
                             return set_error(
                                 serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
@@ -717,6 +716,7 @@ std::optional<bool> EvalScript(
                         stack.push_back(vchHash);
 
                     } break;
+                    case OP_NOP1:
                     case OP_NOP4:
                     case OP_NOP5:
                     case OP_NOP6:
