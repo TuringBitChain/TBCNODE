@@ -313,8 +313,10 @@ const char* GetOpName(opcodetype opcode)
         return "OP_NOP9";
     case OP_NOP10:
         return "OP_NOP10";
-     case OP_PUSH_META:
+    case OP_PUSH_META:
         return "OP_PUSH_META";
+    case OP_PARTIAL_HASH:
+        return "OP_PARTIAL_HASH";
 
     case OP_INVALIDOPCODE:
         return "OP_INVALIDOPCODE";
