@@ -36,6 +36,14 @@ typedef uint256 ChainCode;
 
 /** An encapsulated public key. */
 class CPubKey {
+public:
+    /**
+     * secp256k1:
+     */
+    static constexpr unsigned int SIZE                   = 65;
+    static constexpr unsigned int COMPRESSED_SIZE        = 33;
+    static constexpr unsigned int SIGNATURE_SIZE         = 72;
+    static constexpr unsigned int COMPACT_SIGNATURE_SIZE = 65;
 private:
     /**
      * Just store the serialized data.
@@ -74,8 +82,15 @@ public:
     //! Construct a public key from a byte vector.
     CPubKey(const std::vector<uint8_t> &_vch) { Set(_vch.begin(), _vch.end()); }
 
+    //! Construct a public key from a byte vector.
+    explicit CPubKey(bsv::span<const uint8_t> _vch)
+    {
+        Set(_vch.begin(), _vch.end());
+    }
+
     //! Simple read-only vector-like interface to the pubkey data.
     unsigned int size() const { return GetLen(vch[0]); }
+    const unsigned char* data() const { return vch; }
     const uint8_t *begin() const { return vch; }
     const uint8_t *end() const { return vch + size(); }
     const uint8_t &operator[](unsigned int pos) const { return vch[pos]; }
@@ -152,6 +167,103 @@ public:
     //! Derive BIP32 child pubkey.
     bool Derive(CPubKey &pubkeyChild, ChainCode &ccChild, unsigned int nChild,
                 const ChainCode &cc) const;
+};
+
+class XOnlyPubKey
+{
+private:
+    uint256 m_keydata;
+
+public:
+    /** Construct an empty x-only pubkey. */
+    XOnlyPubKey() = default;
+
+    XOnlyPubKey(const XOnlyPubKey&) = default;
+    XOnlyPubKey& operator=(const XOnlyPubKey&) = default;
+
+    /** Determine if this pubkey is fully valid. This is true for approximately 50% of all
+     *  possible 32-byte arrays. If false, VerifySchnorr, CheckTapTweak and CreateTapTweak
+     *  will always fail. */
+    bool IsFullyValid() const;
+
+    /** Test whether this is the 0 key (the result of default construction). This implies
+     *  !IsFullyValid(). */
+    bool IsNull() const { return m_keydata.IsNull(); }
+
+    /** Construct an x-only pubkey from exactly 32 bytes. */
+    explicit XOnlyPubKey(bsv::span<const unsigned char> bytes);
+
+    /** Construct an x-only pubkey from a normal pubkey. */
+    explicit XOnlyPubKey(const CPubKey& pubkey) : XOnlyPubKey(bsv::span<const unsigned char>(pubkey.begin() + 1, pubkey.begin() + 33)) {}
+
+    /** Verify a Schnorr signature against this public key.
+     *
+     * sigbytes must be exactly 64 bytes.
+     */
+    bool VerifySchnorr(const uint256& msg, bsv::span<const unsigned char> sigbytes) const;
+
+    /** Compute the Taproot tweak as specified in BIP341, with *this as internal
+     * key:
+     *  - if merkle_root == nullptr: H_TapTweak(xonly_pubkey)
+     *  - otherwise:                 H_TapTweak(xonly_pubkey || *merkle_root)
+     *
+     * Note that the behavior of this function with merkle_root != nullptr is
+     * consensus critical.
+     */
+    uint256 ComputeTapTweakHash(const uint256* merkle_root) const;
+
+    /** Verify that this is a Taproot tweaked output point, against a specified internal key,
+     *  Merkle root, and parity. */
+    bool CheckTapTweak(const XOnlyPubKey& internal, const uint256& merkle_root, bool parity) const;
+
+    /** Construct a Taproot tweaked output point with this point as internal key. */
+    std::optional<std::pair<XOnlyPubKey, bool>> CreateTapTweak(const uint256* merkle_root) const;
+
+    /** Returns a list of CKeyIDs for the CPubKeys that could have been used to create this XOnlyPubKey.
+     * This is needed for key lookups since keys are indexed by CKeyID.
+     */
+    std::vector<CKeyID> GetKeyIDs() const;
+
+    CPubKey GetEvenCorrespondingCPubKey() const;
+
+    const unsigned char& operator[](int pos) const { return *(m_keydata.begin() + pos); }
+    static constexpr size_t size() { return decltype(m_keydata)::size(); }
+    const unsigned char* data() const { return m_keydata.begin(); }
+    const unsigned char* begin() const { return m_keydata.begin(); }
+    const unsigned char* end() const { return m_keydata.end(); }
+    unsigned char* data() { return m_keydata.begin(); }
+    unsigned char* begin() { return m_keydata.begin(); }
+    unsigned char* end() { return m_keydata.end(); }
+    bool operator==(const XOnlyPubKey& other) const { return m_keydata == other.m_keydata; }
+    bool operator!=(const XOnlyPubKey& other) const { return m_keydata != other.m_keydata; }
+    bool operator<(const XOnlyPubKey& other) const { return m_keydata < other.m_keydata; }
+
+    //! Implement serialization without length prefixes since it is a fixed length
+    SERIALIZE_METHODS(XOnlyPubKey, obj) { READWRITE(obj.m_keydata); }
+};
+
+/** An ElligatorSwift-encoded public key. */
+struct EllSwiftPubKey
+{
+private:
+    static constexpr size_t SIZE = 64;
+    std::array<std::byte, SIZE> m_pubkey;
+
+public:
+    /** Default constructor creates all-zero pubkey (which is valid). */
+    EllSwiftPubKey() noexcept = default;
+
+    /** Construct a new ellswift public key from a given serialization. */
+    EllSwiftPubKey(bsv::span<const std::byte> ellswift) noexcept;
+
+    /** Decode to normal compressed CPubKey (for debugging purposes). */
+    CPubKey Decode() const;
+
+    // Read-only access for serialization.
+    const std::byte* data() const { return m_pubkey.data(); }
+    static constexpr size_t size() { return SIZE; }
+    auto begin() const { return m_pubkey.cbegin(); }
+    auto end() const { return m_pubkey.cend(); }
 };
 
 struct CExtPubKey {

@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include "util/sock.h"
+
 extern int nConnectTimeout;
 extern bool fNameLookup;
 
@@ -53,6 +55,19 @@ bool Lookup(const char *pszName, std::vector<CService> &vAddr, int portDefault,
             bool fAllowLookup, unsigned int nMaxSolutions);
 CService LookupNumeric(const char *pszName, int portDefault = 0);
 bool LookupSubNet(const char *pszName, CSubNet &subnet);
+
+/**
+ * Create a TCP socket in the given address family.
+ * @param[in] address_family The socket is created in the same address family as this address.
+ * @return pointer to the created Sock object or unique_ptr that owns nothing in case of failure
+ */
+std::unique_ptr<Sock> CreateSockTCP(const CService& address_family);
+
+/**
+ * Socket factory. Defaults to `CreateSockTCP()`, but can be overridden by unit tests.
+ */
+extern std::function<std::unique_ptr<Sock>(const CService&)> CreateSock;
+
 bool ConnectSocket(const CService &addr, SOCKET &hSocketRet, int nTimeout,
                    bool *outProxyConnectionFailed = 0);
 bool ConnectSocketByName(CService &addr, SOCKET &hSocketRet,

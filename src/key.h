@@ -14,6 +14,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "span.h"
+
 /**
  * secp256k1:
  * const unsigned int PRIVATE_KEY_SIZE = 279;
@@ -30,6 +32,12 @@
  * bytes)
  */
 typedef std::vector<uint8_t, secure_allocator<uint8_t>> CPrivKey;
+
+/** Size of ECDH shared secrets. */
+constexpr static size_t ECDH_SECRET_SIZE = CSHA256::OUTPUT_SIZE;
+
+// Used to represent ECDH shared secret (ECDH_SECRET_SIZE bytes)
+using ECDHSecret = std::array<std::byte, ECDH_SECRET_SIZE>;
 
 /** An encapsulated private key. */
 class CKey {
@@ -48,6 +56,11 @@ private:
 
     //! Check whether the 32-byte array pointed to be vch is valid keydata.
     static bool Check(const uint8_t *vch);
+
+    void ClearKeyData()
+    {
+        keydata.resize(32);
+    }
 
 public:
     //! Construct an invalid private key.
@@ -80,8 +93,9 @@ public:
 
     //! Simple read-only vector-like interface.
     unsigned int size() const { return (fValid ? keydata.size() : 0); }
-    const uint8_t *begin() const { return keydata.data(); }
-    const uint8_t *end() const { return keydata.data() + size(); }
+    const std::byte* data() const { return fValid ? reinterpret_cast<const std::byte*>(keydata.data()) : nullptr; }
+    const unsigned char *begin() const { return keydata.data(); }
+    const unsigned char *end() const { return keydata.data() + size(); }
 
     //! Check whether this private key is valid.
     bool IsValid() const { return fValid; }
@@ -126,6 +140,18 @@ public:
      */
     bool SignCompact(const uint256 &hash, std::vector<uint8_t> &vchSig) const;
 
+    /**
+     * Create a BIP-340 Schnorr signature, for the xonly-pubkey corresponding to *this,
+     * optionally tweaked by *merkle_root. Additional nonce entropy can be provided through
+     * aux.
+     *
+     * When merkle_root is not nullptr, this results in a signature with a modified key as
+     * specified in BIP341:
+     * - If merkle_root->IsNull(): key + H_TapTweak(pubkey)*G
+     * - Otherwise:                key + H_TapTweak(pubkey || *merkle_root)
+     */
+    bool SignSchnorr(const uint256& hash, bsv::span<unsigned char> sig, const uint256* merkle_root = nullptr, const uint256* aux = nullptr) const;
+
     //! Derive BIP32 child key.
     bool Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
                 const ChainCode &cc) const;
@@ -138,7 +164,54 @@ public:
 
     //! Load private key and check that public key matches.
     bool Load(CPrivKey &privkey, CPubKey &vchPubKey, bool fSkipCheck);
+
+    /** Create an ellswift-encoded public key for this key, with specified entropy.
+     *
+     *  entropy must be a 32-byte span with additional entropy to use in the encoding. Every
+     *  public key has ~2^256 different encodings, and this function will deterministically pick
+     *  one of them, based on entropy. Note that even without truly random entropy, the
+     *  resulting encoding will be indistinguishable from uniform to any adversary who does not
+     *  know the private key (because the private key itself is always used as entropy as well).
+     */
+    EllSwiftPubKey EllSwiftCreate(bsv::span<const std::byte> entropy) const;
+
+    /** Compute a BIP324-style ECDH shared secret.
+     *
+     *  - their_ellswift: EllSwiftPubKey that was received from the other side.
+     *  - our_ellswift: EllSwiftPubKey that was sent to the other side (must have been generated
+     *                  from *this using EllSwiftCreate()).
+     *  - initiating: whether we are the initiating party (true) or responding party (false).
+     */
+    ECDHSecret ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift,
+                                       const EllSwiftPubKey& our_ellswift,
+                                       bool initiating) const;
+
+    /** Straight-forward serialization of key bytes (and compressed flag).
+     *  Use GetPrivKey() for OpenSSL compatible DER encoding.
+     */
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        if (!IsValid()) {
+            throw std::ios_base::failure("invalid key");
+        }
+        s << fCompressed;
+        ::Serialize(s, bsv::span{*this});
+    }
+
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        s >> fCompressed;
+        s >> bsv::span{keydata};
+        if (!Check(keydata.data())) {
+            ClearKeyData();
+            throw std::ios_base::failure("invalid key");
+        }
+    }
 };
+
+CKey GenerateRandomKey(bool compressed = true) noexcept;
 
 struct CExtKey {
     uint8_t nDepth;

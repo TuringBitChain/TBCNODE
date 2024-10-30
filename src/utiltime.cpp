@@ -20,6 +20,17 @@ namespace
     std::atomic_int64_t nMockTime = 0;
 }
 
+NodeClock::time_point NodeClock::now() noexcept
+{
+    const std::chrono::seconds mocktime{nMockTime.load(std::memory_order_relaxed)};
+    const auto ret{
+        mocktime.count() ?
+            mocktime :
+            std::chrono::system_clock::now().time_since_epoch()};
+    assert(std::chrono::duration_cast<std::chrono::seconds>(ret) >= std::chrono::seconds(0));
+    return time_point{ret};
+};
+
 int64_t GetTime() {
     if (nMockTime) return nMockTime;
 

@@ -23,6 +23,29 @@
 #include <utility>
 #include <vector>
 
+#include "util/overflow.h"
+
+namespace util {
+inline void Xor(bsv::span<std::byte> write, bsv::span<const std::byte> key, size_t key_offset = 0)
+{
+    if (key.size() == 0) {
+        return;
+    }
+    key_offset %= key.size();
+
+    for (size_t i = 0, j = key_offset; i != write.size(); i++) {
+        write[i] ^= key[j++];
+
+        // This potentially acts on very many bytes of data, so it's
+        // important that we calculate `j`, i.e. the `key` index in this
+        // way instead of doing a %, which would effectively be a division
+        // for each byte Xor'd -- much slower than need be.
+        if (j == key.size())
+            j = 0;
+    }
+}
+} // namespace util
+
 template <typename Stream> class OverrideStream {
     Stream *stream;
 
@@ -47,7 +70,9 @@ public:
 
     void write(const char *pch, size_t nSize) { stream->write(pch, nSize); }
 
-    void read(char *pch, size_t nSize) { stream->read(pch, nSize); }
+    void read(bsv::span<std::byte> span) {
+        stream->read(reinterpret_cast<char*>(span.data()), span.size());
+    }
 
     int GetVersion() const { return nVersion; }
     int GetType() const { return nType; }
@@ -102,6 +127,18 @@ public:
         }
         nPos += nSize;
     }
+    void write(bsv::span<const std::byte> src)
+    {
+        assert(nPos <= vchData.size());
+        size_t nOverwrite = std::min(src.size(), vchData.size() - nPos);
+        if (nOverwrite) {
+            memcpy(vchData.data() + nPos, src.data(), nOverwrite);
+        }
+        if (nOverwrite < src.size()) {
+            vchData.insert(vchData.end(), bsv::UCharCast(src.data()) + nOverwrite, bsv::UCharCast(src.end()));
+        }
+        nPos += src.size();
+    }
     template <typename T> CVectorWriter &operator<<(const T &obj) {
         // Serialize to this stream
         ::Serialize(*this, obj);
@@ -118,6 +155,56 @@ private:
     const int nType;
     const int nVersion;
     std::vector<uint8_t> &vchData;
+    size_t nPos;
+};
+
+/* Minimal stream for overwriting and/or appending to an existing byte vector
+ *
+ * The referenced vector will grow as necessary
+ */
+class VectorWriter
+{
+public:
+/*
+ * @param[in]  vchDataIn  Referenced byte vector to overwrite/append
+ * @param[in]  nPosIn Starting position. Vector index where writes should start. The vector will initially
+ *                    grow as necessary to max(nPosIn, vec.size()). So to append, use vec.size().
+*/
+    VectorWriter(std::vector<unsigned char>& vchDataIn, size_t nPosIn) : vchData{vchDataIn}, nPos{nPosIn}
+    {
+        if(nPos > vchData.size())
+            vchData.resize(nPos);
+    }
+/*
+ * (other params same as above)
+ * @param[in]  args  A list of items to serialize starting at nPosIn.
+*/
+    template <typename... Args>
+    VectorWriter(std::vector<unsigned char>& vchDataIn, size_t nPosIn, Args&&... args) : VectorWriter{vchDataIn, nPosIn}
+    {
+        ::SerializeMany(*this, std::forward<Args>(args)...);
+    }
+    void write(bsv::span<const std::byte> src)
+    {
+        assert(nPos <= vchData.size());
+        size_t nOverwrite = std::min(src.size(), vchData.size() - nPos);
+        if (nOverwrite) {
+            memcpy(vchData.data() + nPos, src.data(), nOverwrite);
+        }
+        if (nOverwrite < src.size()) {
+            vchData.insert(vchData.end(), bsv::UCharCast(src.data()) + nOverwrite, bsv::UCharCast(src.end()));
+        }
+        nPos += src.size();
+    }
+    template <typename T>
+    VectorWriter& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return (*this);
+    }
+
+private:
+    std::vector<unsigned char>& vchData;
     size_t nPos;
 };
 
@@ -339,6 +426,25 @@ public:
         nReadPos = nReadPosNext;
     }
 
+    void read(bsv::span<std::byte> dst)
+    {
+        if (dst.size() == 0) return;
+
+        // Read from the beginning of the buffer
+        unsigned int nReadPosNext = nReadPos + dst.size();
+        if (nReadPosNext > vch.size()) {
+            throw std::ios_base::failure("CDataStream::read(): end of data");
+        }
+        memcpy(dst.data(), &vch[nReadPos], dst.size());
+        if (nReadPosNext == vch.size())
+        {
+            nReadPos = 0;
+            vch.clear();
+            return;
+        }
+        nReadPos = nReadPosNext;
+    }
+
     void ignore(int nSize) {
         // Ignore from the beginning of the buffer
         if (nSize < 0) {
@@ -360,6 +466,10 @@ public:
     void write(const char *pch, size_t nSize) {
         // Write to the end of the buffer
         vch.insert(vch.end(), pch, pch + nSize);
+    }
+
+    void write(bsv::span<const std::byte> span){
+        vch.insert(vch.end(), (const char *)span.data(), (const char *)(span.data()+span.size()));
     }
 
     template <typename Stream> void Serialize(Stream &s) const {
@@ -403,6 +513,225 @@ public:
             // each byte Xor'd -- much slower than need be.
             if (j == key.size()) j = 0;
         }
+    }
+};
+
+/** Double ended buffer combining vector and stream-like interfaces.
+ *
+ * >> and << read and write unformatted data using the above serialization templates.
+ * Fills with data in linear time; some stringstream implementations take N^2 time.
+ */
+class DataStream
+{
+protected:
+    using vector_type = SerializeData;
+    vector_type vch;
+    vector_type::size_type m_read_pos{0};
+
+public:
+    typedef vector_type::allocator_type   allocator_type;
+    typedef vector_type::size_type        size_type;
+    typedef vector_type::difference_type  difference_type;
+    typedef vector_type::reference        reference;
+    typedef vector_type::const_reference  const_reference;
+    typedef vector_type::value_type       value_type;
+    typedef vector_type::iterator         iterator;
+    typedef vector_type::const_iterator   const_iterator;
+    typedef vector_type::reverse_iterator reverse_iterator;
+
+    explicit DataStream() {}
+    explicit DataStream(bsv::span<const uint8_t> sp) : DataStream{bsv::AsBytes(sp)} {}
+    explicit DataStream(bsv::span<const value_type> sp) : vch(sp.data(), sp.data() + sp.size()) {}
+
+    std::string str() const
+    {
+        return std::string{bsv::UCharCast(data()), bsv::UCharCast(data() + size())};
+    }
+
+
+    //
+    // Vector subset
+    //
+    const_iterator begin() const                     { return vch.begin() + m_read_pos; }
+    iterator begin()                                 { return vch.begin() + m_read_pos; }
+    const_iterator end() const                       { return vch.end(); }
+    iterator end()                                   { return vch.end(); }
+    size_type size() const                           { return vch.size() - m_read_pos; }
+    bool empty() const                               { return vch.size() == m_read_pos; }
+    void resize(size_type n, value_type c = value_type{}) { vch.resize(n + m_read_pos, c); }
+    void reserve(size_type n)                        { vch.reserve(n + m_read_pos); }
+    const_reference operator[](size_type pos) const  { return vch[pos + m_read_pos]; }
+    reference operator[](size_type pos)              { return vch[pos + m_read_pos]; }
+    void clear()                                     { vch.clear(); m_read_pos = 0; }
+    value_type* data()                               { return vch.data() + m_read_pos; }
+    const value_type* data() const                   { return vch.data() + m_read_pos; }
+
+    inline void Compact()
+    {
+        vch.erase(vch.begin(), vch.begin() + m_read_pos);
+        m_read_pos = 0;
+    }
+
+    bool Rewind(std::optional<size_type> n = std::nullopt)
+    {
+        // Total rewind if no size is passed
+        if (!n) {
+            m_read_pos = 0;
+            return true;
+        }
+        // Rewind by n characters if the buffer hasn't been compacted yet
+        if (*n > m_read_pos)
+            return false;
+        m_read_pos -= *n;
+        return true;
+    }
+
+
+    //
+    // Stream subset
+    //
+    bool eof() const             { return size() == 0; }
+    int in_avail() const         { return size(); }
+
+    void read(bsv::span<value_type> dst)
+    {
+        if (dst.size() == 0) return;
+
+        // Read from the beginning of the buffer
+        auto next_read_pos{CheckedAdd(m_read_pos, dst.size())};
+        if (!next_read_pos.has_value() || next_read_pos.value() > vch.size()) {
+            throw std::ios_base::failure("DataStream::read(): end of data");
+        }
+        memcpy(dst.data(), &vch[m_read_pos], dst.size());
+        if (next_read_pos.value() == vch.size()) {
+            m_read_pos = 0;
+            vch.clear();
+            return;
+        }
+        m_read_pos = next_read_pos.value();
+    }
+
+    void ignore(size_t num_ignore)
+    {
+        // Ignore from the beginning of the buffer
+        auto next_read_pos{CheckedAdd(m_read_pos, num_ignore)};
+        if (!next_read_pos.has_value() || next_read_pos.value() > vch.size()) {
+            throw std::ios_base::failure("DataStream::ignore(): end of data");
+        }
+        if (next_read_pos.value() == vch.size()) {
+            m_read_pos = 0;
+            vch.clear();
+            return;
+        }
+        m_read_pos = next_read_pos.value();
+    }
+
+    void write(bsv::span<const value_type> src)
+    {
+        // Write to the end of the buffer
+        vch.insert(vch.end(), src.begin(), src.end());
+    }
+
+    template<typename T>
+    DataStream& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return (*this);
+    }
+
+    template<typename T>
+    DataStream& operator>>(T&& obj)
+    {
+        ::Unserialize(*this, obj);
+        return (*this);
+    }
+
+    /**
+     * XOR the contents of this stream with a certain key.
+     *
+     * @param[in] key    The key used to XOR the data in this stream.
+     */
+    void Xor(const std::vector<unsigned char>& key)
+    {
+        util::Xor(bsv::MakeWritableByteSpan(*this), bsv::MakeByteSpan(key));
+    }
+};
+
+/** Non-refcounted RAII wrapper for FILE*
+ *
+ * Will automatically close the file when it goes out of scope if not null.
+ * If you're returning the file pointer, return file.release().
+ * If you need to close the file early, use file.fclose() instead of fclose(file).
+ */
+class AutoFile
+{
+protected:
+    std::FILE* m_file;
+    std::vector<std::byte> m_xor;
+
+public:
+    explicit AutoFile(std::FILE* file, std::vector<std::byte> data_xor={}) : m_file{file}, m_xor{std::move(data_xor)} {}
+
+    ~AutoFile() { fclose(); }
+
+    // Disallow copies
+    AutoFile(const AutoFile&) = delete;
+    AutoFile& operator=(const AutoFile&) = delete;
+
+    bool feof() const { return std::feof(m_file); }
+
+    int fclose()
+    {
+        if (auto rel{release()}) return std::fclose(rel);
+        return 0;
+    }
+
+    /** Get wrapped FILE* with transfer of ownership.
+     * @note This will invalidate the AutoFile object, and makes it the responsibility of the caller
+     * of this function to clean up the returned FILE*.
+     */
+    std::FILE* release()
+    {
+        std::FILE* ret{m_file};
+        m_file = nullptr;
+        return ret;
+    }
+
+    /** Get wrapped FILE* without transfer of ownership.
+     * @note Ownership of the FILE* will remain with this class. Use this only if the scope of the
+     * AutoFile outlives use of the passed pointer.
+     */
+    std::FILE* Get() const { return m_file; }
+
+    /** Return true if the wrapped FILE* is nullptr, false otherwise.
+     */
+    bool IsNull() const { return m_file == nullptr; }
+
+    /** Continue with a different XOR key */
+    void SetXor(std::vector<std::byte> data_xor) { m_xor = data_xor; }
+
+    /** Implementation detail, only used internally. */
+    std::size_t detail_fread(bsv::span<std::byte> dst);
+
+    //
+    // Stream subset
+    //
+    void read(bsv::span<std::byte> dst);
+    void ignore(size_t nSize);
+    void write(bsv::span<const std::byte> src);
+
+    template <typename T>
+    AutoFile& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return *this;
+    }
+
+    template <typename T>
+    AutoFile& operator>>(T&& obj)
+    {
+        ::Unserialize(*this, obj);
+        return *this;
     }
 };
 
@@ -477,6 +806,15 @@ public:
                                              : "CAutoFile::read: fread failed");
     }
 
+    void read(bsv::span<std::byte> dst)
+    {
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::read: file handle is nullptr");
+        if (fread(dst.data(), 1, dst.size(), file) != dst.size()) {
+            throw std::ios_base::failure(feof(file) ? "CAutoFile::read: end of file" : "CAutoFile::read: fread failed");
+        }
+    }
+
     void ignore(size_t nSize) {
         if (!file)
             throw std::ios_base::failure(
@@ -498,6 +836,15 @@ public:
                 "CAutoFile::write: file handle is nullptr");
         if (fwrite(pch, 1, nSize, file) != nSize)
             throw std::ios_base::failure("CAutoFile::write: write failed");
+    }
+
+    void write(bsv::span<const std::byte> src)
+    {
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::write: file handle is nullptr");
+        if (fwrite(src.data(), 1, src.size(), file) != src.size()) {
+            throw std::ios_base::failure("CAutoFile::write: write failed");
+        }
     }
 
     template <typename T> CAutoFile &operator<<(const T &obj) {
@@ -605,6 +952,26 @@ public:
             nReadPos += nNow;
             pch += nNow;
             nSize -= nNow;
+        }
+    }
+
+    void read(bsv::span<std::byte> dst)
+    {
+        if (dst.size() + nReadPos > nReadLimit) {
+            throw std::ios_base::failure("Read attempted past buffer limit");
+        }
+        while (dst.size() > 0) {
+            if (nReadPos == nSrcPos)
+                Fill();
+            unsigned int pos = nReadPos % vchBuf.size();
+            size_t nNow = dst.size();
+            if (nNow + pos > vchBuf.size())
+                nNow = vchBuf.size() - pos;
+            if (nNow + nReadPos > nSrcPos)
+                nNow = nSrcPos - nReadPos;
+            memcpy(dst.data(), &vchBuf[pos], nNow);
+            nReadPos += nNow;
+            dst = dst.subspan(nNow);
         }
     }
 

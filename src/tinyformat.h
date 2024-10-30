@@ -164,6 +164,14 @@ namespace tfm = tinyformat;
 
 namespace tinyformat {
 
+// Added for Bitcoin Core
+class format_error: public std::runtime_error
+{
+public:
+    explicit format_error(const std::string &what): std::runtime_error(what) {
+    }
+};
+
 //------------------------------------------------------------------------------
 namespace detail {
 

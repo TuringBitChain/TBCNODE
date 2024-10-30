@@ -312,4 +312,61 @@ static int secp256k1_fe_is_quad_var(const secp256k1_fe *a) {
 #endif
 }
 
+#ifndef VERIFY
+static void secp256k1_fe_verify(const secp256k1_fe *a) { (void)a; }
+static void secp256k1_fe_verify_magnitude(const secp256k1_fe *a, int m) { (void)a; (void)m; }
+#else
+static void secp256k1_fe_verify_magnitude(const secp256k1_fe *a, int m) {
+    VERIFY_CHECK(m >= 0);
+    VERIFY_CHECK(m <= 32);
+    VERIFY_CHECK(a->magnitude <= m);
+}
+
+static void secp256k1_fe_impl_add_int(secp256k1_fe *r, int a);
+SECP256K1_INLINE static void secp256k1_fe_add_int(secp256k1_fe *r, int a) {
+    VERIFY_CHECK(0 <= a && a <= 0x7FFF);
+    SECP256K1_FE_VERIFY(r);
+
+    secp256k1_fe_impl_add_int(r, a);
+    r->magnitude += 1;
+    r->normalized = 0;
+
+    SECP256K1_FE_VERIFY(r);
+}
+
+static int secp256k1_fe_impl_is_square_var(const secp256k1_fe *x);
+SECP256K1_INLINE static int secp256k1_fe_is_square_var(const secp256k1_fe *x) {
+    int ret;
+    secp256k1_fe tmp = *x, sqrt;
+    SECP256K1_FE_VERIFY(x);
+
+    ret = secp256k1_fe_impl_is_square_var(x);
+    secp256k1_fe_normalize_weak(&tmp);
+    VERIFY_CHECK(ret == secp256k1_fe_sqrt(&sqrt, &tmp));
+    return ret;
+}
+
+static void secp256k1_fe_impl_half(secp256k1_fe *r);
+SECP256K1_INLINE static void secp256k1_fe_half(secp256k1_fe *r) {
+    SECP256K1_FE_VERIFY(r);
+    SECP256K1_FE_VERIFY_MAGNITUDE(r, 31);
+
+    secp256k1_fe_impl_half(r);
+    r->magnitude = (r->magnitude >> 1) + 1;
+    r->normalized = 0;
+
+    SECP256K1_FE_VERIFY(r);
+}
+
+static void secp256k1_fe_impl_set_b32_mod(secp256k1_fe *r, const unsigned char *a);
+SECP256K1_INLINE static void secp256k1_fe_set_b32_mod(secp256k1_fe *r, const unsigned char *a) {
+    secp256k1_fe_impl_set_b32_mod(r, a);
+    r->magnitude = 1;
+    r->normalized = 0;
+
+    SECP256K1_FE_VERIFY(r);
+}
+
+#endif /* defined(VERIFY) */
+
 #endif /* SECP256K1_FIELD_IMPL_H */

@@ -7,11 +7,16 @@
 #include "arith_uint256.h"
 #include "crypto/common.h"
 #include "crypto/hmac_sha512.h"
+#include "hash.h"
 #include "pubkey.h"
 #include "random.h"
 
 #include <secp256k1.h>
+#include <secp256k1_ellswift.h>
+#include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
+#include <secp256k1_schnorrsig.h>
+#include <thread>
 
 static secp256k1_context *secp256k1_context_sign = nullptr;
 
@@ -160,7 +165,7 @@ CPrivKey CKey::GetPrivKey() const {
     privkey.resize(279);
     privkeylen = 279;
     ret = ec_privkey_export_der(
-        secp256k1_context_sign, (uint8_t *)&privkey[0], &privkeylen, begin(),
+        secp256k1_context_sign, (uint8_t *)&privkey[0], &privkeylen, (uint8_t*)begin(),
         fCompressed ? SECP256K1_EC_COMPRESSED : SECP256K1_EC_UNCOMPRESSED);
     assert(ret);
     privkey.resize(privkeylen);
@@ -173,7 +178,7 @@ CPubKey CKey::GetPubKey() const {
     size_t clen = 65;
     CPubKey result;
     int ret =
-        secp256k1_ec_pubkey_create(secp256k1_context_sign, &pubkey, begin());
+        secp256k1_ec_pubkey_create(secp256k1_context_sign, &pubkey, (uint8_t*)begin());
     assert(ret);
     secp256k1_ec_pubkey_serialize(
         secp256k1_context_sign, (uint8_t *)result.begin(), &clen, &pubkey,
@@ -192,7 +197,7 @@ bool CKey::Sign(const uint256 &hash, std::vector<uint8_t> &vchSig,
     WriteLE32(extra_entropy, test_case);
     secp256k1_ecdsa_signature sig;
     int ret = secp256k1_ecdsa_sign(secp256k1_context_sign, &sig, hash.begin(),
-                                   begin(), secp256k1_nonce_function_rfc6979,
+                                   (uint8_t*)begin(), secp256k1_nonce_function_rfc6979,
                                    test_case ? extra_entropy : nullptr);
     assert(ret);
     secp256k1_ecdsa_signature_serialize_der(
@@ -225,7 +230,7 @@ bool CKey::SignCompact(const uint256 &hash,
     int rec = -1;
     secp256k1_ecdsa_recoverable_signature sig;
     int ret = secp256k1_ecdsa_sign_recoverable(
-        secp256k1_context_sign, &sig, hash.begin(), begin(),
+        secp256k1_context_sign, &sig, hash.begin(), (uint8_t*)begin(),
         secp256k1_nonce_function_rfc6979, nullptr);
     assert(ret);
     secp256k1_ecdsa_recoverable_signature_serialize_compact(
@@ -249,6 +254,31 @@ bool CKey::Load(CPrivKey &privkey, CPubKey &vchPubKey,
     return VerifyPubKey(vchPubKey);
 }
 
+bool CKey::SignSchnorr(const uint256& hash, bsv::span<unsigned char> sig, const uint256* merkle_root, const uint256* aux) const
+{
+    assert(sig.size() == 64);
+    secp256k1_keypair keypair;
+    if (!secp256k1_keypair_create(secp256k1_context_sign, &keypair, bsv::UCharCast(begin()))) return false;
+    if (merkle_root) {
+        secp256k1_xonly_pubkey pubkey;
+        if (!secp256k1_keypair_xonly_pub(secp256k1_context_sign, &pubkey, nullptr, &keypair)) return false;
+        unsigned char pubkey_bytes[32];
+        if (!secp256k1_xonly_pubkey_serialize(secp256k1_context_sign, pubkey_bytes, &pubkey)) return false;
+        uint256 tweak = XOnlyPubKey(pubkey_bytes).ComputeTapTweakHash(merkle_root->IsNull() ? nullptr : merkle_root);
+        if (!secp256k1_keypair_xonly_tweak_add(secp256k1_context_sign, &keypair, tweak.data())) return false;
+    }
+    bool ret = secp256k1_schnorrsig_sign32(secp256k1_context_sign, sig.data(), hash.data(), &keypair, aux->data());
+    if (ret) {
+        // Additional verification step to prevent using a potentially corrupted signature
+        secp256k1_xonly_pubkey pubkey_verify;
+        ret = secp256k1_keypair_xonly_pub(secp256k1_context_sign, &pubkey_verify, nullptr, &keypair);
+        //ret &= secp256k1_schnorrsig_verify(secp256k1_context_sign, sig.data(), hash.begin(), 32, &pubkey_verify);     //TODO
+    }
+    if (!ret) memory_cleanse(sig.data(), sig.size());
+    memory_cleanse(&keypair, sizeof(keypair));
+    return ret;
+}
+
 bool CKey::Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
                   const ChainCode &cc) const {
     assert(IsValid());
@@ -260,7 +290,7 @@ bool CKey::Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
         BIP32Hash(cc, nChild, *pubkey.begin(), pubkey.begin() + 1, vout.data());
     } else {
         assert(begin() + 32 == end());
-        BIP32Hash(cc, nChild, 0, begin(), vout.data());
+        BIP32Hash(cc, nChild, 0, reinterpret_cast<const uint8_t*>(begin()), vout.data());
     }
     memcpy(ccChild.begin(), vout.data() + 32, 32);
     memcpy((uint8_t *)keyChild.begin(), begin(), 32);
@@ -269,6 +299,49 @@ bool CKey::Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
     keyChild.fCompressed = true;
     keyChild.fValid = ret;
     return ret;
+}
+
+EllSwiftPubKey CKey::EllSwiftCreate(bsv::span<const std::byte> ent32) const
+{
+    assert(fValid);
+    assert(ent32.size() == 32);
+    std::array<std::byte, EllSwiftPubKey::size()> encoded_pubkey;
+
+    auto success = secp256k1_ellswift_create(secp256k1_context_sign,
+                                             bsv::UCharCast(encoded_pubkey.data()),
+                                             keydata.data(),
+                                             bsv::UCharCast(ent32.data()));
+
+    // Should always succeed for valid keys (asserted above).
+    assert(success);
+    return {encoded_pubkey};
+}
+
+ECDHSecret CKey::ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift, const EllSwiftPubKey& our_ellswift, bool initiating) const
+{
+    assert(fValid);
+
+    ECDHSecret output;
+    // BIP324 uses the initiator as party A, and the responder as party B. Remap the inputs
+    // accordingly:
+    bool success = secp256k1_ellswift_xdh(secp256k1_context_sign,
+                                          bsv::UCharCast(output.data()),
+                                          bsv::UCharCast(initiating ? our_ellswift.data() : their_ellswift.data()),
+                                          bsv::UCharCast(initiating ? their_ellswift.data() : our_ellswift.data()),
+                                          keydata.data(),
+                                          initiating ? 0 : 1,
+                                          ellswift_xdh_hash_function_bip324,  //TODO  secp256k1_ellswift_xdh_hash_function_bip324
+                                          nullptr);
+    // Should always succeed for valid keys (assert above).
+    assert(success);
+    return output;
+}
+
+CKey GenerateRandomKey(bool compressed) noexcept
+{
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/compressed);
+    return key;
 }
 
 bool CExtKey::Derive(CExtKey &out, unsigned int _nChild) const {

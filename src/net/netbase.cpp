@@ -648,6 +648,58 @@ bool LookupSubNet(const char *pszName, CSubNet &ret) {
     return false;
 }
 
+std::unique_ptr<Sock> CreateSockTCP(const CService& address_family)
+{
+    // Create a sockaddr from the specified service.
+    struct sockaddr_storage sockaddr;
+    socklen_t len = sizeof(sockaddr);
+    if (!address_family.GetSockAddr((struct sockaddr*)&sockaddr, &len)) {
+        LogPrintf("Cannot create socket for %s: unsupported network\n", address_family.ToStringIPPort());
+        return nullptr;
+    }
+
+    // Create a TCP socket in the address family of the specified service.
+    SOCKET hSocket = socket(((struct sockaddr*)&sockaddr)->sa_family, SOCK_STREAM, IPPROTO_TCP);
+    if (hSocket == INVALID_SOCKET) {
+        return nullptr;
+    }
+
+    auto sock = std::make_unique<Sock>(hSocket);
+
+    // Ensure that waiting for I/O on this socket won't result in undefined
+    // behavior.
+    if (!sock->IsSelectable()) {
+        LogPrintf("Cannot create connection: non-selectable socket created (fd >= FD_SETSIZE ?)\n");
+        return nullptr;
+    }
+
+#ifdef SO_NOSIGPIPE
+    int set = 1;
+    // Set the no-sigpipe option on the socket for BSD systems, other UNIXes
+    // should use the MSG_NOSIGNAL flag for every send.
+    if (sock->SetSockOpt(SOL_SOCKET, SO_NOSIGPIPE, (void*)&set, sizeof(int)) == SOCKET_ERROR) {
+        LogPrintf("Error setting SO_NOSIGPIPE on socket: %s, continuing anyway\n",
+                  NetworkErrorString(WSAGetLastError()));
+    }
+#endif
+
+    // Set the no-delay option (disable Nagle's algorithm) on the TCP socket.
+    const int on{1};
+    if (sock->SetSockOpt(IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on)) == SOCKET_ERROR) {
+        LogPrint(BCLog::NET, "Unable to set TCP_NODELAY on a newly created socket, continuing anyway\n");
+    }
+
+    // Set the non-blocking option on the socket.
+    if (!sock->SetNonBlocking()) {
+        LogPrintf("Error setting socket to non-blocking: %s\n", NetworkErrorString(WSAGetLastError()));
+        return nullptr;
+    }
+    return sock;
+}
+
+std::function<std::unique_ptr<Sock>(const CService&)> CreateSock = CreateSockTCP;
+
+
 #ifdef WIN32
 std::string NetworkErrorString(int err) {
     char buf[256];

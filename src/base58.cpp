@@ -134,6 +134,14 @@ std::string EncodeBase58Check(const std::vector<uint8_t> &vchIn) {
     return EncodeBase58(vch);
 }
 
+std::string EncodeBase58Check(bsv::span<const unsigned char> input) {
+    // add 4-byte hash check to the end
+    std::vector<unsigned char> vch(input.begin(), input.end());
+    uint256 hash = Hash(vch);
+    vch.insert(vch.end(), (unsigned char*)&hash, (unsigned char*)&hash + 4);
+    return EncodeBase58(vch);
+}
+
 bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet) {
     if (!DecodeBase58(psz, vchRet) || (vchRet.size() < 4)) {
         vchRet.clear();

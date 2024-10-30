@@ -272,7 +272,7 @@ static UniValue getmininginfo(const Config &config,
     return obj;
 }
 
-// NOTE: Unlike wallet RPC (which use BSV values), mining RPCs follow GBT (BIP
+// NOTE: Unlike wallet RPC (which use TBC values), mining RPCs follow GBT (BIP
 // 22) in using satoshi amounts
 static UniValue prioritisetransaction(const Config &config,
                                       const JSONRPCRequest &request) {
@@ -534,7 +534,7 @@ static UniValue getblocktemplate(const Config &config,
         // Wait to respond until either the best block changes, OR a minute has
         // passed and there are more transactions
         uint256 hashWatchedChain;
-        boost::system_time checktxtime;
+        std::chrono::steady_clock::time_point checktxtime;
         unsigned int nTransactionsUpdatedLastLP;
 
         if (lpval.isStr()) {
@@ -553,19 +553,18 @@ static UniValue getblocktemplate(const Config &config,
         // Release the wallet and main lock while waiting
         LEAVE_CRITICAL_SECTION(cs_main);
         {
-            checktxtime =
-                boost::get_system_time() + boost::posix_time::minutes(1);
+            checktxtime = std::chrono::steady_clock::now() + std::chrono::minutes(1);
 
-            boost::unique_lock<boost::mutex> lock(csBestBlock);
+            WAIT_LOCKMt(g_best_block_mutex, lock);
             while (chainActive.Tip()->GetBlockHash() == hashWatchedChain &&
                    IsRPCRunning()) {
-                if (!cvBlockChange.timed_wait(lock, checktxtime)) {
+                if (g_best_block_cv.wait_until(lock, checktxtime) == std::cv_status::timeout) {
                     // Timeout: Check transactions for update
                     if (mempool.GetTransactionsUpdated() !=
                         nTransactionsUpdatedLastLP) {
                         break;
                     }
-                    checktxtime += boost::posix_time::seconds(10);
+                    checktxtime += std::chrono::seconds(10);
                 }
             }
         }

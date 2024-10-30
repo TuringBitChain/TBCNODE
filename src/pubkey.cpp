@@ -5,7 +5,12 @@
 #include "pubkey.h"
 
 #include <secp256k1.h>
+#include <secp256k1_ellswift.h>
 #include <secp256k1_recovery.h>
+#include <secp256k1_extrakeys.h>
+#include <secp256k1_schnorrsig.h>
+
+#include "hash.h"
 
 namespace {
 /* Global secp256k1_context object used for verification. */
@@ -261,6 +266,108 @@ bool CPubKey::Derive(CPubKey &pubkeyChild, ChainCode &ccChild,
                                   &pubkey, SECP256K1_EC_COMPRESSED);
     pubkeyChild.Set(pub, pub + publen);
     return true;
+}
+
+XOnlyPubKey::XOnlyPubKey(bsv::span<const unsigned char> bytes)
+{
+    assert(bytes.size() == 32);
+    std::copy(bytes.begin(), bytes.end(), m_keydata.begin());
+}
+
+std::vector<CKeyID> XOnlyPubKey::GetKeyIDs() const
+{
+    std::vector<CKeyID> out;
+    // For now, use the old full pubkey-based key derivation logic. As it is indexed by
+    // Hash160(full pubkey), we need to return both a version prefixed with 0x02, and one
+    // with 0x03.
+    unsigned char b[33] = {0x02};
+    std::copy(m_keydata.begin(), m_keydata.end(), b + 1);
+    CPubKey fullpubkey;
+    fullpubkey.Set(b, b + 33);
+    out.push_back(fullpubkey.GetID());
+    b[0] = 0x03;
+    fullpubkey.Set(b, b + 33);
+    out.push_back(fullpubkey.GetID());
+    return out;
+}
+
+CPubKey XOnlyPubKey::GetEvenCorrespondingCPubKey() const
+{
+    unsigned char full_key[CPubKey::COMPRESSED_SIZE] = {0x02};
+    std::copy(begin(), end(), full_key + 1);
+    return CPubKey{full_key};
+}
+
+bool XOnlyPubKey::IsFullyValid() const
+{
+    secp256k1_xonly_pubkey pubkey;
+    return secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &pubkey, m_keydata.data());
+}
+
+bool XOnlyPubKey::VerifySchnorr(const uint256& msg, bsv::span<const unsigned char> sigbytes) const
+{
+    assert(sigbytes.size() == 64);
+    secp256k1_xonly_pubkey pubkey;
+    if (!secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &pubkey, m_keydata.data())) return false;
+    return secp256k1_schnorrsig_verify(secp256k1_context_verify, sigbytes.data(), msg.begin(), 32, &pubkey);
+}
+
+static const HashWriter HASHER_TAPTWEAK = TaggedHash("TapTweak");
+
+uint256 XOnlyPubKey::ComputeTapTweakHash(const uint256* merkle_root) const
+{
+    if (merkle_root == nullptr) {
+        // We have no scripts. The actual tweak does not matter, but follow BIP341 here to
+        // allow for reproducible tweaking.
+        return (HashWriter{HASHER_TAPTWEAK} << m_keydata).GetSHA256();
+    } else {
+        return (HashWriter{HASHER_TAPTWEAK} << m_keydata << *merkle_root).GetSHA256();
+    }
+}
+
+bool XOnlyPubKey::CheckTapTweak(const XOnlyPubKey& internal, const uint256& merkle_root, bool parity) const
+{
+    secp256k1_xonly_pubkey internal_key;
+    if (!secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &internal_key, internal.data())) return false;
+    uint256 tweak = internal.ComputeTapTweakHash(&merkle_root);
+    return secp256k1_xonly_pubkey_tweak_add_check(secp256k1_context_verify, m_keydata.begin(), parity, &internal_key, tweak.begin());
+}
+
+std::optional<std::pair<XOnlyPubKey, bool>> XOnlyPubKey::CreateTapTweak(const uint256* merkle_root) const
+{
+    secp256k1_xonly_pubkey base_point;
+    if (!secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &base_point, data())) return std::nullopt;
+    secp256k1_pubkey out;
+    uint256 tweak = ComputeTapTweakHash(merkle_root);
+    if (!secp256k1_xonly_pubkey_tweak_add(secp256k1_context_verify, &out, &base_point, tweak.data())) return std::nullopt;
+    int parity = -1;
+    std::pair<XOnlyPubKey, bool> ret;
+    secp256k1_xonly_pubkey out_xonly;
+    if (!secp256k1_xonly_pubkey_from_pubkey(secp256k1_context_verify, &out_xonly, &parity, &out)) return std::nullopt;
+    secp256k1_xonly_pubkey_serialize(secp256k1_context_verify, ret.first.begin(), &out_xonly);
+    assert(parity == 0 || parity == 1);
+    ret.second = parity;
+    return ret;
+}
+
+EllSwiftPubKey::EllSwiftPubKey(bsv::span<const std::byte> ellswift) noexcept
+{
+    assert(ellswift.size() == SIZE);
+    std::copy(ellswift.begin(), ellswift.end(), m_pubkey.begin());
+}
+
+CPubKey EllSwiftPubKey::Decode() const
+{
+    secp256k1_pubkey pubkey;
+    secp256k1_ellswift_decode(secp256k1_context_verify, &pubkey, bsv::UCharCast(m_pubkey.data()));
+
+    size_t sz = CPubKey::COMPRESSED_SIZE;
+    std::array<uint8_t, CPubKey::COMPRESSED_SIZE> vch_bytes;
+
+    secp256k1_ec_pubkey_serialize(secp256k1_context_verify, vch_bytes.data(), &sz, &pubkey, SECP256K1_EC_COMPRESSED);
+    assert(sz == vch_bytes.size());
+
+    return CPubKey{vch_bytes.begin(), vch_bytes.end()};
 }
 
 void CExtPubKey::Encode(uint8_t code[BIP32_EXTKEY_SIZE]) const {

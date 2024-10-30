@@ -10,6 +10,14 @@
 #include "num.h"
 #include "field.h"
 
+/** Maximum allowed magnitudes for group element coordinates
+ *  in affine (x, y) and jacobian (x, y, z) representation. */
+#define SECP256K1_GE_X_MAGNITUDE_MAX  4
+#define SECP256K1_GE_Y_MAGNITUDE_MAX  3
+#define SECP256K1_GEJ_X_MAGNITUDE_MAX 4
+#define SECP256K1_GEJ_Y_MAGNITUDE_MAX 4
+#define SECP256K1_GEJ_Z_MAGNITUDE_MAX 1
+
 /** A group element of the secp256k1 curve, in affine coordinates. */
 typedef struct {
     secp256k1_fe x;
@@ -140,5 +148,26 @@ static void secp256k1_ge_storage_cmov(secp256k1_ge_storage *r, const secp256k1_g
 
 /** Rescale a jacobian point by b which must be non-zero. Constant-time. */
 static void secp256k1_gej_rescale(secp256k1_gej *r, const secp256k1_fe *b);
+
+/** Determine if a point (which is assumed to be on the curve) is in the correct (sub)group of the curve.
+ *
+ * In normal mode, the used group is secp256k1, which has cofactor=1 meaning that every point on the curve is in the
+ * group, and this function returns always true.
+ *
+ * When compiling in exhaustive test mode, a slightly different curve equation is used, leading to a group with a
+ * (very) small subgroup, and that subgroup is what is used for all cryptographic operations. In that mode, this
+ * function checks whether a point that is on the curve is in fact also in that subgroup.
+ */
+static int secp256k1_ge_is_in_correct_subgroup(const secp256k1_ge* ge);
+
+/** Check invariants on an affine group element (no-op unless VERIFY is enabled). */
+static void secp256k1_ge_verify(const secp256k1_ge *a);
+#define SECP256K1_GE_VERIFY(a) secp256k1_ge_verify(a)
+
+/** Determine whether x is a valid X coordinate on the curve. */
+static int secp256k1_ge_x_on_curve_var(const secp256k1_fe *x);
+
+/** Determine whether fraction xn/xd is a valid X coordinate on the curve (xd != 0). */
+static int secp256k1_ge_x_frac_on_curve_var(const secp256k1_fe *xn, const secp256k1_fe *xd);
 
 #endif /* SECP256K1_GROUP_H */

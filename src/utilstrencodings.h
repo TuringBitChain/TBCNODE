@@ -14,6 +14,8 @@
 #include <vector>
 #include "rpc/text_writer.h"
 
+#include "span.h"
+
 #define BEGIN(a) ((char *)&(a))
 #define END(a) ((char *)&((&(a))[1]))
 #define UBEGIN(a) ((uint8_t *)&(a))
@@ -61,7 +63,8 @@ std::string DecodeBase32(const std::string &str);
 std::string EncodeBase32(const uint8_t *pch, size_t len);
 std::string EncodeBase32(const std::string &str);
 
-void SplitHostPort(std::string in, int &portOut, std::string &hostOut);
+bool SplitHostPort(std::string in, int &portOut, std::string &hostOut);
+bool SplitHostPort(std::string in, uint16_t &portOut, std::string &hostOut);
 std::string i64tostr(int64_t n);
 std::string itostr(int n);
 int64_t atoi64(const char *psz);
@@ -105,6 +108,13 @@ bool ParseUInt64(const std::string &str, uint64_t *out);
  */
 bool ParseDouble(const std::string &str, double *out);
 
+/**
+ * Convert decimal string to unsigned 16-bit integer with strict parse error feedback.
+ * @returns true if the entire string could be parsed as valid integer,
+ *   false if the entire string could not be parsed or if overflow or underflow occurred.
+ */
+[[nodiscard]] bool ParseUInt16(std::string_view str, uint16_t* out);
+
 template <typename T>
 void HexStr(const T itbegin, const T itend, CTextWriter& writer, bool fSpaces = false)
 {
@@ -146,6 +156,10 @@ inline void HexStr(const T& vch, CTextWriter& writer, bool fSpaces = false)
 {
     HexStr(vch.begin(), vch.end(), writer, fSpaces);
 }
+
+std::string HexStr(const bsv::span<const uint8_t> s);
+inline std::string HexStr(const bsv::span<const char> s) { return HexStr(bsv::MakeUCharSpan(s)); }
+inline std::string HexStr(const bsv::span<const std::byte> s) { return HexStr(bsv::MakeUCharSpan(s)); }
 
 /**
  * Format a paragraph of text to a fixed width, adding spaces for indentation to

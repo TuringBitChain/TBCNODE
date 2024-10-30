@@ -31,6 +31,12 @@ private:
 public:
     static const size_t OUTPUT_SIZE = CSHA256::OUTPUT_SIZE;
 
+    void Finalize(bsv::span<unsigned char> output) {
+        assert(output.size() == OUTPUT_SIZE);
+        unsigned char buf[CSHA256::OUTPUT_SIZE];
+        sha.Finalize(buf);
+        sha.Reset().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(output.data());
+    }
     void Finalize(uint8_t hash[OUTPUT_SIZE]) {
         uint8_t buf[CSHA256::OUTPUT_SIZE];
         sha.Finalize(buf);
@@ -78,6 +84,16 @@ public:
         return *this;
     }
 };
+
+/** Compute the 256-bit hash of an object. */
+template<typename T>
+inline uint256 Hash(const T& in1)
+{
+    uint256 result;
+    auto tmpSpan = bsv::MakeUCharSpan(in1);
+    CHash256().Write(tmpSpan.data(),tmpSpan.size()).Finalize(result);
+    return result;
+}
 
 /** Compute the 256-bit hash of an object. */
 template <typename T1> inline uint256 Hash(const T1 pbegin, const T1 pend) {
@@ -163,6 +179,10 @@ public:
         ctx.Write((const uint8_t *)pch, size);
     }
 
+    void write(bsv::span<const std::byte> Span) {
+        ctx.Write((const uint8_t *)Span.data(), Span.size());
+    }
+
     // invalidates the object
     uint256 GetHash() {
         uint256 result;
@@ -184,6 +204,56 @@ public:
 };
 
 
+/** A writer stream (for serialization) that computes a 256-bit hash. */
+class HashWriter
+{
+private:
+    CSHA256 ctx;
+
+public:
+    void write(bsv::span<const std::byte> src)
+    {
+        ctx.Write(bsv::UCharCast(src.data()), src.size());
+    }
+
+    /** Compute the double-SHA256 hash of all data written to this object.
+     *
+     * Invalidates this object.
+     */
+    uint256 GetHash() {
+        uint256 result;
+        ctx.Finalize(result.begin());
+        ctx.Reset().Write(result.begin(), CSHA256::OUTPUT_SIZE).Finalize(result.begin());
+        return result;
+    }
+
+    /** Compute the SHA256 hash of all data written to this object.
+     *
+     * Invalidates this object.
+     */
+    uint256 GetSHA256() {
+        uint256 result;
+        ctx.Finalize(result.begin());
+        return result;
+    }
+
+    /**
+     * Returns the first 64 bits from the resulting hash.
+     */
+    inline uint64_t GetCheapHash() {
+        uint256 result = GetHash();
+        return ReadLE64(result.begin());
+    }
+
+    template <typename T>
+    HashWriter& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return *this;
+    }
+};
+
+
 /**
  * Reads data from an underlying stream, while hashing the read data.
  */
@@ -199,6 +269,12 @@ public:
     void read(char *pch, size_t nSize) {
         source->read(pch, nSize);
         this->write(pch, nSize);
+    }
+
+    void read(bsv::span<std::byte> dst)
+    {
+        source->read(dst);
+        this->write(dst);
     }
 
     void ignore(size_t nSize) {
@@ -356,5 +432,14 @@ public:
 uint64_t SipHashUint256(uint64_t k0, uint64_t k1, const uint256 &val);
 uint64_t SipHashUint256Extra(uint64_t k0, uint64_t k1, const uint256 &val,
                              uint32_t extra);
+
+
+/** Return a HashWriter primed for tagged hashes (as specified in BIP 340).
+ *
+ * The returned object will have SHA256(tag) written to it twice (= 64 bytes).
+ * A tagged hash can be computed by feeding the message into this object, and
+ * then calling HashWriter::GetSHA256().
+ */
+HashWriter TaggedHash(const std::string& tag);
 
 #endif // BITCOIN_HASH_H

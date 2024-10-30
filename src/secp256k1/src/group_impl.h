@@ -71,6 +71,15 @@ static const secp256k1_ge secp256k1_ge_const_g = SECP256K1_GE_CONST(
 const int CURVE_B = 7;
 #endif
 
+static void secp256k1_ge_verify(const secp256k1_ge *a) {
+    SECP256K1_FE_VERIFY(&a->x);
+    SECP256K1_FE_VERIFY(&a->y);
+    SECP256K1_FE_VERIFY_MAGNITUDE(&a->x, SECP256K1_GE_X_MAGNITUDE_MAX);
+    SECP256K1_FE_VERIFY_MAGNITUDE(&a->y, SECP256K1_GE_Y_MAGNITUDE_MAX);
+    VERIFY_CHECK(a->infinity == 0 || a->infinity == 1);
+    (void)a;
+}
+
 static void secp256k1_ge_set_gej_zinv(secp256k1_ge *r, const secp256k1_gej *a, const secp256k1_fe *zi) {
     secp256k1_fe zi2;
     secp256k1_fe zi3;
@@ -695,6 +704,57 @@ static int secp256k1_gej_has_quad_y_var(const secp256k1_gej *a) {
        is */
     secp256k1_fe_mul(&yz, &a->y, &a->z);
     return secp256k1_fe_is_quad_var(&yz);
+}
+
+static int secp256k1_ge_is_in_correct_subgroup(const secp256k1_ge* ge) {
+#ifdef EXHAUSTIVE_TEST_ORDER
+    secp256k1_gej out;
+    int i;
+    SECP256K1_GE_VERIFY(ge);
+
+    /* A very simple EC multiplication ladder that avoids a dependency on ecmult. */
+    secp256k1_gej_set_infinity(&out);
+    for (i = 0; i < 32; ++i) {
+        secp256k1_gej_double_var(&out, &out, NULL);
+        if ((((uint32_t)EXHAUSTIVE_TEST_ORDER) >> (31 - i)) & 1) {
+            secp256k1_gej_add_ge_var(&out, &out, ge, NULL);
+        }
+    }
+    return secp256k1_gej_is_infinity(&out);
+#else
+    SECP256K1_GE_VERIFY(ge);
+
+    (void)ge;
+    /* The real secp256k1 group has cofactor 1, so the subgroup is the entire curve. */
+    return 1;
+#endif
+}
+
+static int secp256k1_ge_x_on_curve_var(const secp256k1_fe *x) {
+    secp256k1_fe c;
+    secp256k1_fe_sqr(&c, x);
+    secp256k1_fe_mul(&c, &c, x);
+    secp256k1_fe_add_int(&c, CURVE_B);
+    return secp256k1_fe_is_square_var(&c);
+}
+
+static int secp256k1_ge_x_frac_on_curve_var(const secp256k1_fe *xn, const secp256k1_fe *xd) {
+    /* We want to determine whether (xn/xd) is on the curve.
+     *
+     * (xn/xd)^3 + 7 is square <=> xd*xn^3 + 7*xd^4 is square (multiplying by xd^4, a square).
+     */
+     secp256k1_fe r, t;
+     VERIFY_CHECK(!secp256k1_fe_normalizes_to_zero_var(xd));
+
+     secp256k1_fe_mul(&r, xd, xn); /* r = xd*xn */
+     secp256k1_fe_sqr(&t, xn); /* t = xn^2 */
+     secp256k1_fe_mul(&r, &r, &t); /* r = xd*xn^3 */
+     secp256k1_fe_sqr(&t, xd); /* t = xd^2 */
+     secp256k1_fe_sqr(&t, &t); /* t = xd^4 */
+     VERIFY_CHECK(CURVE_B <= 31);
+     secp256k1_fe_mul_int(&t, CURVE_B); /* t = 7*xd^4 */
+     secp256k1_fe_add(&r, &t); /* r = xd*xn^3 + 7*xd^4 */
+     return secp256k1_fe_is_square_var(&r);
 }
 
 #endif /* SECP256K1_GROUP_IMPL_H */

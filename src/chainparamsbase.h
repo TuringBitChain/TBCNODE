@@ -22,14 +22,16 @@ public:
     static const std::string REGTEST;
     static const std::string STN;
 
-    CBaseChainParams(int port, const std::string& data_dir);
+    CBaseChainParams(int port, int sv2_port, const std::string& data_dir);
 
-    const std::string& DataDir() const { return strDataDir; }
-    int RPCPort() const { return nRPCPort; }
+    const std::string& DataDir() const { return m_strDataDir; }
+    int RPCPort() const { return m_RPCPort; }
+    int Sv2Port() const { return m_sv2Port; }
 
 private:
-    int nRPCPort;
-    std::string strDataDir;
+    int m_RPCPort;
+    int m_sv2Port;
+    std::string m_strDataDir;
 };
 
 /**
