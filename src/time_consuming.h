@@ -35,3 +35,18 @@ class TimeConsuming
         TimePoint                   start;
         Milliseconds                timePeriod;
 };
+
+constexpr int64_t count_seconds(std::chrono::seconds t) { return t.count(); }
+constexpr int64_t count_milliseconds(std::chrono::milliseconds t) { return t.count(); }
+constexpr int64_t count_microseconds(std::chrono::microseconds t) { return t.count(); }
+
+
+/**
+ * Convert milliseconds to a struct timeval for e.g. select.
+ */
+struct timeval MillisToTimeval(int64_t nTimeout);
+
+/**
+ * Convert milliseconds to a struct timeval for e.g. select.
+ */
+struct timeval MillisToTimeval(std::chrono::milliseconds ms);

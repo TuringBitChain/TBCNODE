@@ -137,6 +137,7 @@ BITCOIN_CORE_H = \
   mining/journal_entry.h \
   mining/journaling_block_assembler.h \
   mining/legacy.h \
+  mining/mining.h \
   net/association.h \
   net/net.h \
   net/netaddress.h \
@@ -209,6 +210,8 @@ BITCOIN_CORE_H = \
   util.h \
   utilmoneystr.h \
   utiltime.h \
+  util/sock.h \
+  util/syserror.h \
   validation.h \
   validationinterface.h \
   versionbits.h \
@@ -225,7 +228,13 @@ BITCOIN_CORE_H = \
   zmq/zmqabstractnotifier.h \
   zmq/zmqconfig.h\
   zmq/zmqnotificationinterface.h \
-  zmq/zmqpublishnotifier.h
+  zmq/zmqpublishnotifier.h\
+  stratumv2/sv2_messages.h\
+  stratumv2/sv2_connman.h\
+  stratumv2/sv2_noise.h\
+  stratumv2/sv2_transport.h\
+  stratumv2/bip324.h\
+  sv2_template_provider.h
 
 
 obj/build.h: FORCE
@@ -296,6 +305,13 @@ libbitcoin_server_a_SOURCES = \
   validation.cpp \
   validationinterface.cpp \
   vmtouch.cpp \
+  stratumv2/sv2_messages.cpp\
+  stratumv2/sv2_connman.cpp\
+  stratumv2/sv2_noise.cpp\
+  stratumv2/sv2_transport.cpp\
+  stratumv2/bip324.cpp\
+  sv2_template_provider.cpp\
+  streams.cpp\
   $(BITCOIN_CORE_H)
 
 if ENABLE_ZMQ
@@ -341,7 +357,11 @@ crypto_libbitcoin_crypto_a_SOURCES = \
   crypto/sha256.cpp \
   crypto/sha256.h \
   crypto/sha512.cpp \
-  crypto/sha512.h
+  crypto/sha512.h\
+  crypto/chacha20poly1305.cpp \
+  crypto/chacha20poly1305.h \
+  crypto/poly1305.cpp \
+  crypto/poly1305.h 
 
 if USE_ASM
 crypto_libbitcoin_crypto_a_SOURCES += crypto/sha256_sse4.cpp
@@ -447,6 +467,8 @@ libbitcoin_util_a_SOURCES = \
   utilmoneystr.cpp \
   utilstrencodings.cpp \
   utiltime.cpp \
+  util/sock.cpp \
+  util/syserror.cpp \
   $(BITCOIN_CORE_H)
 
 if GLIBC_BACK_COMPAT

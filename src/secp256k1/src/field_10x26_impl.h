@@ -10,6 +10,7 @@
 #include "util.h"
 #include "num.h"
 #include "field.h"
+#include "modinv32.h"
 
 #ifdef VERIFY
 static void secp256k1_fe_verify(const secp256k1_fe *a) {
@@ -182,7 +183,7 @@ static void secp256k1_fe_normalize_var(secp256k1_fe *r) {
 #endif
 }
 
-static int secp256k1_fe_normalizes_to_zero(secp256k1_fe *r) {
+static int secp256k1_fe_normalizes_to_zero(const secp256k1_fe *r) {
     uint32_t t0 = r->n[0], t1 = r->n[1], t2 = r->n[2], t3 = r->n[3], t4 = r->n[4],
              t5 = r->n[5], t6 = r->n[6], t7 = r->n[7], t8 = r->n[8], t9 = r->n[9];
 
@@ -211,7 +212,7 @@ static int secp256k1_fe_normalizes_to_zero(secp256k1_fe *r) {
     return (z0 == 0) | (z1 == 0x3FFFFFFUL);
 }
 
-static int secp256k1_fe_normalizes_to_zero_var(secp256k1_fe *r) {
+static int secp256k1_fe_normalizes_to_zero_var(const secp256k1_fe *r) {
     uint32_t t0, t1, t2, t3, t4, t5, t6, t7, t8, t9;
     uint32_t z0, z1;
     uint32_t x;
@@ -318,6 +319,19 @@ static int secp256k1_fe_cmp_var(const secp256k1_fe *a, const secp256k1_fe *b) {
         }
     }
     return 0;
+}
+
+static void secp256k1_fe_impl_set_b32_mod(secp256k1_fe *r, const unsigned char *a) {
+    r->n[0] = (uint32_t)a[31] | ((uint32_t)a[30] << 8) | ((uint32_t)a[29] << 16) | ((uint32_t)(a[28] & 0x3) << 24);
+    r->n[1] = (uint32_t)((a[28] >> 2) & 0x3f) | ((uint32_t)a[27] << 6) | ((uint32_t)a[26] << 14) | ((uint32_t)(a[25] & 0xf) << 22);
+    r->n[2] = (uint32_t)((a[25] >> 4) & 0xf) | ((uint32_t)a[24] << 4) | ((uint32_t)a[23] << 12) | ((uint32_t)(a[22] & 0x3f) << 20);
+    r->n[3] = (uint32_t)((a[22] >> 6) & 0x3) | ((uint32_t)a[21] << 2) | ((uint32_t)a[20] << 10) | ((uint32_t)a[19] << 18);
+    r->n[4] = (uint32_t)a[18] | ((uint32_t)a[17] << 8) | ((uint32_t)a[16] << 16) | ((uint32_t)(a[15] & 0x3) << 24);
+    r->n[5] = (uint32_t)((a[15] >> 2) & 0x3f) | ((uint32_t)a[14] << 6) | ((uint32_t)a[13] << 14) | ((uint32_t)(a[12] & 0xf) << 22);
+    r->n[6] = (uint32_t)((a[12] >> 4) & 0xf) | ((uint32_t)a[11] << 4) | ((uint32_t)a[10] << 12) | ((uint32_t)(a[9] & 0x3f) << 20);
+    r->n[7] = (uint32_t)((a[9] >> 6) & 0x3) | ((uint32_t)a[8] << 2) | ((uint32_t)a[7] << 10) | ((uint32_t)a[6] << 18);
+    r->n[8] = (uint32_t)a[5] | ((uint32_t)a[4] << 8) | ((uint32_t)a[3] << 16) | ((uint32_t)(a[2] & 0x3) << 24);
+    r->n[9] = (uint32_t)((a[2] >> 2) & 0x3f) | ((uint32_t)a[1] << 6) | ((uint32_t)a[0] << 14);
 }
 
 static int secp256k1_fe_set_b32(secp256k1_fe *r, const unsigned char *a) {
@@ -442,6 +456,10 @@ SECP256K1_INLINE static void secp256k1_fe_add(secp256k1_fe *r, const secp256k1_f
     r->normalized = 0;
     secp256k1_fe_verify(r);
 #endif
+}
+
+SECP256K1_INLINE static void secp256k1_fe_impl_add_int(secp256k1_fe *r, int a) {
+    r->n[0] += a;
 }
 
 #if defined(USE_EXTERNAL_ASM)
@@ -1156,6 +1174,116 @@ static SECP256K1_INLINE void secp256k1_fe_from_storage(secp256k1_fe *r, const se
     r->magnitude = 1;
     r->normalized = 1;
 #endif
+}
+
+static void secp256k1_fe_to_signed30(secp256k1_modinv32_signed30 *r, const secp256k1_fe *a) {
+    const uint32_t M30 = UINT32_MAX >> 2;
+    const uint64_t a0 = a->n[0], a1 = a->n[1], a2 = a->n[2], a3 = a->n[3], a4 = a->n[4],
+                   a5 = a->n[5], a6 = a->n[6], a7 = a->n[7], a8 = a->n[8], a9 = a->n[9];
+
+    r->v[0] = (a0       | a1 << 26) & M30;
+    r->v[1] = (a1 >>  4 | a2 << 22) & M30;
+    r->v[2] = (a2 >>  8 | a3 << 18) & M30;
+    r->v[3] = (a3 >> 12 | a4 << 14) & M30;
+    r->v[4] = (a4 >> 16 | a5 << 10) & M30;
+    r->v[5] = (a5 >> 20 | a6 <<  6) & M30;
+    r->v[6] = (a6 >> 24 | a7 <<  2
+                        | a8 << 28) & M30;
+    r->v[7] = (a8 >>  2 | a9 << 24) & M30;
+    r->v[8] =  a9 >>  6;
+}
+
+static const secp256k1_modinv32_modinfo secp256k1_const_modinfo_fe = {
+    {{-0x3D1, -4, 0, 0, 0, 0, 0, 0, 65536}},
+    0x2DDACACFL
+};
+
+static int secp256k1_fe_impl_is_square_var(const secp256k1_fe *x) {
+    secp256k1_fe tmp;
+    secp256k1_modinv32_signed30 s;
+    int jac, ret;
+
+    tmp = *x;
+    secp256k1_fe_normalize_var(&tmp);
+    /* secp256k1_jacobi32_maybe_var cannot deal with input 0. */
+    if (secp256k1_fe_is_zero(&tmp)) return 1;
+    secp256k1_fe_to_signed30(&s, &tmp);
+    jac = secp256k1_jacobi32_maybe_var(&s, &secp256k1_const_modinfo_fe);
+    if (jac == 0) {
+        /* secp256k1_jacobi32_maybe_var failed to compute the Jacobi symbol. Fall back
+         * to computing a square root. This should be extremely rare with random
+         * input (except in VERIFY mode, where a lower iteration count is used). */
+        secp256k1_fe dummy;
+        ret = secp256k1_fe_sqrt(&dummy, &tmp);
+    } else {
+        ret = jac >= 0;
+    }
+    return ret;
+}
+
+static SECP256K1_INLINE void secp256k1_fe_impl_half(secp256k1_fe *r) {
+    uint32_t t0 = r->n[0], t1 = r->n[1], t2 = r->n[2], t3 = r->n[3], t4 = r->n[4],
+             t5 = r->n[5], t6 = r->n[6], t7 = r->n[7], t8 = r->n[8], t9 = r->n[9];
+    uint32_t one = (uint32_t)1;
+    uint32_t mask = -(t0 & one) >> 6;
+
+    /* Bounds analysis (over the rationals).
+     *
+     * Let m = r->magnitude
+     *     C = 0x3FFFFFFUL * 2
+     *     D = 0x03FFFFFUL * 2
+     *
+     * Initial bounds: t0..t8 <= C * m
+     *                     t9 <= D * m
+     */
+
+    t0 += 0x3FFFC2FUL & mask;
+    t1 += 0x3FFFFBFUL & mask;
+    t2 += mask;
+    t3 += mask;
+    t4 += mask;
+    t5 += mask;
+    t6 += mask;
+    t7 += mask;
+    t8 += mask;
+    t9 += mask >> 4;
+
+    VERIFY_CHECK((t0 & one) == 0);
+
+    /* t0..t8: added <= C/2
+     *     t9: added <= D/2
+     *
+     * Current bounds: t0..t8 <= C * (m + 1/2)
+     *                     t9 <= D * (m + 1/2)
+     */
+
+    r->n[0] = (t0 >> 1) + ((t1 & one) << 25);
+    r->n[1] = (t1 >> 1) + ((t2 & one) << 25);
+    r->n[2] = (t2 >> 1) + ((t3 & one) << 25);
+    r->n[3] = (t3 >> 1) + ((t4 & one) << 25);
+    r->n[4] = (t4 >> 1) + ((t5 & one) << 25);
+    r->n[5] = (t5 >> 1) + ((t6 & one) << 25);
+    r->n[6] = (t6 >> 1) + ((t7 & one) << 25);
+    r->n[7] = (t7 >> 1) + ((t8 & one) << 25);
+    r->n[8] = (t8 >> 1) + ((t9 & one) << 25);
+    r->n[9] = (t9 >> 1);
+
+    /* t0..t8: shifted right and added <= C/4 + 1/2
+     *     t9: shifted right
+     *
+     * Current bounds: t0..t8 <= C * (m/2 + 1/2)
+     *                     t9 <= D * (m/2 + 1/4)
+     *
+     * Therefore the output magnitude (M) has to be set such that:
+     *     t0..t8: C * M >= C * (m/2 + 1/2)
+     *         t9: D * M >= D * (m/2 + 1/4)
+     *
+     * It suffices for all limbs that, for any input magnitude m:
+     *     M >= m/2 + 1/2
+     *
+     * and since we want the smallest such integer value for M:
+     *     M == floor(m/2) + 1
+     */
 }
 
 #endif /* SECP256K1_FIELD_REPR_IMPL_H */

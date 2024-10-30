@@ -37,6 +37,14 @@ void RandAddSeedSleep();
 void GetStrongRandBytes(uint8_t *buf, int num);
 
 /**
+ * Gathers entropy from the low bits of the time at which events occur. Should
+ * be called with a uint32_t describing the event at the time an event occurs.
+ *
+ * Thread-safe.
+ */
+void RandAddEvent(const uint32_t event_info);
+
+/**
  * Fast randomness source. This is seeded once with secure random data, but is
  * completely deterministic and insecure after that.
  * This class is not thread-safe.
@@ -114,6 +122,9 @@ public:
 
     /** Generate random bytes. */
     std::vector<uint8_t> randbytes(size_t len);
+
+    /** Fill a byte Span with random bytes. */
+    void fillrand(bsv::span<std::byte> output);
 
     /** Generate a random 32-bit integer. */
     uint32_t rand32() { return randbits(32); }

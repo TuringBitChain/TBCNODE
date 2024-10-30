@@ -13,6 +13,8 @@
 #endif
 #include "util.h"             // for LogPrint()
 #include "utilstrencodings.h" // for GetTime()
+#include "sync.h"
+#include "crypto/sha256.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -46,6 +48,11 @@
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
+
+// We use only SHA256 for the events hashing to get the ASM speedups we have for SHA256,
+// since we want it to be fast as network peers may be able to trigger it repeatedly.
+static Mutex    events_mutex;
+static CSHA256  events_hasher;
 
 [[noreturn]] static void RandFailure() {
     LogPrintf("Failed to read randomness, aborting\n");
@@ -353,6 +360,15 @@ void GetStrongRandBytes(uint8_t *out, int num) {
     memory_cleanse(buf, 64);
 }
 
+void RandAddEvent(const uint32_t event_info) {
+    LOCKMt(events_mutex);
+    events_hasher.Write((const unsigned char *)&event_info, sizeof(event_info));
+    // Get the low four bytes of the performance counter. This translates to roughly the
+    // subsecond part.
+    uint32_t perfcounter = (GetPerformanceCounter() & 0xffffffff);
+    events_hasher.Write((const unsigned char*)&perfcounter, sizeof(perfcounter));
+}
+
 uint64_t GetRand(uint64_t nMax) {
     if (nMax == 0) {
         return 0;
@@ -400,6 +416,11 @@ std::vector<uint8_t> FastRandomContext::randbytes(size_t len) {
         rng.Output(&ret[0], len);
     }
     return ret;
+}
+
+void FastRandomContext::fillrand(bsv::span<std::byte> output) {
+    if (requires_seed) RandomSeed();
+    rng.Keystream(output);
 }
 
 FastRandomContext::FastRandomContext(const uint256 &seed)

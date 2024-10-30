@@ -181,6 +181,13 @@ public:
 
     // Remove an arg setting, used only in testing
     void ClearArg(const std::string &strArg);
+
+    /**
+     * Get data directory path with appended network identifier
+     *
+     * @return Absolute path on success, otherwise an empty path when a non-directory path would be returned
+     */
+    fs::path GetDataDirNet() const { return GetDataDir(true); }
 };
 
 extern ArgsManager gArgs;

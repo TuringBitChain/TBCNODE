@@ -14,6 +14,7 @@
 #include "util.h"
 #include "num.h"
 #include "field.h"
+#include "modinv64_impl.h"
 
 #if defined(USE_ASM_X86_64)
 #include "field_5x52_asm_impl.h"
@@ -162,7 +163,7 @@ static void secp256k1_fe_normalize_var(secp256k1_fe *r) {
 #endif
 }
 
-static int secp256k1_fe_normalizes_to_zero(secp256k1_fe *r) {
+static int secp256k1_fe_normalizes_to_zero(const secp256k1_fe *r) {
     uint64_t t0 = r->n[0], t1 = r->n[1], t2 = r->n[2], t3 = r->n[3], t4 = r->n[4];
 
     /* z0 tracks a possible raw value of 0, z1 tracks a possible raw value of P */
@@ -185,7 +186,7 @@ static int secp256k1_fe_normalizes_to_zero(secp256k1_fe *r) {
     return (z0 == 0) | (z1 == 0xFFFFFFFFFFFFFULL);
 }
 
-static int secp256k1_fe_normalizes_to_zero_var(secp256k1_fe *r) {
+static int secp256k1_fe_normalizes_to_zero_var(const secp256k1_fe *r) {
     uint64_t t0, t1, t2, t3, t4;
     uint64_t z0, z1;
     uint64_t x;
@@ -224,6 +225,10 @@ static int secp256k1_fe_normalizes_to_zero_var(secp256k1_fe *r) {
     VERIFY_CHECK(t4 >> 49 == 0);
 
     return (z0 == 0) | (z1 == 0xFFFFFFFFFFFFFULL);
+}
+
+SECP256K1_INLINE static void secp256k1_fe_impl_add_int(secp256k1_fe *r, int a) {
+    r->n[0] += a;
 }
 
 SECP256K1_INLINE static void secp256k1_fe_set_int(secp256k1_fe *r, int a) {
@@ -281,6 +286,43 @@ static int secp256k1_fe_cmp_var(const secp256k1_fe *a, const secp256k1_fe *b) {
         }
     }
     return 0;
+}
+
+static void secp256k1_fe_impl_set_b32_mod(secp256k1_fe *r, const unsigned char *a) {
+    r->n[0] = (uint64_t)a[31]
+            | ((uint64_t)a[30] << 8)
+            | ((uint64_t)a[29] << 16)
+            | ((uint64_t)a[28] << 24)
+            | ((uint64_t)a[27] << 32)
+            | ((uint64_t)a[26] << 40)
+            | ((uint64_t)(a[25] & 0xF)  << 48);
+    r->n[1] = (uint64_t)((a[25] >> 4) & 0xF)
+            | ((uint64_t)a[24] << 4)
+            | ((uint64_t)a[23] << 12)
+            | ((uint64_t)a[22] << 20)
+            | ((uint64_t)a[21] << 28)
+            | ((uint64_t)a[20] << 36)
+            | ((uint64_t)a[19] << 44);
+    r->n[2] = (uint64_t)a[18]
+            | ((uint64_t)a[17] << 8)
+            | ((uint64_t)a[16] << 16)
+            | ((uint64_t)a[15] << 24)
+            | ((uint64_t)a[14] << 32)
+            | ((uint64_t)a[13] << 40)
+            | ((uint64_t)(a[12] & 0xF) << 48);
+    r->n[3] = (uint64_t)((a[12] >> 4) & 0xF)
+            | ((uint64_t)a[11] << 4)
+            | ((uint64_t)a[10] << 12)
+            | ((uint64_t)a[9]  << 20)
+            | ((uint64_t)a[8]  << 28)
+            | ((uint64_t)a[7]  << 36)
+            | ((uint64_t)a[6]  << 44);
+    r->n[4] = (uint64_t)a[5]
+            | ((uint64_t)a[4] << 8)
+            | ((uint64_t)a[3] << 16)
+            | ((uint64_t)a[2] << 24)
+            | ((uint64_t)a[1] << 32)
+            | ((uint64_t)a[0] << 40);
 }
 
 static int secp256k1_fe_set_b32(secp256k1_fe *r, const unsigned char *a) {
@@ -491,6 +533,99 @@ static SECP256K1_INLINE void secp256k1_fe_from_storage(secp256k1_fe *r, const se
     r->magnitude = 1;
     r->normalized = 1;
 #endif
+}
+
+static void secp256k1_fe_to_signed62(secp256k1_modinv64_signed62 *r, const secp256k1_fe *a) {
+    const uint64_t M62 = UINT64_MAX >> 2;
+    const uint64_t a0 = a->n[0], a1 = a->n[1], a2 = a->n[2], a3 = a->n[3], a4 = a->n[4];
+
+    r->v[0] = (a0       | a1 << 52) & M62;
+    r->v[1] = (a1 >> 10 | a2 << 42) & M62;
+    r->v[2] = (a2 >> 20 | a3 << 32) & M62;
+    r->v[3] = (a3 >> 30 | a4 << 22) & M62;
+    r->v[4] =  a4 >> 40;
+}
+
+static const secp256k1_modinv64_modinfo secp256k1_const_modinfo_fe = {
+    {{-0x1000003D1LL, 0, 0, 0, 256}},
+    0x27C7F6E22DDACACFLL
+};
+
+static int secp256k1_fe_impl_is_square_var(const secp256k1_fe *x) {
+    secp256k1_fe tmp;
+    secp256k1_modinv64_signed62 s;
+    int jac, ret;
+
+    tmp = *x;
+    secp256k1_fe_normalize_var(&tmp);
+    /* secp256k1_jacobi64_maybe_var cannot deal with input 0. */
+    if (secp256k1_fe_is_zero(&tmp)) return 1;
+    secp256k1_fe_to_signed62(&s, &tmp);
+    jac = secp256k1_jacobi64_maybe_var(&s, &secp256k1_const_modinfo_fe);
+    if (jac == 0) {
+        /* secp256k1_jacobi64_maybe_var failed to compute the Jacobi symbol. Fall back
+         * to computing a square root. This should be extremely rare with random
+         * input (except in VERIFY mode, where a lower iteration count is used). */
+        secp256k1_fe dummy;
+        ret = secp256k1_fe_sqrt(&dummy, &tmp);
+    } else {
+        ret = jac >= 0;
+    }
+    return ret;
+}
+
+static SECP256K1_INLINE void secp256k1_fe_impl_half(secp256k1_fe *r) {
+    uint64_t t0 = r->n[0], t1 = r->n[1], t2 = r->n[2], t3 = r->n[3], t4 = r->n[4];
+    uint64_t one = (uint64_t)1;
+    uint64_t mask = -(t0 & one) >> 12;
+
+    /* Bounds analysis (over the rationals).
+     *
+     * Let m = r->magnitude
+     *     C = 0xFFFFFFFFFFFFFULL * 2
+     *     D = 0x0FFFFFFFFFFFFULL * 2
+     *
+     * Initial bounds: t0..t3 <= C * m
+     *                     t4 <= D * m
+     */
+
+    t0 += 0xFFFFEFFFFFC2FULL & mask;
+    t1 += mask;
+    t2 += mask;
+    t3 += mask;
+    t4 += mask >> 4;
+
+    VERIFY_CHECK((t0 & one) == 0);
+
+    /* t0..t3: added <= C/2
+     *     t4: added <= D/2
+     *
+     * Current bounds: t0..t3 <= C * (m + 1/2)
+     *                     t4 <= D * (m + 1/2)
+     */
+
+    r->n[0] = (t0 >> 1) + ((t1 & one) << 51);
+    r->n[1] = (t1 >> 1) + ((t2 & one) << 51);
+    r->n[2] = (t2 >> 1) + ((t3 & one) << 51);
+    r->n[3] = (t3 >> 1) + ((t4 & one) << 51);
+    r->n[4] = (t4 >> 1);
+
+    /* t0..t3: shifted right and added <= C/4 + 1/2
+     *     t4: shifted right
+     *
+     * Current bounds: t0..t3 <= C * (m/2 + 1/2)
+     *                     t4 <= D * (m/2 + 1/4)
+     *
+     * Therefore the output magnitude (M) has to be set such that:
+     *     t0..t3: C * M >= C * (m/2 + 1/2)
+     *         t4: D * M >= D * (m/2 + 1/4)
+     *
+     * It suffices for all limbs that, for any input magnitude m:
+     *     M >= m/2 + 1/2
+     *
+     * and since we want the smallest such integer value for M:
+     *     M == floor(m/2) + 1
+     */
 }
 
 #endif /* SECP256K1_FIELD_REPR_IMPL_H */

@@ -12,19 +12,19 @@
 
 template <unsigned int BITS>
 base_blob<BITS>::base_blob(const std::vector<uint8_t> &vch) {
-    assert(vch.size() == sizeof(data));
-    memcpy(data, &vch[0], sizeof(data));
+    assert(vch.size() == sizeof(m_data));
+    memcpy(m_data, &vch[0], sizeof(m_data));
 }
 
 template <unsigned int BITS> std::string base_blob<BITS>::GetHex() const {
-    char psz[sizeof(data) * 2 + 1];
-    for (unsigned int i = 0; i < sizeof(data); i++)
-        sprintf(psz + i * 2, "%02x", data[sizeof(data) - i - 1]);
-    return std::string(psz, psz + sizeof(data) * 2);
+    char psz[sizeof(m_data) * 2 + 1];
+    for (unsigned int i = 0; i < sizeof(m_data); i++)
+        sprintf(psz + i * 2, "%02x", m_data[sizeof(m_data) - i - 1]);
+    return std::string(psz, psz + sizeof(m_data) * 2);
 }
 
 template <unsigned int BITS> void base_blob<BITS>::SetHex(const char *psz) {
-    memset(data, 0, sizeof(data));
+    memset(m_data, 0, sizeof(m_data));
 
     // skip leading spaces
     while (isspace(*psz))
@@ -38,7 +38,7 @@ template <unsigned int BITS> void base_blob<BITS>::SetHex(const char *psz) {
     while (::HexDigit(*psz) != -1)
         psz++;
     psz--;
-    uint8_t *p1 = (uint8_t *)data;
+    uint8_t *p1 = (uint8_t *)m_data;
     uint8_t *pend = p1 + WIDTH;
     while (psz >= pbegin && p1 < pend) {
         *p1 = ::HexDigit(*psz--);

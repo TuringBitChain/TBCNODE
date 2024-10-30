@@ -32,6 +32,11 @@ public:
     // Allow access to underlying value for non-monetary operations
     int64_t GetSatoshis() const { return amount; }
 
+    constexpr Amount& operator=(int64_t _camount) {
+        amount = _camount;
+        return *this;
+    }
+
     /**
      * Implement standard operators
      */
@@ -151,8 +156,8 @@ extern const std::string CURRENCY_UNIT;
 /**
  * No amount larger than this (in satoshi) is valid.
  *
- * Note that this constant is *not* the total money supply, which in Bitcoin SV
- * currently happens to be less than 21,000,000 BSV for various reasons, but
+ * Note that this constant is *not* the total money supply, which in TBCNODE
+ * currently happens to be less than 21,000,000 TBC for various reasons, but
  * rather a sanity check. As this sanity check is used by consensus-critical
  * validation code, the exact value of the MAX_MONEY constant is consensus
  * critical; in unusual circumstances like a(nother) overflow bug that allowed

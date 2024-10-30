@@ -139,6 +139,21 @@ AC_ARG_ENABLE(module_recovery,
     [enable_module_recovery=$enableval],
     [enable_module_recovery=no])
 
+AC_ARG_ENABLE(module_extrakeys,
+    AS_HELP_STRING([--enable-module-extrakeys],[enable extrakeys module (default is yes)]), 
+    [enable_module_extrakeys=$enableval],
+    [enable_module_extrakeys=yes])
+
+AC_ARG_ENABLE(module_schnorrsig,
+    AS_HELP_STRING([--enable-module-schnorrsig],[enable schnorrsig module (default is yes)]),
+    [enable_module_schnorrsig=$enableval],
+    [enable_module_schnorrsig=yes])
+
+AC_ARG_ENABLE(module_ellswift,
+    AS_HELP_STRING([--enable-module-ellswift],[enable ElligatorSwift module (default is yes)]),
+    [enable_module_ellswift=$enableval],
+    [enable_module_ellswift=yes])
+
 AC_ARG_ENABLE(jni,
     AS_HELP_STRING([--enable-jni],[enable libsecp256k1_jni (default is no)]),
     [use_jni=$enableval],
@@ -444,6 +459,21 @@ if test x"$enable_module_recovery" = x"yes"; then
   AC_DEFINE(ENABLE_MODULE_RECOVERY, 1, [Define this symbol to enable the ECDSA pubkey recovery module])
 fi
 
+# Test if extrakeys is set after the schnorrsig module to allow the schnorrsig
+# module to set enable_module_extrakeys=yes
+if test x"$enable_module_extrakeys" = x"yes"; then
+  AC_DEFINE(ENABLE_MODULE_EXTRAKEYS, 1, [Define this symbol to enable the extrakeys module])
+fi
+
+if test x"$enable_module_schnorrsig" = x"yes"; then
+  AC_DEFINE(ENABLE_MODULE_SCHNORRSIG, 1, [Define this symbol to enable the schnorrsig module])
+  enable_module_extrakeys=yes
+fi
+
+if test x"$enable_module_ellswift" = x"yes"; then
+  AC_DEFINE(ENABLE_MODULE_ELLSWIFT, 1, [Define this symbol to enable the ElligatorSwift module])
+fi
+
 AC_C_BIGENDIAN()
 
 if test x"$use_external_asm" = x"yes"; then
@@ -493,6 +523,9 @@ AM_CONDITIONAL([ENABLE_MODULE_ECDH], [test x"$enable_module_ecdh" = x"yes"])
 AM_CONDITIONAL([ENABLE_MODULE_MULTISET], [test x"$enable_module_multiset" = x"yes"])
 AM_CONDITIONAL([ENABLE_MODULE_RECOVERY], [test x"$enable_module_recovery" = x"yes"])
 AM_CONDITIONAL([USE_JNI], [test x"$use_jni" == x"yes"])
+AM_CONDITIONAL([ENABLE_MODULE_EXTRAKEYS], [test x"$enable_module_extrakeys" = x"yes"])
+AM_CONDITIONAL([ENABLE_MODULE_SCHNORRSIG], [test x"$enable_module_schnorrsig" = x"yes"])
+AM_CONDITIONAL([ENABLE_MODULE_ELLSWIFT], [test x"$enable_module_ellswift" = x"yes"])
 AM_CONDITIONAL([USE_EXTERNAL_ASM], [test x"$use_external_asm" = x"yes"])
 AM_CONDITIONAL([USE_ASM_ARM], [test x"$set_asm" = x"arm"])
 
@@ -502,3 +535,32 @@ unset PKG_CONFIG_PATH
 PKG_CONFIG_PATH="$PKGCONFIG_PATH_TEMP"
 
 AC_OUTPUT
+
+echo
+echo "Build Options:"
+echo "  with endomorphism       = $use_endomorphism"
+echo "  with ecmult precomp     = $set_precomp"
+echo "  with external callbacks = $use_external_default_callbacks"
+echo "  with benchmarks         = $use_benchmark"
+echo "  with coverage           = $enable_coverage"
+echo "  module ecdh             = $enable_module_ecdh"
+echo "  module recovery         = $enable_module_recovery"
+echo "  module extrakeys        = $enable_module_extrakeys"
+echo "  module schnorrsig       = $enable_module_schnorrsig"
+echo "  module ellswift         = $enable_module_ellswift"
+echo
+echo "  asm                     = $set_asm"
+echo "  bignum                  = $set_bignum"
+echo "  ecmult window size      = $set_ecmult_window"
+echo "  ecmult gen prec. bits   = $set_ecmult_gen_precision"
+dnl Hide test-only options unless they're used.
+if test x"$set_widemul" != xauto; then
+echo "  wide multiplication     = $set_widemul"
+fi
+echo
+echo "  valgrind                = $enable_valgrind"
+echo "  CC                      = $CC"
+echo "  CFLAGS                  = $CFLAGS"
+echo "  CPPFLAGS                = $CPPFLAGS"
+echo "  LDFLAGS                 = $LDFLAGS"
+echo
