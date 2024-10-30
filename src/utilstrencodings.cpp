@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <charconv>
+#include <string_view>
 
 static const std::string CHARS_ALPHA_NUM =
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -96,7 +98,8 @@ std::vector<uint8_t> ParseHex(const std::string &str) {
     return ParseHex(str.c_str());
 }
 
-void SplitHostPort(std::string in, int &portOut, std::string &hostOut) {
+bool SplitHostPort(std::string in, int &portOut, std::string &hostOut) {
+    bool valid = false;
     size_t colon = in.find_last_of(':');
     // if a : is found, and it either follows a [...], or no other : is in the
     // string, treat it as port separator
@@ -113,13 +116,46 @@ void SplitHostPort(std::string in, int &portOut, std::string &hostOut) {
         if (ParseInt32(in.substr(colon + 1), &n) && n > 0 && n < 0x10000) {
             in = in.substr(0, colon);
             portOut = n;
+            valid = (portOut != 0);
         }
+    }
+    else 
+    {
+        valid = true;
     }
     if (in.size() > 0 && in[0] == '[' && in[in.size() - 1] == ']') {
         hostOut = in.substr(1, in.size() - 2);
     } else {
         hostOut = in;
     }
+    return valid;
+}
+
+bool SplitHostPort(std::string_view in, uint16_t& portOut, std::string& hostOut)
+{
+    bool valid = false;
+    size_t colon = in.find_last_of(':');
+    // if a : is found, and it either follows a [...], or no other : is in the string, treat it as port separator
+    bool fHaveColon = colon != in.npos;
+    bool fBracketed = fHaveColon && (in[0] == '[' && in[colon - 1] == ']'); // if there is a colon, and in[0]=='[', colon is not 0, so in[colon-1] is safe
+    bool fMultiColon{fHaveColon && colon != 0 && (in.find_last_of(':', colon - 1) != in.npos)};
+    if (fHaveColon && (colon == 0 || fBracketed || !fMultiColon)) {
+        uint16_t n;
+        if (ParseUInt16(in.substr(colon + 1), &n)) {
+            in = in.substr(0, colon);
+            portOut = n;
+            valid = (portOut != 0);
+        }
+    } else {
+        valid = true;
+    }
+    if (in.size() > 0 && in[0] == '[' && in[in.size() - 1] == ']') {
+        hostOut = in.substr(1, in.size() - 2);
+    } else {
+        hostOut = in;
+    }
+
+    return valid;
 }
 
 std::string EncodeBase64(const uint8_t *pch, size_t len) {
@@ -521,6 +557,82 @@ bool ParseDouble(const std::string &str, double *out) {
     text >> result;
     if (out) *out = result;
     return text.eof() && !text.fail();
+}
+
+/**
+ * Convert string to integral type T. Leading whitespace, a leading +, or any
+ * trailing character fail the parsing. The required format expressed as regex
+ * is `-?[0-9]+`. The minus sign is only permitted for signed integer types.
+ *
+ * @returns std::nullopt if the entire string could not be parsed, or if the
+ *   parsed value is not in the range representable by the type T.
+ */
+template <typename T>
+std::optional<T> ToIntegral(std::string_view str)
+{
+    static_assert(std::is_integral<T>::value);
+    T result;
+    const auto [first_nonmatching, error_condition] = std::from_chars(str.data(), str.data() + str.size(), result);
+    if (first_nonmatching != str.data() + str.size() || error_condition != std::errc{}) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+namespace {
+template <typename T>
+bool ParseIntegral(std::string_view str, T* out)
+{
+    static_assert(std::is_integral<T>::value);
+    // Replicate the exact behavior of strtol/strtoll/strtoul/strtoull when
+    // handling leading +/- for backwards compatibility.
+    if (str.length() >= 2 && str[0] == '+' && str[1] == '-') {
+        return false;
+    }
+    const std::optional<T> opt_int = ToIntegral<T>((!str.empty() && str[0] == '+') ? str.substr(1) : str);
+    if (!opt_int) {
+        return false;
+    }
+    if (out != nullptr) {
+        *out = *opt_int;
+    }
+    return true;
+}
+}; // namespace
+
+bool ParseUInt16(std::string_view str, uint16_t* out)
+{
+    return ParseIntegral<uint16_t>(str, out);
+}
+
+using ByteAsHex = std::array<char, 2>;
+
+constexpr std::array<ByteAsHex, 256> CreateByteToHexMap()
+{
+    constexpr char hexmap[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
+    std::array<ByteAsHex, 256> byte_to_hex{};
+    for (size_t i = 0; i < byte_to_hex.size(); ++i) {
+        byte_to_hex[i][0] = hexmap[i >> 4];
+        byte_to_hex[i][1] = hexmap[i & 15];
+    }
+    return byte_to_hex;
+}
+
+std::string HexStr(const bsv::span<const uint8_t> s)
+{
+    std::string rv(s.size() * 2, '\0');
+    static constexpr auto byte_to_hex = CreateByteToHexMap();
+    static_assert(sizeof(byte_to_hex) == 512);
+
+    char* it = rv.data();
+    for (uint8_t v : s) {
+        std::memcpy(it, byte_to_hex[v].data(), 2);
+        it += 2;
+    }
+
+    assert(it == rv.data() + rv.size());
+    return rv;
 }
 
 std::string FormatParagraph(const std::string &in, size_t width,

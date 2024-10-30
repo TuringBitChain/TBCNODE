@@ -191,6 +191,11 @@ public:
         HexStr(pch, pch + nSize, tw);
     }
 
+    void write(bsv::span<const std::byte> src)
+    {
+        HexStr(src.begin(),src.end(),tw);
+    }
+
     template <typename T> CHexWriter& operator<<(const T& obj)
     {
         // Serialize to this stream

@@ -159,6 +159,29 @@ class CTransaction;
 class CNodeStats;
 class CClientUIInterface;
 
+struct SerializedNetMsg {
+    SerializedNetMsg() = default;
+    SerializedNetMsg(SerializedNetMsg&&) = default;
+    SerializedNetMsg& operator=(SerializedNetMsg&&) = default;
+    // No implicit copying, only moves.
+    SerializedNetMsg(const SerializedNetMsg& msg) = delete;
+    SerializedNetMsg& operator=(const SerializedNetMsg&) = delete;
+
+    SerializedNetMsg Copy() const
+    {
+        SerializedNetMsg copy;
+        copy.data = data;
+        copy.m_type = m_type;
+        return copy;
+    }
+
+    std::vector<unsigned char> data;
+    std::string m_type;
+
+    /** Compute total memory usage of this object (own memory + any dynamic memory). */
+    size_t GetMemoryUsage() const noexcept;
+};
+
 class CSerializedNetMsg
 {
 public:

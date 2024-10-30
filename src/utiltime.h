@@ -8,6 +8,16 @@
 
 #include <cstdint>
 #include <string>
+#include <chrono>
+
+/** Mockable clock in the context of tests, otherwise the system clock */
+struct NodeClock : public std::chrono::system_clock {
+    using time_point = std::chrono::time_point<NodeClock>;
+    /** Return current system time or mocked time, if set */
+    static time_point now() noexcept;
+    static std::time_t to_time_t(const time_point&) = delete; // unused
+    static time_point from_time_t(std::time_t) = delete;      // unused
+};
 
 /**
  * GetTimeMicros() and GetTimeMillis() both return the system time, but in
@@ -29,5 +39,21 @@ void SetMockTime(int64_t nMockTimeIn);
 void MilliSleep(int64_t n);
 
 std::string DateTimeStrFormat(const char *pszFormat, int64_t nTime);
+
+/**
+ * Return the current time point cast to the given precision. Only use this
+ * when an exact precision is needed, otherwise use T::clock::now() directly.
+ */
+template <typename T>
+T Now()
+{
+    return std::chrono::time_point_cast<typename T::duration>(T::clock::now());
+}
+/** DEPRECATED, see GetTime */
+template <typename T>
+T GetTime()
+{
+    return Now<std::chrono::time_point<NodeClock, T>>().time_since_epoch();
+}
 
 #endif // BITCOIN_UTILTIME_H

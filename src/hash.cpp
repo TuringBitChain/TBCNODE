@@ -257,3 +257,11 @@ uint64_t SipHashUint256Extra(uint64_t k0, uint64_t k1, const uint256 &val,
     SIPROUND;
     return v0 ^ v1 ^ v2 ^ v3;
 }
+
+HashWriter TaggedHash(const std::string &tag) {
+    HashWriter writer{};
+    uint256 taghash;
+    CSHA256().Write((const unsigned char*)tag.data(), tag.size()).Finalize(taghash.begin());
+    writer << taghash << taghash;
+    return writer;
+}

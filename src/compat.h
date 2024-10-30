@@ -57,6 +57,7 @@ typedef int SOCKET;
 #define WSAEINVAL EINVAL
 #define WSAEALREADY EALREADY
 #define WSAEWOULDBLOCK EWOULDBLOCK
+#define WSAEAGAIN           EAGAIN
 #define WSAEMSGSIZE EMSGSIZE
 #define WSAEINTR EINTR
 #define WSAEINPROGRESS EINPROGRESS
@@ -102,5 +103,12 @@ static bool inline IsSelectableSocket(SOCKET s) {
     return (s < FD_SETSIZE);
 #endif
 }
+
+// Note these both should work with the current usage of poll, but best to be safe
+// WIN32 poll is broken https://daniel.haxx.se/blog/2012/10/10/wsapoll-is-broken/
+// __APPLE__ poll is broke https://github.com/bitcoin/bitcoin/pull/14336#issuecomment-437384408
+#if defined(__linux__)
+#define USE_POLL
+#endif
 
 #endif // BITCOIN_COMPAT_H

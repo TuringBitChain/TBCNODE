@@ -48,6 +48,9 @@
 #include "validation.h"
 #include "validationinterface.h"
 #include "vmtouch.h"
+#include "sv2_template_provider.h"
+#include "context.h"
+#include "utilstrencodings.h"
 
 #ifdef ENABLE_WALLET
 #include "wallet/rpcdump.h"
@@ -303,7 +306,7 @@ void OnRPCStarted() {
 void OnRPCStopped() {
     uiInterface.NotifyBlockTip.disconnect(&RPCNotifyBlockChange);
     RPCNotifyBlockChange(false, nullptr);
-    cvBlockChange.notify_all();
+    g_best_block_cv.notify_all();
     LogPrint(BCLog::RPC, "RPC stopped.\n");
 }
 
@@ -1514,6 +1517,11 @@ void InitParameterInteraction() {
 static std::string ResolveErrMsg(const char *const optname,
                                  const std::string &strBind) {
     return strprintf(_("Cannot resolve -%s address: '%s'"), optname, strBind);
+}
+
+static std::string InvalidPortErrMsg(const std::string& optname, const std::string& invalid_value)
+{
+    return strprintf(_("Invalid port specified in %s: '%s'"), optname, invalid_value);
 }
 
 void InitLogging() {
@@ -2909,6 +2917,51 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         pwallet->postInitProcess(scheduler);
     }
 #endif
+
+    if (gArgs.GetBoolArg("-sv2", false)) {
+        assert(!NodeContext::GetInstance().sv2_template_provider);
+        //NodeContext::GetInstance().mining = nullopt;
+        //assert(NodeContext::GetInstance().mining);
+
+        Sv2TemplateProviderOptions options{};
+
+        //NodeContext::GetInstance().sv2_template_provider = std::make_unique<Sv2TemplateProvider>(config, mempool);
+        NodeContext::GetInstance().sv2_template_provider = 
+            std::make_unique<Sv2TemplateProvider>(config, *NodeContext::GetInstance().mining, mempool);
+
+        const std::string sv2_port_arg = gArgs.GetArg("-sv2port", "");
+
+        if (sv2_port_arg.empty()) {
+            options.port = BaseParams().Sv2Port();
+        } else {
+            if (!ParseUInt16(sv2_port_arg, &options.port) || options.port == 0) {
+                return InitError(InvalidPortErrMsg("sv2port", sv2_port_arg));
+            }
+        }
+
+        if (gArgs.IsArgSet("-sv2bind")) { // Specific bind address
+            std::optional<std::string> sv2_bind{gArgs.GetArg("-sv2bind","")};
+            if (sv2_bind) {
+                auto tmpPort = static_cast<int>(options.port);
+                if (!SplitHostPort(sv2_bind.value(), tmpPort, options.host)) {
+                    throw std::runtime_error(strprintf("Invalid port %d", options.port));
+                }
+            }
+        }
+
+        options.fee_delta = gArgs.GetArg("-sv2feedelta", DEFAULT_SV2_FEE_DELTA);
+
+        if (gArgs.IsArgSet("-sv2interval")) {
+            if (gArgs.GetArg("-sv2interval", DEFAULT_SV2_INTERVAL) < 1) {
+                return InitError(_("-sv2interval must be at least one second"));
+            }
+            options.fee_check_interval = std::chrono::seconds(gArgs.GetArg("-sv2interval", 0));
+        }
+
+        if (!NodeContext::GetInstance().sv2_template_provider->Start(options)) {
+            return InitError(_("Unable to start Stratum v2 Template Provider"));
+        }
+    }
 
     return !shutdownToken.IsCanceled();
 }

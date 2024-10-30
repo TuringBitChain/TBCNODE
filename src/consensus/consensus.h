@@ -29,6 +29,10 @@ static const uint64_t MAX_TX_SIZE_CONSENSUS_AFTER_GENESIS = ONE_GIGABYTE;
 /** The maximum allowed size for a block, before the UAHF */
 static const uint64_t LEGACY_MAX_BLOCK_SIZE = ONE_MEGABYTE;
 
+/** The maximum allowed size for a serialized block, in bytes (only for buffer size limits) */
+static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000;
+/** The maximum allowed weight for a block, see BIP 141 (network rule) */
+static const unsigned int MAX_BLOCK_WEIGHT = 4000000;
 /**
  * The maximum allowed number of signature check operations per MB in a block
  * (network rule).

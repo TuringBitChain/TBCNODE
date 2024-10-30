@@ -404,6 +404,18 @@ int secp256k1_ec_seckey_verify(const secp256k1_context* ctx, const unsigned char
     return ret;
 }
 
+static int secp256k1_ec_pubkey_create_helper(const secp256k1_ecmult_gen_context *ecmult_gen_ctx, secp256k1_scalar *seckey_scalar, secp256k1_ge *p, const unsigned char *seckey) {
+    secp256k1_gej pj;
+    int ret;
+
+    ret = secp256k1_scalar_set_b32_seckey(seckey_scalar, seckey);
+    secp256k1_scalar_cmov(seckey_scalar, &secp256k1_scalar_one, !ret);
+
+    secp256k1_ecmult_gen(ecmult_gen_ctx, &pj, seckey_scalar);
+    secp256k1_ge_set_gej(p, &pj);
+    return ret;
+}
+
 int secp256k1_ec_pubkey_create(const secp256k1_context* ctx, secp256k1_pubkey *pubkey, const unsigned char *seckey) {
     secp256k1_gej pj;
     secp256k1_ge p;
@@ -578,6 +590,24 @@ int secp256k1_ec_pubkey_combine(const secp256k1_context* ctx, secp256k1_pubkey *
     return 1;
 }
 
+static int secp256k1_ec_pubkey_tweak_add_helper(const secp256k1_ecmult_context* ecmult_ctx, secp256k1_ge *p, const unsigned char *tweak32) {
+    secp256k1_scalar term;
+    int overflow = 0;
+    secp256k1_scalar_set_b32(&term, tweak32, &overflow);
+    return !overflow && secp256k1_eckey_pubkey_tweak_add(ecmult_ctx, p, &term);
+}
+
+static int secp256k1_ec_seckey_tweak_add_helper(secp256k1_scalar *sec, const unsigned char *tweak32) {
+    secp256k1_scalar term;
+    int overflow = 0;
+    int ret = 0;
+
+    secp256k1_scalar_set_b32(&term, tweak32, &overflow);
+    ret = (!overflow) & secp256k1_eckey_privkey_tweak_add(sec, &term);
+    secp256k1_scalar_clear(&term);
+    return ret;
+}
+
 #ifdef ENABLE_MODULE_ECDH
 # include "modules/ecdh/main_impl.h"
 #endif
@@ -588,4 +618,16 @@ int secp256k1_ec_pubkey_combine(const secp256k1_context* ctx, secp256k1_pubkey *
 
 #ifdef ENABLE_MODULE_RECOVERY
 # include "modules/recovery/main_impl.h"
+#endif
+
+#ifdef ENABLE_MODULE_EXTRAKEYS
+# include "modules/extrakeys/main_impl.h"
+#endif
+
+#ifdef ENABLE_MODULE_SCHNORRSIG
+# include "modules/schnorrsig/main_impl.h"
+#endif
+
+#ifdef ENABLE_MODULE_ELLSWIFT
+# include "modules/ellswift/main_impl.h"
 #endif

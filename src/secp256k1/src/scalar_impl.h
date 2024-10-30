@@ -24,6 +24,23 @@
 #error "Please select scalar implementation"
 #endif
 
+static const secp256k1_scalar secp256k1_scalar_one = SECP256K1_SCALAR_CONST(0, 0, 0, 0, 0, 0, 0, 1);
+static const secp256k1_scalar secp256k1_scalar_zero = SECP256K1_SCALAR_CONST(0, 0, 0, 0, 0, 0, 0, 0);
+
+static int secp256k1_scalar_set_b32_seckey(secp256k1_scalar *r, const unsigned char *bin) {
+    int overflow;
+    secp256k1_scalar_set_b32(r, bin, &overflow);
+
+    SECP256K1_SCALAR_VERIFY(r);
+    return (!overflow) & (!secp256k1_scalar_is_zero(r));
+}
+
+static void secp256k1_scalar_verify(const secp256k1_scalar *r) {
+    VERIFY_CHECK(secp256k1_scalar_check_overflow(r) == 0);
+
+    (void)r;
+}
+
 #ifndef USE_NUM_NONE
 static void secp256k1_scalar_get_num(secp256k1_num *r, const secp256k1_scalar *a) {
     unsigned char c[32];

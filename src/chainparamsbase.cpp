@@ -28,8 +28,8 @@ void AppendParamsHelpMessages(std::string &strUsage, bool debugHelp) {
             );
 }
 
-CBaseChainParams::CBaseChainParams(int port, const std::string& data_dir)
-    : nRPCPort{port}, strDataDir{data_dir}
+CBaseChainParams::CBaseChainParams(int port, int sv2_port, const std::string& data_dir)
+    : m_RPCPort{port},m_sv2Port{sv2_port}, m_strDataDir{data_dir}
 {
 }
 
@@ -44,16 +44,16 @@ std::unique_ptr<CBaseChainParams>
 CreateBaseChainParams(const std::string &chain) {
     if (chain == CBaseChainParams::MAIN)
         return std::unique_ptr<CBaseChainParams>(
-            new CBaseChainParams(8332, ""));
+            new CBaseChainParams(8332, 8336, ""));
     else if (chain == CBaseChainParams::TESTNET)
         return std::unique_ptr<CBaseChainParams>(
-            new CBaseChainParams(18332, "testnet3"));
+            new CBaseChainParams(18332, 18336, "testnet3"));
     else if (chain == CBaseChainParams::STN)
         return std::unique_ptr<CBaseChainParams>(
-            new CBaseChainParams(9332, "stn"));
+            new CBaseChainParams(9332, 9336, "stn"));
     else if (chain == CBaseChainParams::REGTEST)
         return std::unique_ptr<CBaseChainParams>(
-            new CBaseChainParams(18332, "regtest"));
+            new CBaseChainParams(18332, 18336, "regtest"));
     else
         throw std::runtime_error(
             strprintf("%s: Unknown chain %s.", __func__, chain));

@@ -1,0 +1,105 @@
+// Copyright (c) 2024 The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#ifndef BITCOIN_INTERFACES_MINING_H
+#define BITCOIN_INTERFACES_MINING_H
+
+#include "amount.h"
+#include "primitives/transaction.h"
+#include "uint256.h"
+#include "utiltime.h"
+
+#include <memory>
+#include <optional>
+
+struct NodeContext;
+
+class BlockValidationState;
+class CBlock;
+class CBlockHeader;
+class CScript;
+
+//! Interface giving clients (RPC, Stratum v2 Template Provider in the future)
+//! ability to create block templates.
+class Mining
+{
+public:
+    using MillisecondsDouble = std::chrono::duration<double, std::chrono::milliseconds::period>;
+
+    virtual ~Mining() = default;
+
+    //! If this chain is exclusively used for testing
+    //virtual bool isTestChain() = 0;
+
+    //! Returns whether IBD is still in progress.
+    //virtual bool isInitialBlockDownload() = 0;
+
+    //! Returns the hash for the tip of this chain
+    virtual std::optional<uint256> getTipHash() = 0;
+
+    /**
+     * Waits for the tip to change
+     *
+     * @param[in] timeout how long to wait for a new tip
+     * @returns hash and height for the new tip or the previous tip if
+     *          interrupted or after the timeout
+     */
+    virtual std::pair<uint256, int> waitTipChanged(MillisecondsDouble timeout = MillisecondsDouble::max()) = 0;
+
+    /**
+     * Waits for fees in the next block to rise, a new tip or the timeout.
+     *
+     * @param[in] timeout how long to wait for a fee increase
+     * @param[in] tip block hash that the most recent template builds on
+     * @param[in] fee_delta currently ignored: how much total fees in the next block should rise.
+     * @param[in,out] fees_before currently ignored: fees for the most recent template
+     * @param[out] tip_changed whether a new tip arrived during the wait
+     *
+     * @returns true if fees increased, false if a new tip arrives or the timeout occurs
+     */
+    virtual bool waitFeesChanged(MillisecondsDouble timeout, uint256 tip, Amount fee_delta, Amount& fees_before, bool& tip_changed) = 0;
+
+   /**
+     * Construct a new block template
+     *
+     * @param[in] script_pub_key the coinbase output
+     * @param[in] options options for creating the block
+     * @returns a block template
+     */
+    //virtual std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key, const node::BlockCreateOptions& options={}) = 0;
+
+    /**
+     * Processes new block. A valid new block is automatically relayed to peers.
+     *
+     * @param[in]   block The block we want to process.
+     * @param[out]  new_block A boolean which is set to indicate if the block was first received via this call
+     * @returns     If the block was processed, independently of block validity
+     */
+    //virtual bool processNewBlock(const std::shared_ptr<const CBlock>& block, bool* new_block) = 0;
+
+    //! Return the number of transaction updates in the mempool,
+    //! used to decide whether to make a new block template.
+    //virtual unsigned int getTransactionsUpdated() = 0;
+
+    /**
+     * Check a block is completely valid from start to finish.
+     * Only works on top of our current best block.
+     * Does not check proof-of-work.
+     *
+     * @param[in] block the block to validate
+     * @param[in] check_merkle_root call CheckMerkleRoot()
+     * @param[out] state details of why a block failed to validate
+     * @returns false if it does not build on the current tip, or any of the checks fail
+     */
+    //virtual bool testBlockValidity(const CBlock& block, bool check_merkle_root, BlockValidationState& state) = 0;
+
+    //! Get internal node context. Useful for RPC and testing,
+    //! but not accessible across processes.
+    virtual NodeContext* context() { return nullptr; }
+};
+
+//! Return implementation of Mining interface.
+std::unique_ptr<Mining> MakeMining(NodeContext& node);
+
+#endif // BITCOIN_INTERFACES_MINING_H
