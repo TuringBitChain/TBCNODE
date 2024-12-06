@@ -8,6 +8,7 @@
 #include <streams.h>
 #include <deque>
 #include <iostream>
+#include <consensus/merkle.h>
 
 using namespace node;
 
@@ -86,7 +87,7 @@ Sv2NewTemplateMsg::Sv2NewTemplateMsg(std::shared_ptr<CBlock>  block, uint64_t te
 
     m_coinbase_tx_locktime = coinbase_tx->nLockTime;
 
-    std::vector<uint256> merklepath = GetMerklePathForCoinbase(block);
+    std::vector<uint256> merklepath = BlockMerkleBranch(*block.get(),0);;
 
     for (const auto& hash : merklepath) {
         m_merkle_path.push_back(hash);
