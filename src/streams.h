@@ -70,6 +70,7 @@ public:
 
     void write(const char *pch, size_t nSize) { stream->write(pch, nSize); }
 
+    void read(char *pch, size_t nSize) { stream->read(pch, nSize); }
     void read(bsv::span<std::byte> span) {
         stream->read(reinterpret_cast<char*>(span.data()), span.size());
     }
