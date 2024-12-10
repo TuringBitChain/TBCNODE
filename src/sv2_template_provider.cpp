@@ -1215,6 +1215,8 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         block_ptr->nTime    = solution.m_header_timestamp;
         block_ptr->nNonce   = solution.m_header_nonce;
 
+        block_ptr->hashMerkleRoot = BlockMerkleRoot(*block_ptr.get());
+
         if (!ProcessNewBlock(m_config, block_ptr, true, nullptr)) {
             LogPrintf("ProcessNewBlock failed for block with prevHash:%s\n", HexStr(block_ptr->hashPrevBlock));
         }
