@@ -258,7 +258,6 @@ private:
      * The main thread for the template provider, contains an event loop handling
      * all tasks for the template provider.
      */
-    void ThreadSv2HandlerOld() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex, !m_tp_mutex);
     void ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex, !m_tp_mutex);
 
     /**
