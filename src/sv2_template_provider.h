@@ -197,11 +197,6 @@ public:
     void StopThreads();
 
     /**
-     * Main handler for all received stratum v2 messages.
-     */
-    void ProcessSv2Message(const Sv2NetMsg& sv2_header, Sv2Client& client);
-
-    /**
      *  Helper function to process incoming bytes before a session is established.
      *  Progresses a handshake or fails.
      *
