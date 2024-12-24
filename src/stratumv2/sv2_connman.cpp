@@ -429,6 +429,4 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         break;
     }
     }
-
-    m_msgproc->ReceivedMessage(client, sv2_net_msg.m_sv2_header.m_msg_type);
 }

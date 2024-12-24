@@ -83,15 +83,6 @@ class Sv2EventsInterface
 {
 public:
     /**
-    * Generic notification that a message was received. Does not include the
-    * message itself.
-    *
-    * @param[in] client The client which we have received messages from.
-    * @param[in] msg_type the message type
-    */
-    virtual void ReceivedMessage(Sv2Client& client, node::Sv2MsgType msg_type) = 0;
-
-    /**
      * We received and successfully parsed a RequestTransactionData message.
      * Deal with it and respond with either RequestTransactionData.Success or
      * RequestTransactionData.Error.
