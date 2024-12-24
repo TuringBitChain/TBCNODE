@@ -33,6 +33,7 @@ using node::Sv2RequestTransactionDataErrorMsg;
 using node::Sv2SubmitSolutionMsg;
 using mining::CBlockTemplate;
 
+static std::atomic<bool> first_temp_msg_send_flag(false);
 
 Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemPool& mempool) 
     : m_config{config}, m_mining{mining}, m_mempool{mempool}
@@ -197,9 +198,9 @@ bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
         , "sv2"
         , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2Handler, this)));
 
-    m_thread_sv2_mempool_handler = std::thread(&TraceThread<std::function<void()>>
-        , "sv2mempool"
-        , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2MempoolHandler, this)));
+    // m_thread_sv2_mempool_handler = std::thread(&TraceThread<std::function<void()>>
+    //     , "sv2mempool"
+    //     , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2MempoolHandler, this)));
 
     return true;
 }
@@ -335,7 +336,9 @@ void Sv2TemplateProvider::ThreadSv2Handler()
             while (/*!chainman().m_interrupt &&*/ std::chrono::steady_clock::now() < deadline) {
                 auto check_time = std::chrono::steady_clock::now() + std::min(timeout, Mining::MillisecondsDouble(1000));
                 g_best_block_cv.wait_until(lock, check_time);
-                if (g_best_block != previous_hash) break;
+                if (uint256() != g_best_block && g_best_block != previous_hash) {
+                    break;
+                }
                 // Obtaining the height here using chainActive.Tip()->nHeight
                 // would result in a deadlock, because UpdateTip requires holding cs_main.
             }
@@ -345,8 +348,7 @@ void Sv2TemplateProvider::ThreadSv2Handler()
     };
 
     while (!m_flag_interrupt_sv2) {
-        if(m_block_template_cache.empty())
-        {
+        if(!first_temp_msg_send_flag) {
             m_connman->ForEachClient([this](Sv2Client& client) {
                 if (!client.m_coinbase_output_data_size_recv) {
                     return;
@@ -361,35 +363,39 @@ void Sv2TemplateProvider::ThreadSv2Handler()
                                     client.m_id);
                     client.m_disconnect_flag = true;
                 }
+                first_temp_msg_send_flag = true;
             });
         }
 
-        auto tip{waitTipChanged(500ms)};
+        if(!first_temp_msg_send_flag){
+            continue;
+        }
+
+        auto tip{waitTipChanged(std::chrono::duration_cast<std::chrono::milliseconds>(m_options.fee_check_interval))};
+
         bool best_block_changed{WITH_LOCK(m_tp_mutex, return m_best_prev_hash != tip.first;)};
-        if (best_block_changed) {
-            {
-                LOCKMt(m_tp_mutex);
-                m_best_prev_hash = tip.first;
-                m_last_block_time = GetTime<std::chrono::seconds>();
-                m_template_last_update = GetTime<std::chrono::seconds>();
+        {
+            LOCKMt(m_tp_mutex);
+            m_best_prev_hash = tip.first;
+            m_last_block_time = GetTime<std::chrono::seconds>();
+            m_template_last_update = GetTime<std::chrono::seconds>();
+        }
+
+        m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
+            if (!client.m_coinbase_output_data_size_recv) {
+                return;
             }
 
-            m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
-                if (!client.m_coinbase_output_data_size_recv) {
-                    return;
-                }
-
-                LOCKMt(this->m_tp_mutex);
-                Amount dummy_last_fees;
-                if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees)) {
-                    // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
-                    //                 client.m_id);
-                    LogPrintf("Disconnecting client id=%zu\n",
-                                    client.m_id);
-                    client.m_disconnect_flag = true;
-                }
-            });
-        }
+            LOCKMt(this->m_tp_mutex);
+            Amount dummy_last_fees;
+            if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees)) {
+                // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
+                //                 client.m_id);
+                LogPrintf("Disconnecting client id=%zu\n",
+                                client.m_id);
+                client.m_disconnect_flag = true;
+            }
+        });
 
         LOCKMt(m_tp_mutex);
         PruneBlockTemplateCache();
@@ -469,7 +475,6 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
             // since waitFeesChanged doesn't actually check this yet.
 
             Amount fees_before = last_fees;
-            LogPrintf("call SendWork line:%d\n",__LINE__);
             if (!SendWork(client, /*send_new_prevhash=*/false, fees_before)) {
                 // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
                 //                 client.m_id);
