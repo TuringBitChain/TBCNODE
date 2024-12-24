@@ -345,16 +345,27 @@ void Sv2TemplateProvider::ThreadSv2Handler()
     };
 
     while (!m_flag_interrupt_sv2) {
+        if(m_block_template_cache.empty())
+        {
+            m_connman->ForEachClient([this](Sv2Client& client) {
+                if (!client.m_coinbase_output_data_size_recv) {
+                    return;
+                }
+
+                LOCKMt(m_tp_mutex);
+                Amount dummy_last_fees;
+                if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
+                    // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
+                    //                 client.m_id);
+                    LogPrintf("Disconnecting client id=%zu\n",
+                                    client.m_id);
+                    client.m_disconnect_flag = true;
+                }
+            });
+        }
 
         auto tip{waitTipChanged(500ms)};
         bool best_block_changed{WITH_LOCK(m_tp_mutex, return m_best_prev_hash != tip.first;)};
-
-        // Keep m_best_prev_hash unset during IBD to avoid pushing outdated
-        // templates. Except for signet, because we might be the only miner.
-        // if (m_mining.isInitialBlockDownload() && gArgs.GetChainType() != ChainType::SIGNET) {
-        //     best_block_changed = false;
-        // }
-
         if (best_block_changed) {
             {
                 LOCKMt(m_tp_mutex);
@@ -364,9 +375,9 @@ void Sv2TemplateProvider::ThreadSv2Handler()
             }
 
             m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
-                // For newly connected clients, we call SendWork after receiving
-                // CoinbaseOutputDataSize.
-                if (client.m_coinbase_tx_outputs_size == 0) return;
+                if (!client.m_coinbase_output_data_size_recv) {
+                    return;
+                }
 
                 LOCKMt(this->m_tp_mutex);
                 Amount dummy_last_fees;
@@ -449,9 +460,9 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
         fees_previous_interval = last_fees;
 
         m_connman->ForEachClient([this, last_fees, &fees_previous_interval](Sv2Client& client) {
-            // For newly connected clients, we call SendWork after receiving
-            // CoinbaseOutputDataSize.
-            if (client.m_coinbase_tx_outputs_size == 0) return;
+            if (!client.m_coinbase_output_data_size_recv) {
+                return;
+            }
 
             LOCKMt(this->m_tp_mutex);
             // fees_previous_interval is only updated if the fee increase was sufficient,
@@ -613,23 +624,6 @@ Sock::EventsPerSock Sv2TemplateProvider::GenerateWaitSockets(const std::shared_p
     }
 
     return events_per_sock;
-}
-
-void Sv2TemplateProvider::ReceivedMessage(Sv2Client& client, node::Sv2MsgType msg_type) {
-    switch (msg_type)
-    {
-    case node::Sv2MsgType::COINBASE_OUTPUT_DATA_SIZE:
-    {
-        LOCKMt(m_tp_mutex);
-        Amount dummy_last_fees;
-        //Amount dummy_last_fees;
-        if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
-            return;
-        }
-        break;
-    }
-    default: {}
-    }
 }
 
 void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2RequestTransactionDataMsg msg)
