@@ -221,8 +221,6 @@ public:
         });
     }
 
-    void ReceivedMessage(Sv2Client& client, node::Sv2MsgType msg_type) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex) override;
-
     void RequestTransactionData(Sv2Client& client, node::Sv2RequestTransactionDataMsg msg) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex) override;
 
     void SubmitSolution(node::Sv2SubmitSolutionMsg solution) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex) override;
