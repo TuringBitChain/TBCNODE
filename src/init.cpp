@@ -1992,6 +1992,11 @@ bool AppInitParameterInteraction(Config &config) {
         fPruneMode = true;
     }
 
+    int64_t nSkip = gArgs.GetArg("-skiptbcpreforkblockdata", 0);
+    if(nSkip == 1) {
+        fSkipTBCPreForkMode = true;
+    }
+
     if(std::string err; !config.SetMaxStdTxnValidationDuration(
         gArgs.GetArg(
             "-maxstdtxvalidationduration",
