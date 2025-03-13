@@ -85,6 +85,7 @@ bool fReindex = false;
 bool fTxIndex = false;
 bool fHavePruned = false;
 bool fPruneMode = false;
+bool fSkipTBCPreForkMode = false;
 bool fIsBareMultisigStd = DEFAULT_PERMIT_BAREMULTISIG;
 bool fRequireStandard = true;
 bool fCheckBlockIndex = false;
@@ -3776,13 +3777,15 @@ static bool ConnectBlock(
     // Verify that the view's current state corresponds to the previous block
     uint256 hashPrevBlock =
         pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash();
-    assert(hashPrevBlock == view.GetBestBlock());
+    const Consensus::Params &consensusParams =
+            config.GetChainParams().GetConsensus();
+    assert(hashPrevBlock == view.GetBestBlock() || 
+        (fSkipTBCPreForkMode && block.GetHash() == consensusParams.TBCFirstBlockHash));
 
     // Special case for the genesis block, skipping connection of its
     // transactions (its coinbase is unspendable)
-    const Consensus::Params &consensusParams =
-        config.GetChainParams().GetConsensus();
-    if (block.GetHash() == consensusParams.hashGenesisBlock) {
+    if (block.GetHash() == consensusParams.hashGenesisBlock || 
+        (fSkipTBCPreForkMode && block.GetHash() == consensusParams.TBCFirstBlockHash)) {
         if (!fJustCheck) {
             view.SetBestBlock(pindex->GetBlockHash());
         }
@@ -4599,7 +4602,10 @@ static bool ConnectTip(
     const CJournalChangeSetPtr& changeSet,
     const arith_uint256& mostWorkOnChain)
 {
-    assert(pindexNew->pprev == chainActive.Tip());
+    const Consensus::Params &consensusParams =
+        config.GetChainParams().GetConsensus();
+    assert(pindexNew->pprev == chainActive.Tip() || 
+        (fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHash == pblock->GetHash()));
     // Read block from disk.
     int64_t nTime1 = GetTimeMicros();
     std::shared_ptr<const CBlock> pthisBlock;
@@ -4763,6 +4769,9 @@ static CBlockIndex *FindMostWorkChain() {
                 fInvalidAncestor = true;
                 break;
             }
+            if (fSkipTBCPreForkMode && 824189 == pindexTest->nHeight) {
+                break;
+            }
             pindexTest = pindexTest->pprev;
         }
         if (!fInvalidAncestor) {
@@ -4828,6 +4837,12 @@ static bool ActivateBestChainStep(
             // Don't iterate the entire list of potential improvements toward the
             // best tip, as we likely only need a few blocks along the way.
             int nTargetHeight = std::min(nHeight + 32, pindexMostWork->nHeight);
+            const Consensus::Params &consensusParams =
+                config.GetChainParams().GetConsensus();
+            if(fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHeight == pindexMostWork->nHeight){
+                nTargetHeight = consensusParams.TBCFirstBlockHeight;
+                nHeight = consensusParams.TBCFirstBlockHeight - 1;
+            }
             vpindexToConnect.clear();
             vpindexToConnect.reserve(nTargetHeight - nHeight);
             CBlockIndex *pindexIter = pindexMostWork->GetAncestor(nTargetHeight);
@@ -5564,7 +5579,7 @@ static bool ReceivedBlockTransactions(
     pindexNew->SetDiskBlockData(block.vtx.size(), pos, metaData);
     setDirtyBlockIndex.insert(pindexNew);
 
-    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx) {
+    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx || (fSkipTBCPreForkMode && 824189 == pindexNew->nHeight)) {
         // If pindexNew is the genesis block or all parents are
         // BLOCK_VALID_TRANSACTIONS.
         std::deque<CBlockIndex *> queue;
@@ -6293,11 +6308,8 @@ std::function<bool()> ProcessNewBlockWithAsyncBestChainActivation(
         LOCK(cs_main);
 
         if (ret) {
-            TimeConsuming timeConsuming;
             ret = AcceptBlock(config, pblock, state, &pindex, fForceProcessing,
                               nullptr, fNewBlock);
-            timeConsuming.timingEnded();
-            LogPrintf("AcceptBlock, Store to disk. time consuming:%ld\n",timeConsuming.obtainTimePeriod());
         }
         CheckBlockIndex(chainparams.GetConsensus());
         if (!ret) {
@@ -6586,6 +6598,11 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
                 pindex->nChainTx = pindex->nTx;
             }
         }
+        const Consensus::Params &consensusParams = chainparams.GetConsensus();
+        if(fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
+            pindex->nChainTx = pindex->nTx;
+        }
+        
         if (pindex->IsValid(BlockValidity::TRANSACTIONS) &&
             (pindex->nChainTx || pindex->pprev == nullptr)) {
             setBlockIndexCandidates.insert(pindex);

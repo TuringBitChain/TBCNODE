@@ -273,6 +273,8 @@ static const uint64_t nMinDiskSpace = 52428800;
 extern bool fHavePruned;
 /** True if we're running in -prune mode. */
 extern bool fPruneMode;
+/** True if synchronization of node data prior to the TBC fork is skipped.*/
+extern bool fSkipTBCPreForkMode;
 /** Number of MiB of block files that we're trying to stay below. */
 extern uint64_t nPruneTarget;
 /** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of
