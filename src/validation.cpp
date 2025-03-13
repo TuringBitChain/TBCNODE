@@ -70,6 +70,8 @@
 
 using namespace mining;
 
+#define TBC_FORK_BLOCK_HEIGHT 824189
+
 /**
  * Global state
  */
@@ -85,7 +87,7 @@ bool fReindex = false;
 bool fTxIndex = false;
 bool fHavePruned = false;
 bool fPruneMode = false;
-bool fSkipTBCPreForkMode = false;
+bool fPruneBlocksMode = false;
 bool fIsBareMultisigStd = DEFAULT_PERMIT_BAREMULTISIG;
 bool fRequireStandard = true;
 bool fCheckBlockIndex = false;
@@ -3780,12 +3782,12 @@ static bool ConnectBlock(
     const Consensus::Params &consensusParams =
             config.GetChainParams().GetConsensus();
     assert(hashPrevBlock == view.GetBestBlock() || 
-        (fSkipTBCPreForkMode && block.GetHash() == consensusParams.TBCFirstBlockHash));
+        (fPruneBlocksMode && block.GetHash() == consensusParams.TBCFirstBlockHash));
 
     // Special case for the genesis block, skipping connection of its
     // transactions (its coinbase is unspendable)
     if (block.GetHash() == consensusParams.hashGenesisBlock || 
-        (fSkipTBCPreForkMode && block.GetHash() == consensusParams.TBCFirstBlockHash)) {
+        (fPruneBlocksMode && block.GetHash() == consensusParams.TBCFirstBlockHash)) {
         if (!fJustCheck) {
             view.SetBestBlock(pindex->GetBlockHash());
         }
@@ -4605,7 +4607,7 @@ static bool ConnectTip(
     const Consensus::Params &consensusParams =
         config.GetChainParams().GetConsensus();
     assert(pindexNew->pprev == chainActive.Tip() || 
-        (fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHash == pblock->GetHash()));
+        (fPruneBlocksMode && consensusParams.TBCFirstBlockHash == pblock->GetHash()));
     // Read block from disk.
     int64_t nTime1 = GetTimeMicros();
     std::shared_ptr<const CBlock> pthisBlock;
@@ -4769,7 +4771,7 @@ static CBlockIndex *FindMostWorkChain() {
                 fInvalidAncestor = true;
                 break;
             }
-            if (fSkipTBCPreForkMode && 824189 == pindexTest->nHeight) {
+            if (fPruneBlocksMode && TBC_FORK_BLOCK_HEIGHT == pindexTest->nHeight) {
                 break;
             }
             pindexTest = pindexTest->pprev;
@@ -4839,7 +4841,7 @@ static bool ActivateBestChainStep(
             int nTargetHeight = std::min(nHeight + 32, pindexMostWork->nHeight);
             const Consensus::Params &consensusParams =
                 config.GetChainParams().GetConsensus();
-            if(fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHeight == pindexMostWork->nHeight){
+            if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindexMostWork->nHeight){
                 nTargetHeight = consensusParams.TBCFirstBlockHeight;
                 nHeight = consensusParams.TBCFirstBlockHeight - 1;
             }
@@ -5579,7 +5581,7 @@ static bool ReceivedBlockTransactions(
     pindexNew->SetDiskBlockData(block.vtx.size(), pos, metaData);
     setDirtyBlockIndex.insert(pindexNew);
 
-    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx || (fSkipTBCPreForkMode && 824189 == pindexNew->nHeight)) {
+    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx || (fPruneBlocksMode && TBC_FORK_BLOCK_HEIGHT == pindexNew->nHeight)) {
         // If pindexNew is the genesis block or all parents are
         // BLOCK_VALID_TRANSACTIONS.
         std::deque<CBlockIndex *> queue;
@@ -6599,7 +6601,7 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
             }
         }
         const Consensus::Params &consensusParams = chainparams.GetConsensus();
-        if(fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
+        if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
             pindex->nChainTx = pindex->nTx;
         }
         

@@ -649,7 +649,7 @@ void FindNextBlocksToDownload(NodeId nodeid, unsigned int count,
                 // We consider the chain that this peer is on invalid.
                 return;
             }
-            if (fSkipTBCPreForkMode && consensusParams.TBCFirstBlockHeight > pindex->nHeight) {
+            if (fPruneBlocksMode && consensusParams.TBCFirstBlockHeight > pindex->nHeight) {
                 state->pindexLastCommonBlock = pindex;
                 continue;
             }
