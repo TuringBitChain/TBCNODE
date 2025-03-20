@@ -317,6 +317,10 @@ const char* GetOpName(opcodetype opcode)
         return "OP_PUSH_META";
     case OP_PARTIAL_HASH:
         return "OP_PARTIAL_HASH";
+    case OP_CHECKDATASIG:
+        return "OP_CHECKDATASIG";
+    case OP_CHECKDATASIGVERIFY:
+        return "OP_CHECKDATASIGVERIFY";
 
     case OP_INVALIDOPCODE:
         return "OP_INVALIDOPCODE";
