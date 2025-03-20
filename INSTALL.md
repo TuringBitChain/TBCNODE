@@ -265,6 +265,10 @@ rpcpassword=randompasswd
 
 # Listen for RPC connections on this TCP port:
 rpcport=8332
+
+# The default value is 0, requesting all data. It can be set to option 824188 (not requesting block 
+# data from peer nodes for block 824188 and earlier).
+#pruneblocks=0
 EOF
 ```
 
