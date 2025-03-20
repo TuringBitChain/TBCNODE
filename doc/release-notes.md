@@ -1,7 +1,8 @@
-# TBCNODE software version 2.0.0 Release Notes
+# TBCNODE software version 3.1.1 Release Notes
 
 ## List of Changes
-* Many, see git diff
+* New milstone!
+* Add OP_CHECKDATASIG
 
 ## Scaling Test Network (STN) Reset
 N/A
@@ -20,3 +21,5 @@ N/A
 * [Version 1.0.5RC](release-notes-v1.0.5RC.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/598ad0124854abe9a8293735f51593d83b15a292)  
 * [Version 1.9.9](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/1f32b20c446f31ac07f12790e3ef7b3b27b3cfa6)  
 * [Version 2.0.0](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/a28b623d95852fa7d6246f41f74c990eebb4f4b8)  
+* [Version 3.0.0](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/b70ef9933d27607ce1f9b39ffeb99e0e185c16af)
+* [Version 3.1.0](release-notes.md) - [Source](https://github.com/TuringBitChain/TBCNODE/tree/eb9713b4095873fa9958a5e73177add76094a9e3)
