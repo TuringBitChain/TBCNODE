@@ -81,7 +81,7 @@ rest=1\n\
 rpcservertimeout=120\n\
 \n\
 #start in background\n\
-daemon=1\n\
+daemon=0\n\
 \n\
 #Required Consensus Rules for Genesis\n\
 excessiveblocksize=10000000000 #10GB\n\
