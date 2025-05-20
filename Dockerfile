@@ -50,10 +50,13 @@ RUN apt-get update && apt-get install -y \
     libboost-thread-dev \
     libdb-dev \
     libdb++-dev \
-    npm \
+    curl \
+    ca-certificates \
     python3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install pm2 -g
+    && curl -fsSL https://deb.nodesource.com/setup_16.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install pm2 -g \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /TBCNODE
 
@@ -61,76 +64,33 @@ COPY --from=builder /TBCNODE/bin /TBCNODE/bin
 COPY --from=builder /TBCNODE/lib /TBCNODE/lib
 COPY --from=builder /TBCNODE/include /TBCNODE/include
 COPY --from=builder /TBCNODE/share /TBCNODE/share
+COPY node.conf /TBCNODE/node.conf
 
-RUN mkdir -p /TBCNODE/node_data_dir && \
-    echo '\
-##\n\
-## bitcoin.conf configuration file. Lines beginning with # are comments.\n\
-##\n\
-\n\
-#limitancestorcount=5\n\
-pruneblocks=824188\n\
-\n\
-rpcthreads=64\n\
-rpcworkqueue=256\n\
-\n\
-standalone=1\n\
-disablesafemode=1\n\
-minimumchainwork=0000000000000000000000000000000000000000000000000000000000000001\n\
-rest=1\n\
-rpcservertimeout=120\n\
-\n\
-#start in background\n\
-daemon=1\n\
-\n\
-#Required Consensus Rules for Genesis\n\
-excessiveblocksize=10000000000 #10GB\n\
-maxstackmemoryusageconsensus=100000000 #100MB\n\
-\n\
-#Mining\n\
-#biggest block size you want to mine\n\
-blockmaxsize=4000000000\n\
-blockassembler=journaling  #journaling is default as of 1.0.5\n\
-\n\
-#preload mempool\n\
-preload=1\n\
-\n\
-# Index all transactions, prune mode don\'t support txindex\n\
-txindex=1\n\
-\n\
-#testnet=1\n\
-\n\
-#Other Sys\n\
-maxmempool=6000\n\
-dbcache=1000\n\
-\n\
-#connect=0\n\
-maxconnections=8\n\
-\n\
-# JSON-RPC options\n\
-server=1\n\
-rpcbind=0.0.0.0\n\
-rpcallowip=0.0.0.0/0\n\
-rpcuser=tbcuser\n\
-rpcpassword=randompasswd\n\
-rpcport=8332\n\
-port=8333\n\
-\n\
-#Other Block\n\
-threadsperblock=6\n\
-\n\
-#Other Tx Conf:\n\
-maxscriptsizepolicy=0\n\
-blockmintxfee=0.000060\n\
-' > /TBCNODE/node.conf
+RUN mkdir -p /TBCNODE/node_data_dir
 
-RUN echo '#!/bin/bash\n\
-pm2 --name tbcd --max-restarts 20 start "/TBCNODE/bin/bitcoind -conf=/TBCNODE/node.conf -datadir=/TBCNODE/node_data_dir"\n\
-pm2 logs\n\
-' > /TBCNODE/start.sh && \
-    chmod +x /TBCNODE/start.sh
+COPY start.sh /TBCNODE/start.sh
+RUN chmod +x /TBCNODE/start.sh
 
+# 暴露RPC和P2P端口
 EXPOSE 8332
 EXPOSE 8333
 
+# 为了防止配置文件换行符问题，确保配置文件使用Unix格式
+RUN apt-get update && apt-get install -y dos2unix && \
+    dos2unix /TBCNODE/node.conf && \
+    dos2unix /TBCNODE/start.sh && \
+    apt-get remove -y dos2unix && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* && \
+    # 确保数据目录有正确的权限
+    mkdir -p /TBCNODE/node_data_dir/blocks /TBCNODE/node_data_dir/chainstate && \
+    chmod -R 755 /TBCNODE/node_data_dir
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -s --data-binary '{"jsonrpc": "1.0", "id":"healthcheck", "method": "getblockcount", "params": [] }' \
+    -H 'content-type: text/plain;' http://tbcuser:randompasswd@127.0.0.1:8332/ || exit 1
+
+# 设置默认启动命令
+ENTRYPOINT ["/bin/bash", "-c"]
 CMD ["/TBCNODE/start.sh"] 
