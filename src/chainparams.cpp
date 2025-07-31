@@ -104,9 +104,10 @@ public:
         consensus.CSVHeight = 419328;
         consensus.powLimit = uint256S(
             "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        consensus.TBCFirstBlockHeight = 824189;
+        consensus.TBCFirstBlockHeight = 824190;
         consensus.TBCFirstBlockHash = uint256S(
-            "000000008cbb162a198ea6d21c2bff298d5cfed1f93454f616fa43a36290d710");
+            "0000000058968601042df9b0d57e41b092c76d6f91f333dc231cdd4cc4fd861d");
+
         // two weeks
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
         consensus.nPowTargetSpacing = 10 * 60;
