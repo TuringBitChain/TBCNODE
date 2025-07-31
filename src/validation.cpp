@@ -70,7 +70,7 @@
 
 using namespace mining;
 
-#define TBC_FORK_BLOCK_HEIGHT 824189
+#define TBC_FORK_BLOCK_HEIGHT 824190
 
 /**
  * Global state
