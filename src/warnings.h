@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <cstdint>
 
 enum class SafeModeLevel : uint32_t
 {

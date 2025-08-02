@@ -25,6 +25,28 @@ cd boost_1_66_0
 ./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
 ```
 
+For Ubuntu 24.04 LTS:
+```
+# Install basic build dependencies
+sudo apt-get update
+sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
+
+# Install Objective-C++ support (required for Ubuntu 24.04)
+sudo apt-get install gobjc++ gcc-objc++
+
+# Install Berkeley DB
+sudo apt-get install libdb-dev libdb++-dev
+
+# Install additional libraries
+sudo apt-get install libzmq3-dev libminiupnpc-dev libnatpmp-dev
+
+# Remove newer Boost versions if installed
+sudo apt-get remove libboost*-dev
+
+# Install Boost 1.74 (compatible version for Ubuntu 24.04)
+sudo apt-get install libboost1.74-dev libboost-system1.74-dev libboost-filesystem1.74-dev libboost-chrono1.74-dev libboost-program-options1.74-dev libboost-test1.74-dev libboost-thread1.74-dev
+```
+
 For Mac OSX 13.1 with Xcode and brew installed:
 ```
 brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
@@ -57,6 +79,15 @@ For UBUNTU 22.04 LTS:
 CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --prefix=/home/$USER/TBCNODE   --with-boost=/home/.../boost-1.66.0 
 ```
 
+For UBUNTU 24.04 LTS:
+```bash
+# Clean previous build if needed
+make clean
+
+# Configure with Boost 1.74
+CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --with-boost=/usr --prefix=/home/$USER/TBCNODE
+```
+
 For Mac OSX 13.1:
 ```bash
 ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --with-boost=/opt/homebrew/opt/boost@1.76
@@ -80,8 +111,8 @@ CPPFLAGS=" -I/opt/homebrew/Cellar/libevent/2.1.12_1"  ./configure ...
 ### Finally
 
 ```bash
-make -j 8
-make install  # optional: install bin file to the path specified by --prefix=
+make -j$(nproc)  # Use all available CPU cores for faster compilation
+make install     # optional: install bin file to the path specified by --prefix=
 ```
 
 
