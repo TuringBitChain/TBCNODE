@@ -1,0 +1,112 @@
+# Multi-stage build: compile stage + runtime stage
+# First stage: build environment
+FROM ubuntu:24.04 AS builder
+
+# Set non-interactive mode
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libtool \
+    autotools-dev \
+    automake \
+    pkg-config \
+    libssl-dev \
+    libevent-dev \
+    bsdmainutils \
+    libdb-dev \
+    libdb++-dev \
+    libzmq3-dev \
+    libminiupnpc-dev \
+    libnatpmp-dev \
+    libboost1.74-dev \
+    libboost-system1.74-dev \
+    libboost-filesystem1.74-dev \
+    libboost-chrono1.74-dev \
+    libboost-program-options1.74-dev \
+    libboost-test1.74-dev \
+    libboost-thread1.74-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Build
+RUN ./autogen.sh && \
+    CXXFLAGS="-std=c++17" ./configure \
+        --enable-cxx \
+        --disable-shared \
+        --with-pic \
+        --enable-prod-build \
+        --disable-static \
+        --disable-tests \
+        --disable-bench \
+        --with-libs=no \
+        --with-seeder=no \
+        --with-boost=/usr && \
+    make -j$(nproc)
+
+# Second stage: runtime environment
+FROM ubuntu:24.04
+
+# Set non-interactive mode
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libssl3t64 \
+    libevent-2.1-7t64 \
+    libevent-pthreads-2.1-7t64 \
+    libdb5.3++ \
+    libzmq5 \
+    libminiupnpc17 \
+    libnatpmp1 \
+    libboost-system1.74.0 \
+    libboost-filesystem1.74.0 \
+    libboost-chrono1.74.0 \
+    libboost-program-options1.74.0 \
+    libboost-thread1.74.0 \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Use existing ubuntu user (UID 1000), rename to bitcoin
+RUN usermod -l bitcoin ubuntu && \
+    groupmod -n bitcoin ubuntu && \
+    usermod -d /home/bitcoin -m bitcoin
+
+# Copy binary files from build stage
+COPY --from=builder /build/src/bitcoind /usr/local/bin/
+COPY --from=builder /build/src/bitcoin-cli /usr/local/bin/
+COPY --from=builder /build/src/bitcoin-tx /usr/local/bin/
+COPY --from=builder /build/src/bitcoin-seeder /usr/local/bin/
+COPY --from=builder /build/src/bitcoin-miner /usr/local/bin/
+
+# Set execution permissions
+RUN chmod +x /usr/local/bin/bitcoin*
+
+# Create data directory
+RUN mkdir -p /home/bitcoin/.bitcoin && \
+    chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
+
+# Switch to bitcoin user
+USER bitcoin
+WORKDIR /home/bitcoin
+
+# Expose ports
+EXPOSE 8333 8332
+
+# Data volume
+VOLUME ["/home/bitcoin/.bitcoin"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD bitcoin-cli -rpcuser=bitcoin -rpcpassword=bitcoin123 getblockchaininfo || exit 1
+
+# Flexible startup: use config file if available, otherwise use default parameters
+CMD ["sh", "-c", "if [ -f /home/bitcoin/.bitcoin/bitcoin.conf ]; then bitcoind -printtoconsole=1; else bitcoind -printtoconsole=1 -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -rpcuser=bitcoin -rpcpassword=bitcoin123 -excessiveblocksize=10000000000 -maxstackmemoryusageconsensus=100000000; fi"]
