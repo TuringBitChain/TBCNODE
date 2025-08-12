@@ -3786,13 +3786,22 @@ static bool ConnectBlock(
 
     // Special case for the genesis block, skipping connection of its
     // transactions (its coinbase is unspendable)
-    if (block.GetHash() == consensusParams.hashGenesisBlock || 
-        (fPruneBlocksMode && block.GetHash() == consensusParams.TBCFirstBlockHash)) {
+    if (block.GetHash() == consensusParams.hashGenesisBlock) {
         if (!fJustCheck) {
             view.SetBestBlock(pindex->GetBlockHash());
         }
-
         return true;
+    }
+    
+    // For TBC first block in pruneblocks mode, we want to process it normally
+    // but we need to handle the case where there's no previous block
+    if (fPruneBlocksMode && block.GetHash() == consensusParams.TBCFirstBlockHash) {
+        // Set the best block to the TBC first block hash to establish the chain
+        if (!fJustCheck) {
+            view.SetBestBlock(pindex->GetBlockHash());
+        }
+        // Continue with normal processing instead of returning early
+        LogPrintf("Processing TBC first block (height %d) with normal validation\n", pindex->nHeight);
     }
 
     bool fScriptChecks = true;
@@ -6599,10 +6608,6 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
             } else {
                 pindex->nChainTx = pindex->nTx;
             }
-        }
-        const Consensus::Params &consensusParams = chainparams.GetConsensus();
-        if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
-            pindex->nChainTx = pindex->nTx;
         }
         
         if (pindex->IsValid(BlockValidity::TRANSACTIONS) &&
