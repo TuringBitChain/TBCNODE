@@ -6609,10 +6609,16 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
                 pindex->nChainTx = pindex->nTx;
             }
         }
-        
-        if (pindex->IsValid(BlockValidity::TRANSACTIONS) &&
-            (pindex->nChainTx || pindex->pprev == nullptr)) {
-            setBlockIndexCandidates.insert(pindex);
+
+        const Consensus::Params &consensusParams = chainparams.GetConsensus();
+        if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
+            pindex->nChainTx = pindex->nTx;
+        }
+
+        if (pindex->IsValid(BlockValidity::TRANSACTIONS)){
+            if((pindex->nChainTx || pindex->pprev == nullptr)) {
+                setBlockIndexCandidates.insert(pindex);
+            }
         }
         if (pindex->nStatus.isInvalid() &&
             (!pindexBestInvalid ||
@@ -6628,6 +6634,7 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
             pindexBestHeader = pindex;
         }
     }
+    LogPrintf("Debug print log line:%d setBlockIndexCandidates size:%d \n",__LINE__,setBlockIndexCandidates.size());
 
     // Load block file info
     int nLastBlockFileLocal = 0;
@@ -6672,9 +6679,10 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
 }
 
 void LoadChainTip(const CChainParams &chainparams) {
-    if (chainActive.Tip() &&
-        chainActive.Tip()->GetBlockHash() == pcoinsTip->GetBestBlock()) {
-        return;
+    if (chainActive.Tip()){
+        if(chainActive.Tip()->GetBlockHash() == pcoinsTip->GetBestBlock()) {
+            return;
+        }
     }
 
     // Load pointer to end of best chain
