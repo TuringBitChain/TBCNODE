@@ -6634,7 +6634,6 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
             pindexBestHeader = pindex;
         }
     }
-    LogPrintf("Debug print log line:%d setBlockIndexCandidates size:%d \n",__LINE__,setBlockIndexCandidates.size());
 
     // Load block file info
     int nLastBlockFileLocal = 0;
