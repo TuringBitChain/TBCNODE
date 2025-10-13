@@ -641,12 +641,19 @@ bool FilledMinerBill(const CTransaction& tx)
         ifCheckChargeAddress = true;
     }
 
-    // get now height
-    uint8_t heightBits = 3;
+    // According to bip34, get current height.
+    if (chargeInputScript.size() < 1) {
+        return false;
+    }
+    uint8_t heightBits = chargeInputScript[0];
+    if (chargeInputScript.size() - 1 < heightBits) {
+        return false;
+    }
     std::vector<uint8_t> vecNowHeight;
-    for (uint8_t i = heightBits; i > 0; i--) {
+    for (uint8_t i = 1; i <= heightBits; i++) {
         vecNowHeight.push_back(chargeInputScript[i]);
     }
+    std::reverse(vecNowHeight.begin(), vecNowHeight.end());
 
    // get charge address script
    std::vector<uint8_t> chargeAddressScript;
@@ -662,7 +669,6 @@ bool FilledMinerBill(const CTransaction& tx)
     for (size_t i = 0; i < 33; i++) {
         pubkeyB[i] = chargeOutputScript[scriptSize++];
     }
-    LogPrintf("\n");
 
     // get sigA
     uint8_t sigALen = chargeOutputScript[scriptSize++];
@@ -765,11 +771,16 @@ bool FilledMinerBill(const CTransaction& tx)
 
 void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 {
-    const CScript &chargeOutputScript = tx.vin[0].scriptSig;
+    const CScript &coinbaseInputScript = tx.vin[0].scriptSig;
+    if (coinbaseInputScript.size() < 1) {
+        std::stringstream error_message;
+        error_message << "the coinbase signature script for blocks of version 2 or greater must start with the length of the serialized block height";
+        throw std::runtime_error(error_message.str());
+    }
 
-    uint8_t numlen = chargeOutputScript[0];
+    uint8_t numlen = coinbaseInputScript[0];
     // Get length of height number
-    if (chargeOutputScript.empty()) {
+    if (coinbaseInputScript.empty()) {
         throw std::runtime_error("Empty coinbase scriptSig");
     }
     // Parse height as CScriptNum
@@ -780,13 +791,13 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
         scriptSigHeight = numlen - OP_1 + 1;
     }
     else{
-        if (chargeOutputScript.size() - 1 < (uint64_t)numlen){
+        if (coinbaseInputScript.size() - 1 < (uint64_t)numlen){
             std::stringstream error_message;
-            error_message << "Badly formatted height in coinbase!chargeOutputScript size:" << chargeOutputScript.size() << " numlen:" << (uint64_t)numlen;
+            error_message << "Badly formatted height in coinbase!coinbaseInputScript size:" << coinbaseInputScript.size() << " numlen:" << (uint64_t)numlen;
             throw std::runtime_error(error_message.str());
         }
         std::vector<unsigned char> heightScript(numlen);
-        copy(chargeOutputScript.begin() + 1, chargeOutputScript.begin() + 1 + numlen, heightScript.begin());
+        copy(coinbaseInputScript.begin() + 1, coinbaseInputScript.begin() + 1 + numlen, heightScript.begin());
         CScriptNum coinbaseHeight(heightScript, false, numlen);
         scriptSigHeight = coinbaseHeight.getint();
     }
