@@ -716,13 +716,18 @@ std::optional<bool> EvalScript(
                             } else {
                                 CSHA256().Write(vch.GetElement().data(), vch.size()).Finalize(vchHash.data());
                             }
-                        } else {
-                            size_t partHashSize = static_cast<size_t>(vchSizeUint64 - remainVchSizeUint64);
+                        } else if (vchPartHash.size() == 32) {
+                            if (vchSizeUint64 < remainVchSizeUint64) {
+                                return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
+                            uint64_t partHashSize = vchSizeUint64 - remainVchSizeUint64;
                             uint8_t partHashSizeArray[8];
                             WriteLE64(partHashSizeArray, partHashSize);
                             CSHA256(vchPartHash.GetElement().data(), partHashSizeArray)
                             .Write(vch.GetElement().data(), vch.size())
                             .Finalize(vchHash.data());
+                        } else {
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
                         stack.push_back(vchHash);
 
