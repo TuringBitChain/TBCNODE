@@ -228,14 +228,14 @@ uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
     return ss.GetHash();
 }
 /** Compute the 256-bit hash of an object's serialization. */
-template <typename T>
-uint256 SerializeSingleHash(const T &obj, int nType = SER_GETHASH,
-                      int nVersion = PROTOCOL_VERSION) {
-    //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
-    CHashWriter ss(nType, nVersion);
-    ss.write( (char *) obj, obj.size() );
-    return ss.GetSingleHash();
-}
+// template <typename T>
+// uint256 SerializeSingleHash(const T &obj, int nType = SER_GETHASH,
+//                       int nVersion = PROTOCOL_VERSION) {
+//     //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
+//     CHashWriter ss(nType, nVersion);
+//     ss.write( (char *) obj, obj.size() );
+//     return ss.GetSingleHash();
+// }
 /** Compute the 256-bit hash of an object's serialization. */
 template <typename T>
 uint256 SerializeSingleHash_OpNoCSize(const T &obj, int nType = SER_GETHASH,
