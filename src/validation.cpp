@@ -807,6 +807,9 @@ bool FilledMinerBill(const CTransaction& tx)
 
 void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 {
+    if (tx.vin.empty()) {
+        throw std::runtime_error("Empty vin in transaction when parsing coinbase scriptSig");
+    }
     const CScript &coinbaseInputScript = tx.vin[0].scriptSig;
     if (coinbaseInputScript.size() < 1) {
         std::stringstream error_message;
