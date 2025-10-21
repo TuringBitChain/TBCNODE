@@ -279,7 +279,7 @@ uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
             //SerReadWrite_OpNoCSize(ss_in_unlock_one, iin.scriptSig, CSerActionSerialize() );
             //ss_in_unlock << ss_in_unlock_one.GetSingleHash();
             //ss_in_unlock << SerializeHash( iin.scriptSig, SER_GETHASH, 0); 
-            ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, SER_GETHASH, 0 );
+            ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, nType, nVersion);
         }
         hash_ss_in = ss_in.GetSingleHash();
         // cout << "TuringTXID TxSerializeHash: ss_in.GetSingleHash().GetHex() :" << hash_ss_in.GetHex() << endl;  //zws        
