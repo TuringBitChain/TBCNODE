@@ -50,7 +50,10 @@
 #include "blockfileinfostore.h"
 #include "time_consuming.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <sstream>
 
 #include <boost/algorithm/string/join.hpp>
@@ -63,6 +66,7 @@
 #include "script/script_num.h"
 #include <key.h>
 #include <pubkey.h>
+#include <vector>
 
 #if defined(NDEBUG)
 #error "Bitcoin cannot be compiled without assertions."
@@ -609,81 +613,113 @@ static bool CheckTransactionCommon(const CTransaction& tx,
     return true;
 }
 
+bool safeReadScript(const CScript& script, uint64_t& index, const uint64_t readLength, vector<uint8_t>& res) {
+    const uint64_t scriptSize = script.size();
+
+    if (index >= scriptSize) return false;
+    if (readLength > scriptSize - index) return false;
+
+    for (uint64_t i = 0; i < readLength; i++) {
+        res.push_back(script[index++]);
+    }
+    return true;
+}
+
+uint64_t vectorBEtoU64(const vector<uint8_t>& bytes) {
+    if (bytes.size() > 8) return 0;
+
+    uint64_t res = 0;
+    for (auto b : bytes) {
+        res = (res << 8) | static_cast<uint64_t>(b);
+    }
+    return res;
+}
+
+uint64_t vectorLEtoU64(const vector<uint8_t>& bytes) {
+    if (bytes.size() > 8) return 0;
+
+    uint64_t res = 0;
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        res |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+    }
+    return res;
+}
+
 bool FilledMinerBill(const CTransaction& tx)
 {
     const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
     const CScript &chargeInputScript = tx.vin[0].scriptSig;
+    uint64_t inputScriptIndex = 0;
+    uint64_t outputScriptIndex = 0;
 
     if (chargeOutputScript.empty() || chargeInputScript.empty()) throw std::runtime_error("Empty coinbase charge input/output script");
 
-    if (chargeOutputScript.size() < 130) {
-        LogPrintf("unsatisfied chargeOutputScript length.\n");
-        return false;
-    }
     // default pubkeyA
     std::vector<uint8_t> pubkeyA = {0x03, 0x18, 0xa2, 0x74, 0x33, 0x7b, 0x8f, 0x52, 0x72, 0x6e,
                                     0xe6, 0x08, 0x0e, 0x64, 0x32, 0xa6, 0x43, 0xdb, 0xaf, 0xfd,
                                     0x8f, 0x18, 0x3c, 0x5b, 0x52, 0x33, 0x8a, 0xcf, 0xa9, 0x0c,
                                     0xd9, 0x2f, 0x43};
 
-    // get script data
-    uint8_t scriptSize = 26;
+    // get script data. skip 26 bytes of P2PKH+op_return.
+    outputScriptIndex += 26;
 
     // get KYC flag
-    std::vector<uint8_t> vecKycFlag;
-    vecKycFlag.resize(3);
-    vecKycFlag[0] = chargeOutputScript[scriptSize++];
-    vecKycFlag[1] = chargeOutputScript[scriptSize++];
-    vecKycFlag[2] = chargeOutputScript[scriptSize++];
-
+    std::vector<uint8_t> kycFlagVec;
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 3, kycFlagVec)) {
+        return false;
+    }
     bool ifCheckChargeAddress = false;
-    if (vecKycFlag[0] == 0x4C && vecKycFlag[2] == 0x01) {
+    if (kycFlagVec[0] == 0x4C && kycFlagVec[2] == 0x01) {
         ifCheckChargeAddress = true;
     }
 
-    // get now height
-    uint8_t heightBits = 3;
-    std::vector<uint8_t> vecNowHeight;
-    for (uint8_t i = heightBits; i > 0; i--) {
-        vecNowHeight.push_back(chargeInputScript[i]);
+    // According to bip34, get current block height.
+    vector<uint8_t> blockHeightLengthVec;
+    if (!safeReadScript(chargeInputScript, inputScriptIndex, 1, blockHeightLengthVec)) {
+        return false;
+    }
+    uint64_t blockHeightLength = vectorLEtoU64(blockHeightLengthVec); // in fact blockHeightLengthVec.size() == 1.
+    vector<uint8_t> currentBlockHeightVec;
+    if (!safeReadScript(chargeInputScript, inputScriptIndex, blockHeightLength, currentBlockHeightVec)) {
+        return false;
     }
 
-   // get charge address script
-   std::vector<uint8_t> chargeAddressScript;
-    for (size_t i = 3; i < 23; i++)
-    {
-        chargeAddressScript.push_back(chargeOutputScript[i]);
+    // get charge address script
+    std::vector<uint8_t> chargeAddressScript;
+    uint64_t chargeAddressIndex = 3;
+    if (!safeReadScript(chargeOutputScript, chargeAddressIndex, 20, chargeAddressScript)) {
+            return false;
     }
     
-
     // get pubkeyB
     std::vector<uint8_t> pubkeyB;   
-    pubkeyB.resize(33);
-    for (size_t i = 0; i < 33; i++) {
-        pubkeyB[i] = chargeOutputScript[scriptSize++];
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 33, pubkeyB)) {
+        return false;
     }
-    LogPrintf("\n");
 
     // get sigA
-    uint8_t sigALen = chargeOutputScript[scriptSize++];
-    if (sigALen < 70) {
+    vector<uint8_t> sigALenVec;
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, sigALenVec)) {
+        return false;
+    }
+    uint64_t sigALen = vectorLEtoU64(sigALenVec);
+    if (sigALen < 4) {
         return false;
     }
     std::vector<uint8_t> sigA;
-    sigA.resize(sigALen - 4);
-    for (size_t i = 0; i < sigALen - 4; i++) {
-        sigA[i] = chargeOutputScript[scriptSize++];
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, sigALen - 4, sigA)) {
+        return false;
     }
 
     std::vector<uint8_t> vecPermissionHeight;
-    vecPermissionHeight.resize(3);
-    vecPermissionHeight[0] = chargeOutputScript[scriptSize++];
-    vecPermissionHeight[1] = chargeOutputScript[scriptSize++];
-    vecPermissionHeight[2] = chargeOutputScript[scriptSize++];
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 3, vecPermissionHeight)) {
+        return false;
+    }
 
     // ensure permissin is still validate
-    uint32_t perHeight = vecPermissionHeight[0] * 256 * 256 + vecPermissionHeight[1] * 256 + vecPermissionHeight[2];
-    uint32_t nowHeight = vecNowHeight[0] * 256 * 256 + vecNowHeight[1] * 256 + vecNowHeight[2];
+    uint64_t perHeight = vectorBEtoU64(vecPermissionHeight);
+    uint64_t nowHeight = vectorLEtoU64(currentBlockHeightVec);
+
     if (perHeight < nowHeight) {
         LogPrintf("The invoice of this block is overdue !!! (%d < %d) \n", perHeight, nowHeight);
         return false;
@@ -693,7 +729,11 @@ bool FilledMinerBill(const CTransaction& tx)
     }
 
     // ensure coinbase fees are within the permitted range. 
-    uint8_t minerFeeRate = chargeOutputScript[scriptSize++];
+    vector<uint8_t> minerFeeRateVec;
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, minerFeeRateVec)) {
+        return false;
+    }
+    uint64_t minerFeeRate = vectorLEtoU64(minerFeeRateVec);
     uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
     uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
     if (coinbaseFee < lowestLimitCoinbaseFee) {
@@ -703,36 +743,38 @@ bool FilledMinerBill(const CTransaction& tx)
 
     // get sigB
     std::vector<uint8_t> sigB;
-    uint8_t sigBLen;
+    std::vector<uint8_t> sigBLenVec;
+    uint64_t sigBLen;
     if (ifCheckChargeAddress == true) {
         // get sigB from inputScript
-        sigBLen = chargeInputScript[4];
-        if (sigBLen < 68) {
+        if (!safeReadScript(chargeInputScript, inputScriptIndex, 1, sigBLenVec)) {
             return false;
         }
-        for (uint8_t i = 0; i < sigBLen; i++) {
-            sigB.push_back(chargeInputScript[i + 5]);
+        sigBLen = vectorLEtoU64(sigBLenVec);
+        if (!safeReadScript(chargeInputScript, inputScriptIndex, sigBLen, sigB)) {
+            return false;
         }
     } else {
         // get sigB from outputScript
-        sigBLen = chargeOutputScript[scriptSize++];
-        if (sigBLen < 68) {
+        if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, sigBLenVec)) {
             return false;
         }
-        for (size_t i = 0; i < sigBLen; i++) {
-            sigB.push_back(chargeOutputScript[scriptSize++]);
+        sigBLen = vectorLEtoU64(sigBLenVec);
+        if (!safeReadScript(chargeOutputScript, outputScriptIndex, sigBLen, sigB)) {
+            return false;
         }
     }
 
-    CPubKey *cPubkeyA = new CPubKey(pubkeyA.begin(), pubkeyA.end());
-    CPubKey *cPubkeyB = new CPubKey(pubkeyB.begin(), pubkeyB.end());
+    CPubKey cPubkeyA(pubkeyA.begin(), pubkeyA.end());
+    CPubKey cPubkeyB(pubkeyB.begin(), pubkeyB.end());
 
     // get message and hash
-    uint256 TMsgBHash = Hash(vecNowHeight.begin(), vecNowHeight.end());
+    std::reverse(currentBlockHeightVec.begin(), currentBlockHeightVec.end());
+    uint256 TMsgBHash = Hash(currentBlockHeightVec.begin(), currentBlockHeightVec.end());
 
     std::vector<uint8_t> TMsgA;
-    for (auto a = cPubkeyB->begin(); a != cPubkeyB->end(); a++) {
-        TMsgA.push_back(*a);
+    for (auto it = cPubkeyB.begin(); it != cPubkeyB.end(); ++it) {
+        TMsgA.push_back(*it);
     }
     for (auto a : vecPermissionHeight) {
         TMsgA.push_back(a);
@@ -748,9 +790,9 @@ bool FilledMinerBill(const CTransaction& tx)
 
     uint256 TMsgAHash = Hash(TMsgA.begin(), TMsgA.end());
 
-    bool ret = cPubkeyB->Verify(TMsgBHash, sigB);
+    bool ret = cPubkeyB.Verify(TMsgBHash, sigB);
     if (ret) {
-        ret = cPubkeyA->Verify(TMsgAHash, sigA);
+        ret = cPubkeyA.Verify(TMsgAHash, sigA);
         if (ret) {
             return true;
         } else {
@@ -765,11 +807,19 @@ bool FilledMinerBill(const CTransaction& tx)
 
 void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 {
-    const CScript &chargeOutputScript = tx.vin[0].scriptSig;
+    if (tx.vin.empty()) {
+        throw std::runtime_error("Empty vin in transaction when parsing coinbase scriptSig");
+    }
+    const CScript &coinbaseInputScript = tx.vin[0].scriptSig;
+    if (coinbaseInputScript.size() < 1) {
+        std::stringstream error_message;
+        error_message << "the coinbase signature script for blocks of version 2 or greater must start with the length of the serialized block height";
+        throw std::runtime_error(error_message.str());
+    }
 
-    uint8_t numlen = chargeOutputScript[0];
+    uint8_t numlen = coinbaseInputScript[0];
     // Get length of height number
-    if (chargeOutputScript.empty()) {
+    if (coinbaseInputScript.empty()) {
         throw std::runtime_error("Empty coinbase scriptSig");
     }
     // Parse height as CScriptNum
@@ -780,13 +830,13 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
         scriptSigHeight = numlen - OP_1 + 1;
     }
     else{
-        if (chargeOutputScript.size() - 1 < (uint64_t)numlen){
+        if (coinbaseInputScript.size() - 1 < (uint64_t)numlen){
             std::stringstream error_message;
-            error_message << "Badly formatted height in coinbase!chargeOutputScript size:" << chargeOutputScript.size() << " numlen:" << (uint64_t)numlen;
+            error_message << "Badly formatted height in coinbase!coinbaseInputScript size:" << coinbaseInputScript.size() << " numlen:" << (uint64_t)numlen;
             throw std::runtime_error(error_message.str());
         }
         std::vector<unsigned char> heightScript(numlen);
-        copy(chargeOutputScript.begin() + 1, chargeOutputScript.begin() + 1 + numlen, heightScript.begin());
+        copy(coinbaseInputScript.begin() + 1, coinbaseInputScript.begin() + 1 + numlen, heightScript.begin());
         CScriptNum coinbaseHeight(heightScript, false, numlen);
         scriptSigHeight = coinbaseHeight.getint();
     }
