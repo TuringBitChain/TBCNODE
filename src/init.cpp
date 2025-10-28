@@ -2000,6 +2000,16 @@ bool AppInitParameterInteraction(Config &config) {
         fPruneMode = true;
     }
 
+    int64_t nSkip = gArgs.GetArg("-pruneblocks", 0);
+    if(nSkip == 0) {
+        fPruneBlocksMode = false;
+    } else if(nSkip == 824188) {
+        fPruneBlocksMode = true;
+    } else {
+        return InitError(
+            strprintf("The configuration value of pruneblocks is not currently supported"));
+    }
+
     if(std::string err; !config.SetMaxStdTxnValidationDuration(
         gArgs.GetArg(
             "-maxstdtxvalidationduration",

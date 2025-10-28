@@ -25,6 +25,28 @@ cd boost_1_66_0
 ./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
 ```
 
+For Ubuntu 24.04 LTS:
+```
+# Install basic build dependencies
+sudo apt-get update
+sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
+
+# Install Objective-C++ support (required for Ubuntu 24.04)
+sudo apt-get install gobjc++ gcc-objc++
+
+# Install Berkeley DB
+sudo apt-get install libdb-dev libdb++-dev
+
+# Install additional libraries
+sudo apt-get install libzmq3-dev libminiupnpc-dev libnatpmp-dev
+
+# Remove newer Boost versions if installed
+sudo apt-get remove libboost*-dev
+
+# Install Boost 1.74 (compatible version for Ubuntu 24.04)
+sudo apt-get install libboost1.74-dev libboost-system1.74-dev libboost-filesystem1.74-dev libboost-chrono1.74-dev libboost-program-options1.74-dev libboost-test1.74-dev libboost-thread1.74-dev
+```
+
 For Mac OSX 13.1 with Xcode and brew installed:
 ```
 brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
@@ -57,6 +79,15 @@ For UBUNTU 22.04 LTS:
 CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --prefix=/home/$USER/TBCNODE   --with-boost=/home/.../boost-1.66.0 
 ```
 
+For UBUNTU 24.04 LTS:
+```bash
+# Clean previous build if needed
+make clean
+
+# Configure with Boost 1.74
+CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --with-boost=/usr --prefix=/home/$USER/TBCNODE
+```
+
 For Mac OSX 13.1:
 ```bash
 ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --with-boost=/opt/homebrew/opt/boost@1.76
@@ -80,8 +111,8 @@ CPPFLAGS=" -I/opt/homebrew/Cellar/libevent/2.1.12_1"  ./configure ...
 ### Finally
 
 ```bash
-make -j 8
-make install  # optional: install bin file to the path specified by --prefix=
+make -j$(nproc)  # Use all available CPU cores for faster compilation
+make install     # optional: install bin file to the path specified by --prefix=
 ```
 
 
@@ -265,6 +296,10 @@ rpcpassword=randompasswd
 
 # Listen for RPC connections on this TCP port:
 rpcport=8332
+
+# The default value is 0, requesting all data. It can be set to option 824188 (not requesting block 
+# data from peer nodes for block 824188 and earlier).
+#pruneblocks=0
 EOF
 ```
 
@@ -282,6 +317,63 @@ tbc-cli  listaccounts
 tbc-cli  getaddressesbyaccount
 tbc-cli  stop
 (For developing or test, one may need to start bitcoind with -standalone, such as ".../bitcoind -conf=... -datadir=... -standalone" )
+```
+
+
+#### Docker Deployment
+
+Docker deployment provides a containerized solution that doesn't require installing dependencies on the host system.
+
+**Prerequisites:**
+- Docker installed on your system
+- No need to install build dependencies or compile from source
+
+**Build Bitcoin Node Image:**
+```bash
+# Build the Bitcoin node Docker image (includes compilation)
+sudo docker build -f Dockerfile-node -t bitcoin-node .
+```
+
+**Run Bitcoin Node:**
+```bash
+sudo docker run -d --name bitcoin-node \
+  -p 8332:8332 -p 8333:8333 \
+  -v /home/$USER/TBCNODE/node_data_dir:/home/bitcoin/.bitcoin \
+  -v /home/$USER/TBCNODE/node.noprune.conf:/home/bitcoin/.bitcoin/bitcoin.conf:ro \
+  bitcoin-node
+```
+
+**Manage Docker Node:**
+```bash
+# View logs
+sudo docker logs -f bitcoin-node
+
+# Execute RPC commands
+sudo docker exec bitcoin-node bitcoin-cli -rpcuser=username -rpcpassword=randompasswd getinfo
+sudo docker exec bitcoin-node bitcoin-cli -rpcuser=username -rpcpassword=randompasswd getblockchaininfo
+
+# Stop/Start/Restart node
+sudo docker stop bitcoin-node
+sudo docker start bitcoin-node
+sudo docker restart bitcoin-node
+
+# Remove container (data in volume is preserved)
+sudo docker rm bitcoin-node
+```
+
+**Build Documentation (Optional):**
+```bash
+# Build documentation Docker image
+sudo docker build -f Dockerfile-doxygen -t bitcoin-docs .
+
+# Generate and serve documentation (accessible at http://localhost:8080)
+sudo docker run -d --name bitcoin-docs -p 8080:80 bitcoin-docs
+
+# View documentation logs
+sudo docker logs bitcoin-docs
+
+# Stop documentation server
+sudo docker stop bitcoin-docs && sudo docker rm bitcoin-docs
 ```
 
 

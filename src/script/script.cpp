@@ -134,7 +134,7 @@ bool IsP2SH(const bsv::span<const uint8_t> script) {
            script[1] == 0x14 && script[22] == OP_EQUAL;
 }
 
-bool IsP2PKH(bsv::span<const uint8_t> script) {
+bool IsExtendedP2PKH(bsv::span<const uint8_t> script) {
     return script.size() > 26 && script[0] == OP_DUP && script[1] == OP_HASH160 &&
             script[2] == 0x14 && script[23] == OP_EQUALVERIFY && script[24] == OP_CHECKSIG && script[25] == OP_RETURN;
 }
