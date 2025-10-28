@@ -143,6 +143,9 @@ enum opcodetype
     OP_NOP10 = 0xb9,
     OP_PUSH_META=0xba,
     OP_PARTIAL_HASH=0xbb,
+    OP_CHECKDATASIG = 0xbc,
+    OP_CHECKDATASIGVERIFY = 0xbd,
+    
     // The first op_code value after all defined opcodes
     FIRST_UNDEFINED_OP_VALUE,
 

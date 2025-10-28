@@ -309,6 +309,17 @@ static bool CheckPubKeyEncoding(const valtype &vchPubKey, uint32_t flags,
     return true;
 }
 
+static bool CheckSigFunction(const std::vector<uint8_t> &vchSigFuncFlag, uint32_t flags,
+                            ScriptError *serror) {
+    if (vchSigFuncFlag.size() != 1) {
+        return set_error(serror, SCRIPT_ERR_DATA_SIG_FUNCTION);
+    }
+    if (vchSigFuncFlag[0] == 01 || vchSigFuncFlag[0] == 0x02) {
+        return true;
+    }
+    return set_error(serror, SCRIPT_ERR_DATA_SIG_FUNCTION);
+}
+
 static bool CheckMinimalPush(const valtype &data, opcodetype opcode) {
     if (data.size() == 0) {
         // Could have used OP_0.
@@ -591,10 +602,10 @@ std::optional<bool> EvalScript(
                         }
                         // Get the top element of the stack
                         LimitedVector &vch = stack.stacktop(-1);
-                        if (vch.size() > 1) {
-                        return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
-                                    }
-                        if (vch.size() == 1&&(vch[0] <1 ||vch[0] >7)) {
+                        if (vch.size() != 1) {
+                            return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
+                        if (vch[0] <1 ||vch[0] >7) {
                             return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
                         //uint8_t condition = stack.stacktop(-1).GetElement().data();
@@ -652,7 +663,7 @@ std::optional<bool> EvalScript(
                         {
                                 valtype combinedResult;
                                 uint32_t temp32;
-                                uint8_t n =checker.GetnIn();
+                                unsigned int n =checker.GetnIn();
                                 result = tx->vin[n].prevout.GetTxId();
                                 valtype txidBytes(32);
                                 memcpy(txidBytes.data(), result.begin(), 32);
@@ -705,13 +716,18 @@ std::optional<bool> EvalScript(
                             } else {
                                 CSHA256().Write(vch.GetElement().data(), vch.size()).Finalize(vchHash.data());
                             }
-                        } else {
-                            size_t partHashSize = static_cast<size_t>(vchSizeUint64 - remainVchSizeUint64);
+                        } else if (vchPartHash.size() == 32) {
+                            if (vchSizeUint64 < remainVchSizeUint64) {
+                                return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
+                            uint64_t partHashSize = vchSizeUint64 - remainVchSizeUint64;
                             uint8_t partHashSizeArray[8];
                             WriteLE64(partHashSizeArray, partHashSize);
                             CSHA256(vchPartHash.GetElement().data(), partHashSizeArray)
                             .Write(vch.GetElement().data(), vch.size())
                             .Finalize(vchHash.data());
+                        } else {
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
                         stack.push_back(vchHash);
 
@@ -1491,6 +1507,49 @@ std::optional<bool> EvalScript(
                         }
                     } break;
 
+                    case OP_CHECKDATASIG:
+                    case OP_CHECKDATASIGVERIFY: {
+                        // (sig message pubkey -- bool)
+                        if (stack.size() < 4) {
+                            return set_error(
+                                serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
+
+                        LimitedVector &vchSig = stack.stacktop(-4);
+                        LimitedVector &vchMessage = stack.stacktop(-3);
+                        LimitedVector &vchPubKey = stack.stacktop(-2);
+                        LimitedVector &vchSigFuncFlag = stack.stacktop(-1);
+
+                        if (vchSig.size() == 0 ||
+                            !CheckPubKeyEncoding(vchPubKey.GetElement(), flags, serror) ||
+                            !CheckSigFunction(vchSigFuncFlag.GetElement(), flags, serror)) {
+                            // serror is set
+                            return false;
+                        }
+
+                        bool fSuccess = checker.CheckDataSig(vchSig.GetElement(), vchMessage.GetElement(),
+                                                             vchPubKey.GetElement(), vchSigFuncFlag.GetElement());
+                        
+                        if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) &&
+                            vchSig.size()) {
+                            return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
+                        }
+
+                        stack.pop_back();
+                        stack.pop_back();
+                        stack.pop_back();
+                        stack.pop_back();
+                        stack.push_back(fSuccess ? vchTrue : vchFalse);
+                        if (opcode == OP_CHECKDATASIGVERIFY) {
+                            if (fSuccess) {
+                                stack.pop_back();
+                            } else {
+                                return set_error(serror,
+                                                 SCRIPT_ERR_CHECKDATASIGVERIFY);
+                            }
+                        }
+                    } break;
+
                     case OP_CHECKMULTISIG:
                     case OP_CHECKMULTISIGVERIFY: {
                         // ([sig ...] num_of_signatures [pubkey ...]
@@ -2001,6 +2060,14 @@ PrecomputedTransactionData::PrecomputedTransactionData(
     Sha256Outputs = GetOutputsSha256(txTo);
 }
 
+uint256 MessageHash(const std::vector<uint8_t> &vchMessage) {
+    CHashWriter ss(SER_GETHASH, 0);
+    for (const uint8_t &i : vchMessage) {   
+        ss << i;
+    }
+    return ss.GetHash();
+}
+
 uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
                       unsigned int nIn, SigHashType sigHashType,
                       const Amount amount,
@@ -2118,6 +2185,30 @@ bool TransactionSignatureChecker::CheckSig(
     }
 
     return true;
+}
+
+bool TransactionSignatureChecker::CheckDataSig(
+    const std::vector<uint8_t> &vchSig,
+    const std::vector<uint8_t> &vchMessage,
+    const std::vector<uint8_t> &vchPubKey,
+    const std::vector<uint8_t> &vchSigFuncFlag) const {
+    
+    CPubKey pubkey(vchPubKey);
+    if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    if (vchSig.empty()) {
+        return false;
+    }
+
+    uint256 messageHash = MessageHash(vchMessage);
+
+    if (VerifySignature(vchSig, pubkey, messageHash)) {
+        return true;
+    }
+
+    return false;
 }
 
 bool TransactionSignatureChecker::CheckLockTime(

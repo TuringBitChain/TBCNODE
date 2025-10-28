@@ -45,6 +45,13 @@ public:
         return false;
     }
 
+    virtual bool CheckDataSig(const std::vector<uint8_t> &vchSig,
+                              const std::vector<uint8_t> &vchMessage,
+                              const std::vector<uint8_t> &vchPubKey,
+                              const std::vector<uint8_t> &vchSigFunc) const {
+        return false;
+    }
+
     virtual uint256 getSha256Inputs() const {
         return uint256(); 
     }
@@ -92,6 +99,10 @@ public:
     bool CheckSig(const std::vector<uint8_t> &scriptSig,
                   const std::vector<uint8_t> &vchPubKey,
                   const CScript &scriptCode, bool enabledSighashForkid) const override;
+    bool CheckDataSig(const std::vector<uint8_t> &vchSig,
+                      const std::vector<uint8_t> &vchMessage,
+                      const std::vector<uint8_t> &vchPubKey,
+                      const std::vector<uint8_t> &vchSigFunc) const override;
     uint256 getSha256Inputs() const override;
     uint256 getSha256Outputs() const override;
     bool CheckLockTime(const CScriptNum &nLockTime) const override;

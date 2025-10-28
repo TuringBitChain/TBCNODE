@@ -304,14 +304,14 @@ uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
     return ss.GetHash();
 }
 /** Compute the 256-bit hash of an object's serialization. */
-template <typename T>
-uint256 SerializeSingleHash(const T &obj, int nType = SER_GETHASH,
-                      int nVersion = PROTOCOL_VERSION) {
-    //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
-    CHashWriter ss(nType, nVersion);
-    ss.write( (char *) obj, obj.size() );
-    return ss.GetSingleHash();
-}
+// template <typename T>
+// uint256 SerializeSingleHash(const T &obj, int nType = SER_GETHASH,
+//                       int nVersion = PROTOCOL_VERSION) {
+//     //cout << "SerializeHash: nType:" << nType << ", nVersion:" << nVersion << endl;  //zws
+//     CHashWriter ss(nType, nVersion);
+//     ss.write( (char *) obj, obj.size() );
+//     return ss.GetSingleHash();
+// }
 /** Compute the 256-bit hash of an object's serialization. */
 template <typename T>
 uint256 SerializeSingleHash_OpNoCSize(const T &obj, int nType = SER_GETHASH,
@@ -355,7 +355,7 @@ uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
             //SerReadWrite_OpNoCSize(ss_in_unlock_one, iin.scriptSig, CSerActionSerialize() );
             //ss_in_unlock << ss_in_unlock_one.GetSingleHash();
             //ss_in_unlock << SerializeHash( iin.scriptSig, SER_GETHASH, 0); 
-            ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, SER_GETHASH, 0 );
+            ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, nType, nVersion);
         }
         hash_ss_in = ss_in.GetSingleHash();
         // cout << "TuringTXID TxSerializeHash: ss_in.GetSingleHash().GetHex() :" << hash_ss_in.GetHex() << endl;  //zws        
