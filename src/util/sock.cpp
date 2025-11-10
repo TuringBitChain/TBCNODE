@@ -12,6 +12,7 @@
 //#include <compat/compat.h>
 #include <logging.h>
 #include <tinyformat.h>
+#include <vector>
 
 #include "util/syserror.h"
 #include "compat.h"

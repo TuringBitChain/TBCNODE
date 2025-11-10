@@ -12,6 +12,8 @@
 
 #include <stdexcept>
 #include <vector>
+#include <optional>
+#include <array>
 
 /**
  * secp256k1:
