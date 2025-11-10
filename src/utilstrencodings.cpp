@@ -13,6 +13,7 @@
 #include <limits>
 #include <charconv>
 #include <string_view>
+#include <optional>
 
 static const std::string CHARS_ALPHA_NUM =
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
