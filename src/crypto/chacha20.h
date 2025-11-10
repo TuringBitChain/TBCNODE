@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
+#include <array>
 
 #include "span.h"
 
