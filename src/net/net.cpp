@@ -1149,7 +1149,6 @@ void CConnman::AcceptConnection(const ListenSocket &hListenSocket) {
     SOCKET hSocket =
         accept(hListenSocket.socket, (struct sockaddr *)&sockaddr, &len);
     CAddress addr;
-    int nInbound = 0;
     int nMaxInbound = nMaxConnections - (nMaxOutbound + nMaxFeeler);
 
     if (hSocket != INVALID_SOCKET) {
@@ -1159,14 +1158,6 @@ void CConnman::AcceptConnection(const ListenSocket &hListenSocket) {
     }
 
     bool whitelisted = hListenSocket.whitelisted || IsWhitelistedRange(addr);
-    {
-        LOCK(cs_vNodes);
-        for (const CNodePtr& pnode : vNodes) {
-            if (pnode->fInbound) {
-                nInbound++;
-            }
-        }
-    }
 
     if (hSocket == INVALID_SOCKET) {
         int nErr = WSAGetLastError();
@@ -1207,7 +1198,18 @@ void CConnman::AcceptConnection(const ListenSocket &hListenSocket) {
         return;
     }
 
-    if (nInbound >= nMaxInbound) {
+    // 只统计成功握手的连接，避免无效连接占用槽位
+    int nSuccessfulInbound = 0;
+    {
+        LOCK(cs_vNodes);
+        for (const CNodePtr& pnode : vNodes) {
+            if (pnode->fInbound && pnode->fSuccessfullyConnected && !pnode->fDisconnect) {
+                nSuccessfulInbound++;
+            }
+        }
+    }
+    
+    if (nSuccessfulInbound >= nMaxInbound) {
         if (!AttemptToEvictConnection()) {
             // No connection to evict, disconnect the new connection
             LogPrint(BCLog::NET, "failed to find an eviction candidate - "
@@ -2626,14 +2628,17 @@ bool CConnman::RemoveAddedNode(const std::string &strNode) {
 
 size_t CConnman::GetNodeCount(NumConnections flags) {
     LOCK(cs_vNodes);
-    // Shortcut if we want total
-    if (flags == CConnman::CONNECTIONS_ALL) {
-        return vNodes.size();
-    }
 
     int nNum = 0;
     for(const CNodePtr& node : vNodes) {
-        if (flags & (node->fInbound ? CONNECTIONS_IN : CONNECTIONS_OUT)) {
+        // 只统计完全连接的节点（已完成握手且未断开）
+        if (!NodeFullyConnected(node)) {
+            continue;
+        }
+
+        if (flags == CConnman::CONNECTIONS_ALL) {
+            nNum++;
+        } else if (flags & (node->fInbound ? CONNECTIONS_IN : CONNECTIONS_OUT)) {
             nNum++;
         }
     }
