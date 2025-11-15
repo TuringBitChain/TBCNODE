@@ -20,7 +20,7 @@
 
 #define GENESIS_ACTIVATION_MAIN                 620538
 #define GENESIS_ACTIVATION_STN                  100
-#define GENESIS_ACTIVATION_TESTNET              1344302
+#define GENESIS_ACTIVATION_TESTNET              2500
 #define GENESIS_ACTIVATION_REGTEST              10000
 
 static CBlock CreateGenesisBlock(const char *pszTimestamp,
@@ -104,9 +104,6 @@ public:
         consensus.CSVHeight = 419328;
         consensus.powLimit = uint256S(
             "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
-        consensus.TBCFirstBlockHeight = 824190;
-        consensus.TBCFirstBlockHash = uint256S(
-            "0000000058968601042df9b0d57e41b092c76d6f91f333dc231cdd4cc4fd861d");
 
         // two weeks
         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
@@ -135,6 +132,11 @@ public:
 
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
+
+        // TBC业务在此高度激活
+        consensus.TBCFirstBlockHeight = 824190;
+        consensus.TBCFirstBlockHash = uint256S(
+            "0000000058968601042df9b0d57e41b092c76d6f91f333dc231cdd4cc4fd861d");
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -357,15 +359,13 @@ public:
     CTestNetParams() {
         strNetworkID = "test";
         consensus.nSubsidyHalvingInterval = 210000;
-        consensus.BIP34Height = 21111;
+        // 从创世块就激活所有BIP规则，避免复杂的激活逻辑
+        consensus.BIP34Height = 0;
         consensus.BIP34Hash = uint256S(
-            "0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8");
-        // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
-        consensus.BIP65Height = 581885;
-        // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
-        consensus.BIP66Height = 330776;
-        // 00000000025e930139bac5c6c31a403776da130831ab85be56578f3fa75369bb
-        consensus.CSVHeight = 770112;
+            "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943");
+        consensus.BIP65Height = 2;
+        consensus.BIP66Height = 3;
+        consensus.CSVHeight = 4;
         consensus.powLimit = uint256S(
             "00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
         // two weeks
@@ -379,31 +379,35 @@ public:
         consensus.nMinerConfirmationWindow = 2016;
 
         // The best chain should have at least this much work.
-        consensus.nMinimumChainWork = uint256S(
-            "00000000000000000000000000000000000000000000002a650f6ff7649485da");
+        consensus.nMinimumChainWork = uint256S("0x00");
 
         // By default assume that the signatures in ancestors of this block are
         // valid.
-        consensus.defaultAssumeValid = uint256S(
-            "0000000000327972b8470c11755adf8f4319796bafae01f5a6650490b98a17db");
+        consensus.defaultAssumeValid = uint256S("0x00");
 
         // August 1, 2017 hard fork
-        consensus.uahfHeight = 1155875;
+        consensus.uahfHeight = 5;
 
         // November 13, 2017 hard fork
-        consensus.daaHeight = 1188697;
+        // DAA需要至少2016个历史区块来计算难度，所以设置为2200
+        consensus.daaHeight = 2200;
 
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_TESTNET;
 
-        diskMagic[0] = 0x0b;
-        diskMagic[1] = 0x11;
-        diskMagic[2] = 0x09;
-        diskMagic[3] = 0x07;
-        netMagic[0] = 0xf4;
-        netMagic[1] = 0xe5;
-        netMagic[2] = 0xf3;
-        netMagic[3] = 0xf4;
+        // TBC业务在此高度激活
+        consensus.TBCFirstBlockHeight = 3000;
+        consensus.TBCFirstBlockHash = uint256S(
+            "");
+
+        diskMagic[0] = 0x0c;
+        diskMagic[1] = 0x12;
+        diskMagic[2] = 0x0a;
+        diskMagic[3] = 0x08;
+        netMagic[0] = 0xf5;
+        netMagic[1] = 0xe6;
+        netMagic[2] = 0xf4;
+        netMagic[3] = 0xf5;
         nDefaultPort = 18333;
         nPruneAfterHeight = 1000;
 
@@ -423,28 +427,22 @@ public:
         // TBC seeder
         vSeeds.push_back(CDNSSeedData("tbctestnet.top", "test.tbctestnet.top", true));
 
-        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
-        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
-        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 239);
-        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
-        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
+        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 128);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x88, 0xB2, 0x1E};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
+
         vFixedSeeds = std::vector<SeedSpec6>(
             pnSeed6_test, pnSeed6_test + ARRAYLEN(pnSeed6_test));
 
-        fMiningRequiresPeers = true;
+        fMiningRequiresPeers = false;
         fDefaultConsistencyChecks = false;
         fRequireStandard = false;
         fMineBlocksOnDemand = false;
 
         checkpointData = { {
-                {546, uint256S("000000002a936ca763904c3c35fce2f3556c559c0214345"
-                               "d31b1bcebf76acb70")},
-                // UAHF fork block.
-                {1155875, uint256S("00000000f17c850672894b9a75b63a1e72830bbd5f4"
-                                   "c8889b5c1a80e7faef138")},
-                // Nov, 13. DAA activation block.
-                {1188697, uint256S("0000000000170ed0918077bde7b4d36cc4c91be69fa"
-                                   "09211f748240dabe047fb")}
+                {0, uint256S("000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943")}
             }};
 
         // Data as of block
