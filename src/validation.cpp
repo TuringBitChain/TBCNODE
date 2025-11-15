@@ -74,8 +74,6 @@
 
 using namespace mining;
 
-#define TBC_FORK_BLOCK_HEIGHT 824190
-
 /**
  * Global state
  */
@@ -844,22 +842,22 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 }
 
-bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled)
+bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, int tbcActiveHeight)
 {
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
         HeightFormScript(tx,scriptSigHeight);
 
-        if ((chainActive.Height() >= 824189) && (scriptSigHeight >= 824189) && tx.nVersion != 10) {
+        if ((chainActive.Height() >= tbcActiveHeight - 1) && (scriptSigHeight >= tbcActiveHeight - 1) && tx.nVersion != 10) {
             std::stringstream error_message;
             error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
                 << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
             return state.Invalid(false, 0, "", error_message.str());
         }
 
-        if ((chainActive.Height() >= 824189) && (scriptSigHeight >= 824189) && !FilledMinerBill(tx)) {
-            LogPrintf("chainHeight type:%s sigHeight:%s 824189 num type:%s\n",\
-                typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+        if ((chainActive.Height() >= tbcActiveHeight - 1) && (scriptSigHeight >= tbcActiveHeight - 1) && !FilledMinerBill(tx)) {
+            LogPrintf("chainHeight type:%s sigHeight:%s %d num type:%s\n",\
+                typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),tbcActiveHeight - 1,typeid(tbcActiveHeight - 1).name());
             return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
         }
     }
@@ -3323,7 +3321,7 @@ std::optional<bool> CheckInputs(
     const auto [ spendHeight, mtp ] = GetSpendHeightAndMTP(inputs);
     (void)mtp;  // Silence unused variable warning
 
-    if (spendHeight >= 824190) {
+    if (spendHeight >= config.GetChainParams().GetConsensus().TBCFirstBlockHeight) {
         if (tx.nVersion != 10 ) {
             // return state.DoS(100, false, REJECT_INVALID, "bad-rgtx-nVersion");
             
@@ -3398,9 +3396,11 @@ std::optional<bool> CheckInputs(
         CScriptCheck check(config, consensus, scriptPubKey, amount, tx, i, flags | perInputScriptFlags, sigCacheStore,
                            txdata);
         
-        if (spendHeight >= 824190 && inputScriptBlockHeight <= 824190)
+        if (spendHeight >= config.GetChainParams().GetConsensus().TBCFirstBlockHeight && 
+            inputScriptBlockHeight <= config.GetChainParams().GetConsensus().TBCFirstBlockHeight)
         {
-            LogPrintf("spendHeight >= 824190 && inputScriptBlockHeight <= 824190\n" );
+            LogPrintf("spendHeight >= %d && inputScriptBlockHeight <= %d\n",
+                config.GetChainParams().GetConsensus().TBCFirstBlockHeight,config.GetChainParams().GetConsensus().TBCFirstBlockHeight );
             return state.DoS(
                 100, false, REJECT_INVALID,
                 strprintf("mandatory-verify-flag-failed (%s)",
@@ -4774,7 +4774,7 @@ static bool ConnectTip(
  * Return the tip of the chain with the most work in it, that isn't known to be
  * invalid (it's however far from certain to be valid).
  */
-static CBlockIndex *FindMostWorkChain() {
+static CBlockIndex *FindMostWorkChain(int tbcActiveHeight) {
     do {
         CBlockIndex *pindexNew = nullptr;
 
@@ -4835,7 +4835,7 @@ static CBlockIndex *FindMostWorkChain() {
                 fInvalidAncestor = true;
                 break;
             }
-            if (fPruneBlocksMode && TBC_FORK_BLOCK_HEIGHT == pindexTest->nHeight) {
+            if (fPruneBlocksMode && tbcActiveHeight == pindexTest->nHeight) {
                 break;
             }
             pindexTest = pindexTest->pprev;
@@ -5132,7 +5132,7 @@ bool ActivateBestChain(
                 // new tip to aim for.
                 if (pindexMostWork == nullptr || pindexNewTip != chainActive.Tip())
                 {
-                    pindexMostWork = FindMostWorkChain();
+                    pindexMostWork = FindMostWorkChain(config.GetChainParams().GetConsensus().TBCFirstBlockHeight);
 
                     // Whether we have anything to do at all.
                     if (pindexMostWork == nullptr)
@@ -5624,7 +5624,8 @@ static bool ReceivedBlockTransactions(
     CValidationState &state,
     CBlockIndex *pindexNew,
     const CDiskBlockPos &pos,
-    const CDiskBlockMetaData& metaData)
+    const CDiskBlockMetaData& metaData,
+    int tbcActiveHeight)
 {
     // Validate TTOR order for blocks that are MIN_TTOR_VALIDATION_DISTANCE blocks or more from active tip
     if (chainActive.Tip() && chainActive.Tip()->nHeight - pindexNew->nHeight >= MIN_TTOR_VALIDATION_DISTANCE)
@@ -5645,7 +5646,7 @@ static bool ReceivedBlockTransactions(
     pindexNew->SetDiskBlockData(block.vtx.size(), pos, metaData);
     setDirtyBlockIndex.insert(pindexNew);
 
-    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx || (fPruneBlocksMode && TBC_FORK_BLOCK_HEIGHT == pindexNew->nHeight)) {
+    if (pindexNew->pprev == nullptr || pindexNew->pprev->nChainTx || (fPruneBlocksMode && tbcActiveHeight == pindexNew->nHeight)) {
         // If pindexNew is the genesis block or all parents are
         // BLOCK_VALID_TRANSACTIONS.
         std::deque<CBlockIndex *> queue;
@@ -5770,7 +5771,7 @@ bool CheckBlock(const Config &config, const CBlock &block,
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
 
     // And a valid coinbase.
-    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled)) {
+    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled,config.GetChainParams().GetConsensus().TBCFirstBlockHeight)) {
         return state.Invalid(false, state.GetRejectCode(),
                              state.GetRejectReason(),
                              strprintf("Coinbase check failed (txid %s) %s",
@@ -6288,7 +6289,7 @@ static bool AcceptBlock(const Config& config,
                 AbortNode(state, "Failed to write block");
             }
         }
-        if (!ReceivedBlockTransactions(block, state, pindex, blockPos, metaData)) {
+        if (!ReceivedBlockTransactions(block, state, pindex, blockPos, metaData,config.GetChainParams().GetConsensus().TBCFirstBlockHeight)) {
             return error("AcceptBlock(): ReceivedBlockTransactions failed");
         }
     }
@@ -7176,7 +7177,7 @@ bool InitBlockIndex(const Config &config) {
                     "LoadBlockIndex(): writing genesis block to disk failed");
             }
             CBlockIndex *pindex = AddToBlockIndex(block);
-            if (!ReceivedBlockTransactions(block, state, pindex, blockPos, metaData)) {
+            if (!ReceivedBlockTransactions(block, state, pindex, blockPos, metaData, config.GetChainParams().GetConsensus().TBCFirstBlockHeight)) {
                 return error("LoadBlockIndex(): genesis block not accepted");
             }
         } catch (const std::runtime_error &e) {

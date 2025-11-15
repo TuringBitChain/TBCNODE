@@ -358,7 +358,7 @@ uint32_t GetNextCashWorkRequired(const CBlockIndex *pindexPrev,
     const arith_uint256 powLimit = UintToArith256(params.powLimit);
     uint64_t NewBlockSpacing;
 
-    if ( pindexPrev->nHeight >= 824189 ){
+    if ( pindexPrev->nHeight >= params.TBCFirstBlockHeight-1 ){
         NewBlockSpacing = GetNewBlockSpacing(pindexPrev,8064,params);
 
         arith_uint256 prevTarget;
