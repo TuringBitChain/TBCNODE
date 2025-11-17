@@ -107,7 +107,7 @@ void RunTests(Config& globalConfig, UniValue& tests, bool should_be_valid){
             CValidationState state;
 
             fValid = tx.IsCoinBase() 
-                                    ? CheckCoinbase(tx, state, MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS, MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS, false)
+                                    ? CheckCoinbase(tx, state, MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS, MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS, false, globalConfig.GetChainParams().GetConsensus().TBCFirstBlockHeight)
                                     : CheckRegularTransaction(tx, state, MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS, MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS, false);
 
             if(!(fValid && state.IsValid())) {
