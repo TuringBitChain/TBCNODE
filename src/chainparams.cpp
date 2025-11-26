@@ -133,6 +133,8 @@ public:
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
 
+        // 回顾区块数
+        consensus.backNum = 8064;
         // TBC业务在此高度激活
         consensus.TBCFirstBlockHeight = 824190;
         consensus.TBCFirstBlockHash = uint256S(
@@ -395,6 +397,8 @@ public:
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_TESTNET;
 
+        // 回顾区块数
+        consensus.backNum = 2880;
         // TBC业务在此高度激活
         consensus.TBCFirstBlockHeight = 3000;
         consensus.TBCFirstBlockHash = uint256S(
