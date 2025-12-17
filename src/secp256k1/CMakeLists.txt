@@ -148,7 +148,7 @@ endif()
 
 # Generate the config
 configure_file(src/libsecp256k1-config.h.cmake.in src/libsecp256k1-config.h ESCAPE_QUOTES)
-target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H SECP256K1_BUILD)
+target_compile_definitions(secp256k1 PRIVATE HAVE_CONFIG_H SECP256K1_BUILD ENABLE_MODULE_RECOVERY)
 
 # Tests
 option(SECP256K1_BUILD_TEST "Build secp256k1's unit tests" ON)

@@ -618,4 +618,9 @@ SECP256K1_API SECP256K1_WARN_UNUSED_RESULT int secp256k1_ec_pubkey_combine(
 }
 #endif
 
+/* Include recovery module if enabled */
+#ifdef ENABLE_MODULE_RECOVERY
+# include "secp256k1_recovery.h"
+#endif
+
 #endif /* SECP256K1_H */
