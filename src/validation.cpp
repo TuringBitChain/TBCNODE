@@ -666,7 +666,6 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash){
     std::vector<uint8_t> kycChargeRateVec;
     std::vector<uint8_t> actualChargeRateVec;
     uint64_t kycChargeRate;
-    uint64_t actualChargeRate;
     std::vector<uint8_t> permissionHeightLengthVec;
     std::vector<uint8_t> currentChainHeightLengthVec;
     std::vector<uint8_t> kycPermissionHeightVec;

@@ -35,8 +35,8 @@ BOOST_AUTO_TEST_CASE(test_xonlypubkey_isfullyvalid) {
     BOOST_CHECK(pubkeyValid.IsFullyValid());
 }
 
-BOOST_AUTO_TEST_CASE(test_xonlypubkey_verifyschnorr) {
-    // Test with a already known valid x-only pubkey and signature.
+// Test with a already known valid x-only pubkey and signature.
+BOOST_AUTO_TEST_CASE(test_xonlypubkey_verifyschnorr_valid) {    
     string pubkeyValidStr = "56e6a101555d001886174f07911419a663d0c55fad2b274e9693bf408ac4b3b3";
     string msgHashValidStr = "2b18447dcef8cec8f1b265151c8c41b9b45d2050620b43dbd33bd19f1b52518f";
     string signatureValidStr = "15c6e1db8fac01783eb74753caeb22a6c8753a3e260f2bbd8170947bccf7652cb022fcca4e83601083a8bf408bfbceb0f8188cd023f3d34f708bb15af15653c2";
@@ -44,16 +44,26 @@ BOOST_AUTO_TEST_CASE(test_xonlypubkey_verifyschnorr) {
     std::vector<uint8_t> sigValid = ParseHex(signatureValidStr);
     uint256 msgHashValid = uint256(ParseHex(msgHashValidStr));
     BOOST_CHECK(pubkeyValid.VerifySchnorr(msgHashValid, sigValid));
-    
-    // Test with a valid pubkey and an invalid 64B sig.
-    string sigInvalidStr = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    std::vector<uint8_t> sigInvalid = ParseHex(sigInvalidStr);
-    BOOST_CHECK(!pubkeyValid.VerifySchnorr(msgHashValid, sigInvalid));
+}
 
-    // Test with a pair of valid pubkey and sig. But msg is changed.
-    string msgHashInvalidStr = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    uint256 msgHashInvalid = uint256(ParseHex(msgHashInvalidStr));
-    BOOST_CHECK(!pubkeyValid.VerifySchnorr(msgHashInvalid, sigValid));
+BOOST_AUTO_TEST_CASE(test_xonlypubkey_verifyschnorr_invalid_sig) {
+    string pubkeyValidStr = "56e6a101555d001886174f07911419a663d0c55fad2b274e9693bf408ac4b3b3";
+    string msgHashValidStr = "2b18447dcef8cec8f1b265151c8c41b9b45d2050620b43dbd33bd19f1b52518f";
+    string signatureValidStr = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    XOnlyPubKey pubkeyValid(ParseHex(pubkeyValidStr));
+    std::vector<uint8_t> sigValid = ParseHex(signatureValidStr);
+    uint256 msgHashValid = uint256(ParseHex(msgHashValidStr));
+    BOOST_CHECK(!pubkeyValid.VerifySchnorr(msgHashValid, sigValid));
+}
+
+BOOST_AUTO_TEST_CASE(test_xonlypubkey_verifyschnorr_invalid_msg) {
+    string pubkeyValidStr = "56e6a101555d001886174f07911419a663d0c55fad2b274e9693bf408ac4b3b3";
+    string msgHashValidStr = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    string signatureValidStr = "15c6e1db8fac01783eb74753caeb22a6c8753a3e260f2bbd8170947bccf7652cb022fcca4e83601083a8bf408bfbceb0f8188cd023f3d34f708bb15af15653c2";
+    XOnlyPubKey pubkeyValid(ParseHex(pubkeyValidStr));
+    std::vector<uint8_t> sigValid = ParseHex(signatureValidStr);
+    uint256 msgHashValid = uint256(ParseHex(msgHashValidStr));
+    BOOST_CHECK(!pubkeyValid.VerifySchnorr(msgHashValid, sigValid));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
