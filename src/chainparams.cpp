@@ -362,9 +362,9 @@ public:
         strNetworkID = "test";
         consensus.nSubsidyHalvingInterval = 210000;
         // 从创世块就激活所有BIP规则，避免复杂的激活逻辑
-        consensus.BIP34Height = 1;
+        consensus.BIP34Height = 0;
         consensus.BIP34Hash = uint256S(
-            "00000000a44ee378c9b1392cd36ce50ff9cf8950df5203283c9d9fdceb16567b");
+            "000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943");
         consensus.BIP65Height = 2;
         consensus.BIP66Height = 3;
         consensus.CSVHeight = 4;
@@ -446,7 +446,7 @@ public:
         fMineBlocksOnDemand = false;
 
         checkpointData = { {
-                {16, uint256S("000000006749b68c4e8a41c5f7e556ceb02e7a6b8dcbd860ef82c452efe4893c")}
+                {0, uint256S("000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943")}
             }};
 
         // Data as of block
@@ -542,7 +542,7 @@ public:
 
         fMiningRequiresPeers = false;
         fDefaultConsistencyChecks = true;
-        fRequireStandard = true;
+        fRequireStandard = false;
         fMineBlocksOnDemand = true;
 
         checkpointData = { {
