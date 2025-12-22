@@ -402,7 +402,7 @@ public:
         // TBC业务在此高度激活
         consensus.TBCFirstBlockHeight = 3000;
         consensus.TBCFirstBlockHash = uint256S(
-            "00000000009847bd101ba647ad137f9246629ffc16b68d79bff87c68d282c77e");
+            "");
 
         diskMagic[0] = 0x0c;
         diskMagic[1] = 0x12;
