@@ -867,7 +867,7 @@ bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state, ui
 
 void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight);
 
-bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, int tbcActiveHeight);
+bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled);
 
 namespace Consensus {
 
