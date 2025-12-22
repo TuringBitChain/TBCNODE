@@ -317,7 +317,7 @@ public:
 
         vFixedSeeds.clear();
         vSeeds.clear();
-        vSeeds.push_back(CDNSSeedData("tbctestnet.top", "stn.tbctestnet.top", true));
+        vSeeds.push_back(CDNSSeedData("tbctestnet.top", "test.tbctestnet.top", true));
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
@@ -364,7 +364,7 @@ public:
         // 从创世块就激活所有BIP规则，避免复杂的激活逻辑
         consensus.BIP34Height = 1;
         consensus.BIP34Hash = uint256S(
-            "00000000334381cab4f7b43c6387babae31295fe79a63e9ed9bc0fee98832e01");
+            "00000000a44ee378c9b1392cd36ce50ff9cf8950df5203283c9d9fdceb16567b");
         consensus.BIP65Height = 2;
         consensus.BIP66Height = 3;
         consensus.CSVHeight = 4;
@@ -402,7 +402,7 @@ public:
         // TBC业务在此高度激活
         consensus.TBCFirstBlockHeight = 3000;
         consensus.TBCFirstBlockHash = uint256S(
-            "");
+            "00000000009847bd101ba647ad137f9246629ffc16b68d79bff87c68d282c77e");
 
         diskMagic[0] = 0x0c;
         diskMagic[1] = 0x12;
@@ -431,11 +431,11 @@ public:
         // TBC seeder
         vSeeds.push_back(CDNSSeedData("tbctestnet.top", "test.tbctestnet.top", true));
 
-        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
-        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
-        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 239);
-        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
-        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
+        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 128);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x88, 0xB2, 0x1E};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
 
         vFixedSeeds = std::vector<SeedSpec6>(
             pnSeed6_test, pnSeed6_test + ARRAYLEN(pnSeed6_test));
@@ -446,7 +446,7 @@ public:
         fMineBlocksOnDemand = false;
 
         checkpointData = { {
-                {16, uint256S("00000000f2e8f6eed5202548ae46fefa31ef8feed657a8e078c603ce425d8d47")}
+                {16, uint256S("000000006749b68c4e8a41c5f7e556ceb02e7a6b8dcbd860ef82c452efe4893c")}
             }};
 
         // Data as of block
