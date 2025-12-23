@@ -962,7 +962,7 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 }
 
-bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled)
+bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash)
 {
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
@@ -977,19 +977,19 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
 
         // Miner KYC veriry.
         int kycV1ActivationHeight = 824189;
-        int kycV2ActivationHeight = 835051;
-        if ((chainActive.Height() >= kycV1ActivationHeight) && (scriptSigHeight >= (uint64_t)kycV1ActivationHeight)) {
-            if (chainActive.Height() < kycV2ActivationHeight && (scriptSigHeight < (uint64_t)kycV2ActivationHeight)) {
+        int kycV2ActivationHeight = 835101;
+        if (chainActive.Height() >= kycV1ActivationHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
+            if (chainActive.Height() >= kycV2ActivationHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
+                if (!FilledMinerBillV2(tx, prevBlockHash)) {
+                    LogPrintf("chainHeight type:%s sigHeight:%s 1000000 num type:%s\n",\
+                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
+                }
+            } else {
                 if (!FilledMinerBill(tx)) {
                     LogPrintf("chainHeight type:%s sigHeight:%s 824189 num type:%s\n",\
                         typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
-                }
-            } else {
-                if (!FilledMinerBillV2(tx, chainActive.Tip()->GetBlockHash())) {
-                    LogPrintf("chainHeight type:%s sigHeight:%s 1000000 num type:%s\n",\
-                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
-                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
                 }
             }
         }
@@ -5897,7 +5897,7 @@ bool CheckBlock(const Config &config, const CBlock &block,
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
 
     // And a valid coinbase.
-    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled)) {
+    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock)) {
         return state.Invalid(false, state.GetRejectCode(),
                              state.GetRejectReason(),
                              strprintf("Coinbase check failed (txid %s) %s",

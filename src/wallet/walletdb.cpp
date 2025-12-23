@@ -310,7 +310,7 @@ bool ReadKeyValue(CWallet *pwallet, CDataStream &ssKey, CDataStream &ssValue,
             uint64_t maxTxSigOpsCountConsensusBeforeGenesis = config.GetMaxTxSigOpsCountConsensusBeforeGenesis();
             uint64_t maxTxSizeConsensus = config.GetMaxTxSize(genesisEnabled, true);
             bool isValid = wtx.IsCoinBase()
-                               ? CheckCoinbase(wtx, state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, genesisEnabled)
+                               ? CheckCoinbase(wtx, state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, genesisEnabled, uint256())
                                : CheckRegularTransaction(wtx, state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, genesisEnabled);
             if (wtx.GetId() != hash || !isValid) {
                 return false;
