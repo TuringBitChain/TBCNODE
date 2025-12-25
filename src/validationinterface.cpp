@@ -4,7 +4,9 @@
 // Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "validationinterface.h"
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
+
+using namespace boost::placeholders;
 
 static CMainSignals g_signals;
 

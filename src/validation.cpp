@@ -62,7 +62,8 @@
 #include <boost/math/distributions/poisson.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/thread.hpp>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
+
 #include "script/script_num.h"
 #include <key.h>
 #include <pubkey.h>
@@ -73,6 +74,7 @@
 #endif
 
 using namespace mining;
+using namespace boost::placeholders;
 
 #define TBC_FORK_BLOCK_HEIGHT 824190
 

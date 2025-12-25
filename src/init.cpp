@@ -70,13 +70,15 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
-#include <boost/bind.hpp>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/thread.hpp>
+#include <boost/bind/bind.hpp>
 
 #if ENABLE_ZMQ
 #include "zmq/zmqnotificationinterface.h"
 #endif
+
+using namespace boost::placeholders;
 
 static const bool DEFAULT_PROXYRANDOMIZE = true;
 static const bool DEFAULT_REST_ENABLE = false;
