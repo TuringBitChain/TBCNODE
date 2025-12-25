@@ -964,11 +964,15 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash)
 {
+    int kycV1ActivationHeight = 824189;
+    int kycV2ActivationHeight = 926000;
+    int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
+    int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
+
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
         HeightFormScript(tx,scriptSigHeight);
-
-        if ((chainActive.Height() >= 824189) && (scriptSigHeight >= 824189) && tx.nVersion != 10) {
+        if ((chainActive.Height() >= kycV1ActivationTipHeight) && (scriptSigHeight >= kycV1ActivationHeight) && tx.nVersion != 10) {
             std::stringstream error_message;
             error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
                 << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
@@ -976,10 +980,8 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
         }
 
         // Miner KYC veriry.
-        int kycV1ActivationHeight = 824189;
-        int kycV2ActivationHeight = 835101;
-        if (chainActive.Height() >= kycV1ActivationHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
-            if (chainActive.Height() >= kycV2ActivationHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
+        if (chainActive.Height() >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
+            if (chainActive.Height() >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
                 if (!FilledMinerBillV2(tx, prevBlockHash)) {
                     LogPrintf("chainHeight type:%s sigHeight:%s 1000000 num type:%s\n",\
                         typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
