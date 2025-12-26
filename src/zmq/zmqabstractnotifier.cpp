@@ -13,6 +13,16 @@ bool CZMQAbstractNotifier::NotifyBlock(const CBlockIndex * /*CBlockIndex*/) {
     return true;
 }
 
+bool CZMQAbstractNotifier::NotifyBlock2(const CBlockIndex*)
+{
+    return true;
+}
+
+bool CZMQAbstractNotifier::NotifyTransaction2(const CTransaction&)
+{
+    return true;
+}
+
 bool CZMQAbstractNotifier::NotifyTransaction(
     const CTransaction & /*transaction*/) {
     return true;

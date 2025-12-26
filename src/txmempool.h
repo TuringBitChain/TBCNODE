@@ -405,6 +405,22 @@ enum class MemPoolRemovalReason {
     REPLACED
 };
 
+struct CTransactionConflictData {
+    // NOLINTBEGIN(cppcoreguidelines-avoid-const-or-ref-data-members)
+    const CTransaction* const conflictedWith;
+    const uint256* const blockhash;
+    // NOLINTEND(cppcoreguidelines-avoid-const-or-ref-data-members)
+
+    CTransactionConflictData(const CTransaction* conflictedWith_, const uint256* blockhash_)
+    : conflictedWith{conflictedWith_}
+    , blockhash{blockhash_}
+    {
+        assert(conflictedWith != nullptr);
+    }
+};
+
+using CTransactionConflict = std::optional<CTransactionConflictData>;
+
 class SaltedTxidHasher {
 private:
     /** Salt */
