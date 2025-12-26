@@ -23,6 +23,10 @@ public:
     */
     bool SendZMQMessage(const char *command, const void *data, size_t size);
 
+    bool SendZMQMessage(const char* command, const uint256& hash);
+    bool SendZMQMessage(const char* command, const CBlockIndex* pindex);
+    bool SendZMQMessage(const char* command, const CTransaction& transaction);
+
     bool Initialize(void *pcontext) override;
     void Shutdown() override;
 };
@@ -45,6 +49,26 @@ public:
 class CZMQPublishRawTransactionNotifier : public CZMQAbstractPublishNotifier {
 public:
     bool NotifyTransaction(const CTransaction &transaction) override;
+};
+
+class CZMQPublishHashBlockNotifier2 : public CZMQAbstractPublishNotifier {
+public:
+    bool NotifyBlock2(const CBlockIndex* pindex) override;
+};
+
+class CZMQPublishRawBlockNotifier2 : public CZMQAbstractPublishNotifier {
+public:
+    bool NotifyBlock2(const CBlockIndex* pindex) override;
+};
+
+class CZMQPublishHashTransactionNotifier2 : public CZMQAbstractPublishNotifier {
+public:
+    bool NotifyTransaction2(const CTransaction& transaction) override;
+};
+
+class CZMQPublishRawTransactionNotifier2 : public CZMQAbstractPublishNotifier {
+public:
+    bool NotifyTransaction2(const CTransaction& transaction) override;
 };
 
 #endif // BITCOIN_ZMQ_ZMQPUBLISHNOTIFIER_H

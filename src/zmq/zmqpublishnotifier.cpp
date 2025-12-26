@@ -19,6 +19,11 @@ static const char *MSG_HASHTX = "hashtx";
 static const char *MSG_RAWBLOCK = "rawblock";
 static const char *MSG_RAWTX = "rawtx";
 
+static const char* const MSG_HASHBLOCK2 = "hashblock2";
+static const char* const MSG_RAWBLOCK2 = "rawblock2";
+static const char* const MSG_HASHTX2 = "hashtx2";
+static const char* const MSG_RAWTX2 = "rawtx2";
+
 // Internal function to send multipart message
 static int zmq_send_multipart(void *sock, const void *data, size_t size, ...) {
     va_list args;
@@ -136,6 +141,47 @@ bool CZMQAbstractPublishNotifier::SendZMQMessage(const char *command,
     return true;
 }
 
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const uint256& hash) 
+{
+    LogPrint(BCLog::ZMQ, "zmq: Publish %s %s\n", command, hash.GetHex());
+    char data[32];
+    for (unsigned int i = 0; i < 32; i++) 
+    {
+        data[31 - i] = hash.begin()[i];
+    }
+    return SendZMQMessage(command, data, 32);
+}
+
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const CBlockIndex* pindex) 
+{
+    LogPrint(BCLog::ZMQ, "zmq: Publish  %s %s\n", command, pindex->GetBlockHash().GetHex());
+
+    const Config& config = GlobalConfig::GetConfig();
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    {
+        LOCK(cs_main);
+        CBlock block;
+        if (!ReadBlockFromDisk(block, pindex, config))
+        {
+            zmqError("Can't read block from disk");
+            return false;
+        }
+
+        ss << block;
+    }
+
+    return SendZMQMessage(command, &(*ss.begin()), ss.size());
+}
+
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const CTransaction& transaction) 
+{
+    uint256 txid = transaction.GetId();
+    LogPrint(BCLog::ZMQ, "zmq: Publish %s %s\n", command, txid.GetHex());
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    ss << transaction;
+    return SendZMQMessage(command, &(*ss.begin()), ss.size());
+}
+
 bool CZMQPublishHashBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
     uint256 hash = pindex->GetBlockHash();
     LogPrint(BCLog::ZMQ, "zmq: Publish hashblock %s\n", hash.GetHex());
@@ -156,30 +202,30 @@ bool CZMQPublishHashTransactionNotifier::NotifyTransaction(
 }
 
 bool CZMQPublishRawBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
-    LogPrint(BCLog::ZMQ, "zmq: Publish rawblock %s\n",
-             pindex->GetBlockHash().GetHex());
-
-    const Config &config = GlobalConfig::GetConfig();
-    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
-    {
-        LOCK(cs_main);
-        CBlock block;
-        if (!ReadBlockFromDisk(block, pindex, config)) {
-            zmqError("Can't read block from disk");
-            return false;
-        }
-
-        ss << block;
-    }
-
-    return SendZMQMessage(MSG_RAWBLOCK, &(*ss.begin()), ss.size());
+    return SendZMQMessage(MSG_RAWBLOCK, pindex);
 }
 
 bool CZMQPublishRawTransactionNotifier::NotifyTransaction(
     const CTransaction &transaction) {
-    uint256 txid = transaction.GetId();
-    LogPrint(BCLog::ZMQ, "zmq: Publish rawtx %s\n", txid.GetHex());
-    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
-    ss << transaction;
-    return SendZMQMessage(MSG_RAWTX, &(*ss.begin()), ss.size());
+    return SendZMQMessage(MSG_RAWTX, transaction);
+}
+
+bool CZMQPublishHashBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
+{
+    return SendZMQMessage(MSG_HASHBLOCK2, pindex->GetBlockHash());
+}
+
+bool CZMQPublishRawBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
+{
+    return SendZMQMessage(MSG_RAWBLOCK2, pindex);
+}
+
+bool CZMQPublishHashTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
+{
+    return SendZMQMessage(MSG_HASHTX2, transaction.GetId());
+}
+
+bool CZMQPublishRawTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
+{
+    return SendZMQMessage(MSG_RAWTX2, transaction);
 }

@@ -156,6 +156,27 @@ void CZMQNotificationInterface::TransactionAddedToMempool(
     }
 }
 
+void CZMQNotificationInterface::TransactionAdded(const CTransactionRef& ptx)
+{
+    // Used by BlockConnected2 and BlockDisconnected2 as well
+    const CTransaction& tx = *ptx;
+
+    for (auto i = notifiers.begin(); i != notifiers.end();) 
+    {
+        CZMQAbstractNotifier* notifier = *i;
+        if (notifier->NotifyTransaction2(tx)) 
+        {
+            ++i;
+        } 
+        else 
+        {
+            notifier->Shutdown();
+            i = notifiers.erase(i);
+            delete notifier;
+        }
+    }
+}
+
 void CZMQNotificationInterface::BlockConnected(
     const std::shared_ptr<const CBlock> &pblock,
     const CBlockIndex *pindexConnected,
@@ -172,5 +193,37 @@ void CZMQNotificationInterface::BlockDisconnected(
         // Do a normal notify for each transaction removed in block
         // disconnection
         TransactionAddedToMempool(ptx);
+    }
+}
+
+// Notify for every connected block, even on re-org
+// Only notify for transactions in vtxNew (that are not already in mempool)
+void CZMQNotificationInterface::BlockConnected2(
+    const CBlockIndex* pindexConnected,
+    const std::vector<CTransactionRef>& vtxNew)
+{
+    if (IsInitialBlockDownload()) 
+    {
+        return;
+    }
+
+    for (const CTransactionRef& ptx : vtxNew) 
+    {
+        TransactionAdded(ptx);
+    }
+
+    for (auto i = notifiers.begin(); i != notifiers.end();) 
+    {
+        CZMQAbstractNotifier* notifier = *i;
+        if (notifier->NotifyBlock2(pindexConnected)) 
+        {
+            ++i;
+        } 
+        else 
+        {
+            notifier->Shutdown();
+            i = notifiers.erase(i);
+            delete notifier;
+        }
     }
 }
