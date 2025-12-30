@@ -833,8 +833,8 @@ void CTxMemPool::removeConflictsNL(
  */
 void CTxMemPool::RemoveForBlock(
     const std::vector<CTransactionRef> &vtx,
-    unsigned int nBlockHeight,
-    const CJournalChangeSetPtr& changeSet) {
+    const CJournalChangeSetPtr& changeSet,
+    std::vector<CTransactionRef>& txNew){
 
     std::unique_lock lock(smtx);
     std::vector<const CTxMemPoolEntry *> entries;
@@ -874,6 +874,9 @@ void CTxMemPool::RemoveForBlock(
             setEntries stage;
             stage.insert(it);
             removeStagedNL(stage, true, changeSet, MemPoolRemovalReason::BLOCK, false);
+        }
+        else{
+            txNew.push_back(tx);
         }
     }
 
