@@ -678,8 +678,8 @@ public:
 
     void RemoveForBlock(
             const std::vector<CTransactionRef> &vtx,
-            unsigned int nBlockHeight,
-            const mining::CJournalChangeSetPtr& changeSet);
+            const mining::CJournalChangeSetPtr& changeSet,
+            std::vector<CTransactionRef>& txNew);
 
     void Clear();
 
