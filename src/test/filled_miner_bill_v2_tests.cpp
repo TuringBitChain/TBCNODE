@@ -24,7 +24,7 @@ CMutableTransaction getValidMutableTransaction() {
     CTxOut txout;
     txout.nValue = Amount(109377392);
     // std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac 6a 4c 6d 00 139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb ec34ff70aa12b8357ec488a1230bbc24a0bd4989aee41a4dc5e45126f57a155c2758caa0c766b00f824f2d93bb1a8a37324f45b8deb5e6626acafa08a2d3877b 03 40420f 23");
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac6a4c6d00139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfbec34ff70aa12b8357ec488a1230bbc24a0bd4989aee41a4dc5e45126f57a155c2758caa0c766b00f824f2d93bb1a8a37324f45b8deb5e6626acafa08a2d3877b0340420f23");
+    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914f2de6e590a078632a8f60c276d27a3eeb8b4156788ac6a4c6a00139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb28e6316d9d5e67485175931d2090a39a2fa68744a20e3e17ffc515b149c0ebb92a26dda6a25302a2b582d691dfb45e43820b7f4be93b2dbd0d0ecb5fd247d13e0340420f235a480000");
     txout.scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
     mtx.vout.push_back(txout);
 
@@ -46,7 +46,7 @@ BOOST_AUTO_TEST_CASE(valid_v2_cb_without_fixed_charge) {
 // Valid cb with fixed charge address
 BOOST_AUTO_TEST_CASE(valid_v2_cb_with_fixed_charge) {
     CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac6a4c6d01139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb4712abee6b71711b110d667ec06dfcd828f1877b0e9b11b5b61875264dc8994f18bb8efc6262a5730a547658f4af7037b4bc2c3c7629e95b54bd37bd9ee463530340420f23");
+    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914f2de6e590a078632a8f60c276d27a3eeb8b4156788ac6a4c6a01139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb3d7a2eca4fd7563022d76ee5049f2e111a117df47dd66d4e79353df9bed209ec73d5adf1040921d5dcfa831ff1e38c1694cc1538d258319aa336319b620e5fb80340420f235a480000");
     mtx.vout[0].scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
 
     CTransaction tx(mtx);

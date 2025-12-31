@@ -647,7 +647,7 @@ uint64_t vectorLEtoU64(const vector<uint8_t>& bytes) {
     return res;
 }
 
-bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash){
+bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
     if (tx.vin.empty() || tx.vout.empty()) { return false; }
     // Script data.
     const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
@@ -678,6 +678,7 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash){
     std::vector<uint8_t> msgMiner;
     uint256 msgHashManager;
     uint256 msgHashMiner;
+    std::vector<uint8_t> countryCodeVec;
 
     // Get pukeyManagerArr from hard code
     pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("484d2d9f0167586615c9dc5973c7400439a8d6b94b12021d05cdb9ceeb2aaa98")));
@@ -698,6 +699,7 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash){
     kycPermissionHeight = vectorLEtoU64(kycPermissionHeightVec);
     if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, kycChargeRateVec)) { return false; }
     kycChargeRate = vectorLEtoU64(kycChargeRateVec);
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 4, countryCodeVec)) { return false; }
     
     // Get data from Input Script
     if (!safeReadScript(chargeInputScript, inputScriptIndex, 1, currentChainHeightLengthVec)) { return false; }
@@ -736,6 +738,7 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash){
     msgManager.insert(msgManager.end(), pubkeyMinerVec.begin(), pubkeyMinerVec.end());
     msgManager.insert(msgManager.end(), kycPermissionHeightVec.begin(), kycPermissionHeightVec.end());
     msgManager.insert(msgManager.end(), kycChargeRateVec.begin(), kycChargeRateVec.end());
+    msgManager.insert(msgManager.end(), countryCodeVec.begin(), countryCodeVec.end());
     if (isFixedChangeAddress == true) {
         uint64_t chargeAddressIndex = 3;
         if (!safeReadScript(chargeOutputScript, chargeAddressIndex, 20, chargeAddressPubkeyHashVec)) { return false; }
