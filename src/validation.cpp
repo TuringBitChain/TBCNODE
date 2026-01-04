@@ -681,8 +681,8 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
     std::vector<uint8_t> countryCodeVec;
 
     // Get pukeyManagerArr from hard code
-    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("484d2d9f0167586615c9dc5973c7400439a8d6b94b12021d05cdb9ceeb2aaa98")));
-    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("56e6a101555d001886174f07911419a663d0c55fad2b274e9693bf408ac4b3b3")));
+    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49")));
+    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
 
     // Get date from Output Scirpt
     outputScriptIndex += 28;    // Skip P2PKH + op_return + op_pushdata + dataLength(25 + 1 + 1 + 1)
@@ -968,7 +968,7 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash)
 {
     int kycV1ActivationHeight = 824189;
-    int kycV2ActivationHeight = 926000;
+    int kycV2ActivationHeight = 927000;
     int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
     int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
 
