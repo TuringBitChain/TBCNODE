@@ -8,21 +8,19 @@ For Ubuntu 20.04 LTS:
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 sudo apt-get install libdb-dev
 sudo apt-get install libdb++-dev
-
+sudo apt-get install cmake
 sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-program-options-dev libboost-test-dev libboost-thread-dev
 ```
 
 For Ubuntu 22.04 LTS:
 ```
+sudo apt-get update
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 sudo apt-get install libdb-dev
 sudo apt-get install libdb++-dev
-
-# Manually install boost (version 1.66.0):
-tar -xzf boost_1_66_0.tar.gz
-cd boost_1_66_0
-./bootstrap.sh --prefix=/home/.../boost-1.66.0
-./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
+sudo apt-get install -y libboost-all-dev
+sudo apt-get install cmake
+sudo apt-get install -y libzmq3-dev
 ```
 
 For Ubuntu 24.04 LTS:
@@ -32,10 +30,13 @@ sudo apt-get update
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 
 # Install Objective-C++ support (required for Ubuntu 24.04)
-sudo apt-get install gobjc++ gcc-objc++
+sudo apt-get install gobjc++
 
 # Install Berkeley DB
 sudo apt-get install libdb-dev libdb++-dev
+
+# Install CMake
+sudo apt-get install cmake
 
 # Install additional libraries
 sudo apt-get install libzmq3-dev libminiupnpc-dev libnatpmp-dev
