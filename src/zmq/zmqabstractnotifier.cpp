@@ -27,3 +27,14 @@ bool CZMQAbstractNotifier::NotifyTransaction(
     const CTransaction & /*transaction*/) {
     return true;
 }
+
+bool CZMQAbstractNotifier::NotifyRemovedFromMempool(const uint256& txid, MemPoolRemovalReason reason,
+                                                    const CTransaction* conflictedWith)
+{
+    return true;
+}
+
+bool CZMQAbstractNotifier::NotifyRemovedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason)
+{
+    return true;
+}

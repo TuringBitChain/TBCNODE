@@ -708,6 +708,10 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-zmqpubrawtx=<address>",
                        _("Enable publish raw transaction in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempool=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempoolblock=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
 #endif
 
     strUsage += HelpMessageGroup(_("Debugging/Testing options:"));
