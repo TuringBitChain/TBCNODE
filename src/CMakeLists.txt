@@ -3,7 +3,7 @@
 # Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 cmake_minimum_required(VERSION 3.5)
-project(BitcoinSV)
+project(TuringBitChain)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -91,6 +91,7 @@ add_subdirectory(config)
 add_subdirectory(crypto)
 add_subdirectory(leveldb)
 add_subdirectory(secp256k1)
+add_subdirectory(with_schnorr_secp256k1)
 add_subdirectory(univalue)
 
 # Because the Bitcoin ABc source code is disorganised, we
@@ -195,7 +196,12 @@ add_library(common
 	warnings.cpp
 )
 
-target_link_libraries(common util secp256k1)
+target_link_libraries(common
+  PUBLIC
+    secp256k1
+	util
+    with_schnorr_secp256k1
+)
 
 # libbitcoinconsensus
 add_library(bitcoinconsensus
@@ -281,6 +287,7 @@ add_library(server
 	validation.cpp
 	validationinterface.cpp
     vmtouch.cpp
+	x_only_pubkey.cpp
 )
 
 # This require libevent

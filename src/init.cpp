@@ -48,6 +48,7 @@
 #include "validation.h"
 #include "validationinterface.h"
 #include "vmtouch.h"
+#include "x_only_pubkey.h"
 
 #ifdef ENABLE_WALLET
 #include "wallet/rpcdump.h"
@@ -174,6 +175,7 @@ public:
 static CCoinsViewDB *pcoinsdbview = nullptr;
 static CCoinsViewErrorCatcher *pcoinscatcher = nullptr;
 static std::unique_ptr<ECCVerifyHandle> globalVerifyHandle;
+static std::unique_ptr<ECCSchnorrVerifyHandle> globalSchnorrVerifyHandle;
 
 void Interrupt(boost::thread_group &threadGroup) {
     InterruptHTTPServer();
@@ -2241,7 +2243,8 @@ bool AppInitSanityChecks() {
     RandomInit();
     ECC_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
-
+    globalSchnorrVerifyHandle.reset(new ECCSchnorrVerifyHandle());
+    
     // Sanity check
     if (!InitSanityCheck()) {
         return InitError(strprintf(

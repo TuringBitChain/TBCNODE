@@ -8,21 +8,19 @@ For Ubuntu 20.04 LTS:
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 sudo apt-get install libdb-dev
 sudo apt-get install libdb++-dev
-
+sudo apt-get install cmake
 sudo apt-get install libboost-system-dev libboost-filesystem-dev libboost-chrono-dev libboost-program-options-dev libboost-test-dev libboost-thread-dev
 ```
 
 For Ubuntu 22.04 LTS:
 ```
+sudo apt-get update
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 sudo apt-get install libdb-dev
 sudo apt-get install libdb++-dev
-
-# Manually install boost (version 1.66.0):
-tar -xzf boost_1_66_0.tar.gz
-cd boost_1_66_0
-./bootstrap.sh --prefix=/home/.../boost-1.66.0
-./b2 install   --prefix=/home/.../boost-1.66.0 --with=all
+sudo apt-get install -y libboost-all-dev
+sudo apt-get install cmake
+sudo apt-get install -y libzmq3-dev
 ```
 
 For Ubuntu 24.04 LTS:
@@ -32,10 +30,13 @@ sudo apt-get update
 sudo apt-get install build-essential libtool autotools-dev automake pkg-config libssl-dev libevent-dev bsdmainutils
 
 # Install Objective-C++ support (required for Ubuntu 24.04)
-sudo apt-get install gobjc++ gcc-objc++
+sudo apt-get install gobjc++
 
 # Install Berkeley DB
 sudo apt-get install libdb-dev libdb++-dev
+
+# Install CMake
+sudo apt-get install cmake
 
 # Install additional libraries
 sudo apt-get install libzmq3-dev libminiupnpc-dev libnatpmp-dev
@@ -60,103 +61,25 @@ C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
 memory available when compiling. 
 
 ### Firstly
-
+Init and update git submodule.
 ```bash
-./autogen.sh
+git submodule init
+git submodule update
 ```
 
 ### Secondly
 
 **For Memory > 1.5GB:**
 
-For UBUNTU 20.04 LTS:
 ```bash
-./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --prefix=/home/$USER/TBCNODE
+mkdir build && cd build
+cmake ..
 ```
-
-For UBUNTU 22.04 LTS: 
-```
-CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --prefix=/home/$USER/TBCNODE   --with-boost=/home/.../boost-1.66.0 
-```
-
-For UBUNTU 24.04 LTS:
-```bash
-# Clean previous build if needed
-make clean
-
-# Configure with Boost 1.74
-CXXFLAGS="-std=c++17" ./configure --enable-cxx --disable-shared --with-pic --enable-prod-build --disable-static --disable-tests --disable-bench --with-libs=no --with-seeder=no --with-boost=/usr --prefix=/home/$USER/TBCNODE
-```
-
-For Mac OSX 13.1:
-```bash
-./configure --enable-cxx --disable-shared --with-pic --enable-prod-build  --with-boost=/opt/homebrew/opt/boost@1.76
-```
-
-
-**On systems with less memory, gcc can be tuned to conserve memory with additional CXXFLAGS:**
-
-```
-./configure CXXFLAGS="--param ggc-min-expand=1 --param ggc-min-heapsize=32768 ... "
-```
-
-Sometimes, you need to specify the LDFLAGS or CPPFLAGS before ./configure to let the compiler recognize custom paths, 
-such as:
-```
-CPPFLAGS=" -I/opt/homebrew/opt/libevent/include"      ./configure ... 
-CPPFLAGS=" -I/opt/homebrew/Cellar/libevent/2.1.12_1"  ./configure ... 
-```
-
 
 ### Finally
 
 ```bash
 make -j$(nproc)  # Use all available CPU cores for faster compilation
-make install     # optional: install bin file to the path specified by --prefix=
-```
-
-
-## Output Log of Building:
-``` 
-...
-configure: creating ./config.status
-config.status: creating Makefile
-config.status: creating libsecp256k1.pc
-config.status: creating src/libsecp256k1-config.h
-config.status: src/libsecp256k1-config.h is unchanged
-config.status: executing depfiles commands
-config.status: executing libtool commands
-Fixing libtool for -rpath problems.
-
-Options used to compile and link:
-  prod build    = no
-  with wallet   = yes
-  with zmq      = yes
-  with test     = yes
-  with bench    = yes
-  with upnp     = yes
-  use asm       = yes
-  debug enabled = no
-  werror        = no
-
-  sanitizers    
-          asan  = no
-          tsan  = no
-          ubsan = no
-
-  memory allocators
-       tcmalloc = no
-       jemalloc = no
-
-  target os     = linux
-  build os      = 
-
-  CC            = gcc
-  CFLAGS        = -g -O2
-  CPPFLAGS      =  -DHAVE_BUILD_INFO -D__STDC_FORMAT_MACROS
-  CXX           = g++ -std=c++17
-  CXXFLAGS      = -g -O2 -Wall -Wextra -Wformat -Wvla -Wformat-security -Wno-unused-parameter
-  LDFLAGS       = 
 ```
 
 ## How to Launch the TBCNODE software
@@ -308,8 +231,8 @@ EOF
 
 Run bitcoind and bitcoin-cli :
 ```
-/home/$USER/TBCNODE/bin/bitcoind -conf=/home/$USER/TBCNODE/node.noprune.conf -datadir=/home/$USER/TBCNODE/node_data_dir
-alias tbc-cli="/home/$USER/TBCNODE/bin/bitcoin-cli -conf=/home/$USER/TBCNODE/node.noprune.conf" 
+/home/$USER/TBCNODE/build/src/bitcoind -conf=/home/$USER/TBCNODE/node.noprune.conf -datadir=/home/$USER/TBCNODE/node_data_dir
+alias tbc-cli="/home/$USER/TBCNODE/build/src/bitcoin-cli -conf=/home/$USER/TBCNODE/node.noprune.conf" 
 tbc-cli  getinfo
 tbc-cli  getpeerinfo
 tbc-cli  listwallets
@@ -384,6 +307,6 @@ We recommend to use pm2 for auto restart and monitoring the node software.
 ```
 sudo npm install pm2 -g
 sed -i 's/daemon=1/daemon=0/' node.noprune.conf
-pm2 --name tbcd --max-restarts 20 start "/home/$USER/TBCNODE/bin/bitcoind -conf=/home/$USER/TBCNODE/node.noprune.conf -datadir=/home/$USER/TBCNODE/node_data_dir"
+pm2 --name tbcd --max-restarts 20 start "/home/$USER/TBCNODE/build/src/bitcoind -conf=/home/$USER/TBCNODE/node.noprune.conf -datadir=/home/$USER/TBCNODE/node_data_dir"
 pm2 ps
 ```
