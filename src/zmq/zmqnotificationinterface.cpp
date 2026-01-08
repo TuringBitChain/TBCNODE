@@ -170,7 +170,7 @@ void CZMQNotificationInterface::TransactionAddedToMempool(
     }
 }
 
-void CZMQNotificationInterface::TransactionRemovedFromMempool(const uint256& txid, MemPoolRemovalReason reason, 
+void CZMQNotificationInterface::TransactionDiscardedFromMempool(const uint256& txid, MemPoolRemovalReason reason, 
                                                               const CTransaction* conflictedWith)
 {
 
@@ -195,7 +195,7 @@ void CZMQNotificationInterface::TransactionRemovedFromMempoolBlock(const uint256
     for (auto i = notifiers.begin(); i != notifiers.end();)
     {
         CZMQAbstractNotifier *notifier = *i;
-        if (notifier->NotifyRemovedFromMempoolBlock(txid, reason))
+        if (notifier->NotifyDiscardedFromMempoolBlock(txid, reason))
         {
             ++i;
         }

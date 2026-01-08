@@ -714,13 +714,13 @@ std::string HelpMessage(HelpMessageMode mode) {
                                _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
     strUsage += HelpMessageOpt("-zmqpubremovedfrommempoolblock=<address>",
                                _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
-    strUsage += HelpMessageOpt("-zmqpubhashtx2=<address>",
+    strUsage += HelpMessageOpt("-zmqpubhashtxincr=<address>",
                                 _("Enable publish hash transaction in <address>. "));
-    strUsage += HelpMessageOpt("-zmqpubrawtx2=<address>",
+    strUsage += HelpMessageOpt("-zmqpubrawtxincr=<address>",
                                 _("Enable publish raw transaction in <address>. "));
-    strUsage += HelpMessageOpt("-zmqpubhashblock2=<address>",
+    strUsage += HelpMessageOpt("-zmqpubhashblocknew=<address>",
                                 _("Enable publish hash block in <address>. "));
-    strUsage += HelpMessageOpt("-zmqpubrawblock2=<address>",
+    strUsage += HelpMessageOpt("-zmqpubrawblocknew=<address>",
                                 _("Enable publish raw block in <address>. "));
 #endif
 

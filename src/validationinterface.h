@@ -38,7 +38,7 @@ protected:
                                  const CBlockIndex *pindexFork,
                                  bool fInitialDownload) {}
     virtual void TransactionAddedToMempool(const CTransactionRef &ptxn) {}
-    virtual void TransactionRemovedFromMempool(const uint256& txid,
+    virtual void TransactionDiscardedFromMempool(const uint256& txid,
                                                MemPoolRemovalReason reason,
                                                const CTransaction*  conflictedWith) {}
     virtual void TransactionRemovedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason) {}
@@ -72,7 +72,7 @@ struct CMainSignals {
         TransactionAddedToMempool;
     /** Notifies listeners of a transaction having been removed from mempool. */
     boost::signals2::signal<void(const uint256 &, MemPoolRemovalReason reason, const CTransaction *)>
-        TransactionRemovedFromMempool;
+        TransactionDiscardedFromMempool;
     /**
      * Notifies listeners of a transaction having been removed from mempool.
      * Some events for removing transactions from mempool are more frequent such as transaction

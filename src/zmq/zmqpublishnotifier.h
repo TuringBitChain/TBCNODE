@@ -51,7 +51,7 @@ public:
 class CZMQPublishRemovedFromMempoolBlockNotifier : public CZMQAbstractPublishNotifier
 {
 public:
-    bool NotifyRemovedFromMempoolBlock(const uint256& txid, const MemPoolRemovalReason reason) override;
+    bool NotifyDiscardedFromMempoolBlock(const uint256& txid, const MemPoolRemovalReason reason) override;
 };
 
 class CZMQPublishRawBlockNotifier : public CZMQAbstractPublishNotifier {

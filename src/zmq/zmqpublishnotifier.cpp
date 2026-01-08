@@ -22,11 +22,11 @@ static const char *MSG_HASHTX = "hashtx";
 static const char *MSG_RAWBLOCK = "rawblock";
 static const char *MSG_RAWTX = "rawtx";
 
-static const char* const MSG_HASHBLOCK2 = "hashblock2";
-static const char* const MSG_RAWBLOCK2 = "rawblock2";
-static const char* const MSG_HASHTX2 = "hashtx2";
-static const char* const MSG_RAWTX2 = "rawtx2";
-static const char *MSG_REMOVEDFROMMEMPOOL = "removedfrommempool";
+static const char* const MSG_HASHBLOCKNEW = "hashblockincr";
+static const char* const MSG_RAWBLOCKNEW = "rawblockincr";
+static const char* const MSG_HASHTXINCR = "hashtxincr";
+static const char* const MSG_RAWTXINCR = "rawtxincr";
+static const char *MSG_DISCARDEDFROMMEMPOOL = "discardedfrommempool";
 static const char *MSG_REMOVEDFROMMEMPOOLBLOCK = "removedfrommempoolblock";
 
 // Internal function to send multipart message
@@ -251,10 +251,10 @@ bool CZMQPublishRemovedFromMempoolNotifier::NotifyRemovedFromMempool(const uint2
 
     std::string message = tw.MoveOutString();
 
-    return SendZMQMessage(MSG_REMOVEDFROMMEMPOOL, message.data(), message.size());
+    return SendZMQMessage(MSG_DISCARDEDFROMMEMPOOL, message.data(), message.size());
 }
 
-bool CZMQPublishRemovedFromMempoolBlockNotifier::NotifyRemovedFromMempoolBlock(const uint256& txid,
+bool CZMQPublishRemovedFromMempoolBlockNotifier::NotifyDiscardedFromMempoolBlock(const uint256& txid,
                                                                                MemPoolRemovalReason reason)
 {
 
@@ -295,20 +295,20 @@ bool CZMQPublishRawTransactionNotifier::NotifyTransaction(
 
 bool CZMQPublishHashBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
 {
-    return SendZMQMessage(MSG_HASHBLOCK2, pindex->GetBlockHash());
+    return SendZMQMessage(MSG_HASHBLOCKNEW, pindex->GetBlockHash());
 }
 
 bool CZMQPublishRawBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
 {
-    return SendZMQMessage(MSG_RAWBLOCK2, pindex);
+    return SendZMQMessage(MSG_RAWBLOCKNEW, pindex);
 }
 
 bool CZMQPublishHashTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
 {
-    return SendZMQMessage(MSG_HASHTX2, transaction.GetId());
+    return SendZMQMessage(MSG_HASHTXINCR, transaction.GetId());
 }
 
 bool CZMQPublishRawTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
 {
-    return SendZMQMessage(MSG_RAWTX2, transaction);
+    return SendZMQMessage(MSG_RAWTXINCR, transaction);
 }

@@ -36,7 +36,7 @@ public:
     virtual bool NotifyTransaction(const CTransaction &transaction);
     virtual bool NotifyRemovedFromMempool(const uint256& txid, const MemPoolRemovalReason reason,
                                           const CTransaction* conflictedWith);
-    virtual bool NotifyRemovedFromMempoolBlock(const uint256& txid, const MemPoolRemovalReason reason);
+    virtual bool NotifyDiscardedFromMempoolBlock(const uint256& txid, const MemPoolRemovalReason reason);
 
 
 protected:

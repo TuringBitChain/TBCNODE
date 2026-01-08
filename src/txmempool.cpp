@@ -662,7 +662,7 @@ void CTxMemPool::removeUncheckedNL(
     }
     else
     {   
-        GetMainSignals().TransactionRemovedFromMempool(txn->GetId(), reason, conflictedWith);
+        GetMainSignals().TransactionDiscardedFromMempool(txn->GetId(), reason, conflictedWith);
     }
 
     nTransactionsUpdated++;

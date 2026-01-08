@@ -34,7 +34,7 @@ bool CZMQAbstractNotifier::NotifyRemovedFromMempool(const uint256& txid, MemPool
     return true;
 }
 
-bool CZMQAbstractNotifier::NotifyRemovedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason)
+bool CZMQAbstractNotifier::NotifyDiscardedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason)
 {
     return true;
 }

@@ -52,8 +52,8 @@ class ZMQNewTopicsTest (BitcoinTestFramework):
         self.zmqSubSocket.setsockopt(zmq.SUBSCRIBE, b"rawtx2")
         address = f"tcp://127.0.0.1:{zmq_port(0)}"
         self.zmqSubSocket.connect(address)
-        self.extra_args = [['-zmqpubhashblock2=%s' % address, '-zmqpubrawblock2=%s' % address,
-                            '-zmqpubhashtx2=%s' % address, '-zmqpubrawtx2=%s' % address], []]
+        self.extra_args = [['-zmqpubhashblocknew=%s' % address, '-zmqpubrawblocknew=%s' % address,
+                            '-zmqpubhashtxincr=%s' % address, '-zmqpubrawtxincr=%s' % address], []]
         self.add_nodes(self.num_nodes, self.extra_args)
         self.start_nodes()
         connect_nodes_bi(self.nodes, 0, 1)
