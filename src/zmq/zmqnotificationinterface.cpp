@@ -259,11 +259,6 @@ void CZMQNotificationInterface::BlockConnected2(
         return;
     }
 
-    for (const CTransactionRef& ptx : vtxNew) 
-    {
-        TransactionAdded(ptx);
-    }
-
     for (auto i = notifiers.begin(); i != notifiers.end();) 
     {
         CZMQAbstractNotifier* notifier = *i;
