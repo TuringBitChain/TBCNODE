@@ -1139,7 +1139,14 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
                     << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
             0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 4: ECDSA - Invalid pubkey size (not 33 or 65 bytes)
+    // Test 4: ECDSA signature with invalid message
+    std::vector<uint8_t> bad_ecdsa_message{0x05, 0x06, 0x07, 0x08};
+    run_case("ECDSA: Invalid message",
+            CScript() << ecdsa_comp_sig << bad_ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+            0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 5: ECDSA - Invalid pubkey size (not 33 or 65 bytes)
     std::vector<uint8_t> invalid_ecdsa_pubkey(32, 0x11);
     run_case("ECDSA: Invalid pubkey size",
             CScript() << ecdsa_comp_sig << test_message << invalid_ecdsa_pubkey
@@ -1150,27 +1157,34 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     // SECTION 2: Schnorr Signature Tests (sig_func 0x02)
     // ========================================================================
     
-    // Test 5: Valid Schnorr signature verification
+    // Test 6: Valid Schnorr signature verification
     run_case("Schnorr: Valid signature",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, success);
 
-    // Test 6: Schnorr - Invalid signature (all 0xFF)
+    // Test 7: Schnorr - Invalid signature (all 0xFF)
     std::vector<uint8_t> invalid_schnorr_sig(64, 0xff);
     run_case("Schnorr: Invalid signature bytes",
              CScript() << invalid_schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 7: Schnorr - Invalid signature length (not 64 bytes)
+    // Test 8: Schnorr - Invalid signature length (not 64 bytes)
     std::vector<uint8_t> short_schnorr_sig(32, 0x11);
     run_case("Schnorr: Invalid signature length",
              CScript() << short_schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 8: Schnorr - Invalid pubkey size (not 32 bytes)
+    // Test 9: Schnorr - Invalid message
+    std::vector<uint8_t> bad_schnorr_message{0x05, 0x06, 0x07, 0x08};
+    run_case("Schnorr: Invalid message",
+             CScript() << schnorr_sig << bad_schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 10: Schnorr - Invalid pubkey size (not 32 bytes)
     std::vector<uint8_t> bad_schnorr_pubkey(33, 0x11);
     run_case("Schnorr: Invalid pubkey size",
              CScript() << schnorr_sig << schnorr_message << bad_schnorr_pubkey
@@ -1181,25 +1195,25 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     // SECTION 3: Signature Function Validation Tests
     // ========================================================================
     
-    // Test 9: Invalid sig_func (0x03) - unsupported
+    // Test 11: Invalid sig_func (0x03) - unsupported
     run_case("sig_func: Invalid value 0x03",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x03} << OP_CHECKDATASIG,
              0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
 
-    // Test 10: Invalid sig_func (0x00) - unsupported
+    // Test 12: Invalid sig_func (0x00) - unsupported
     run_case("sig_func: Invalid value 0x00",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x00} << OP_CHECKDATASIG,
              0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
 
-    // Test 11: sig_func length not 1 (too long)
+    // Test 13: sig_func length not 1 (too long)
     run_case("sig_func: Length too long",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x01, 0x02} << OP_CHECKDATASIG,
              0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
 
-    // Test 12: sig_func length not 1 (empty)
+    // Test 14: sig_func length not 1 (empty)
     run_case("sig_func: Empty",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{} << OP_CHECKDATASIG,
@@ -1209,7 +1223,7 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     // SECTION 4: Stack and Parameter Validation Tests
     // ========================================================================
     
-    // Test 13: Insufficient stack parameters (empty stack)
+    // Test 15: Insufficient stack parameters (empty stack)
     run_case("Stack: Insufficient parameters",
              CScript() << OP_CHECKDATASIG, 
              0, false, SCRIPT_ERR_INVALID_STACK_OPERATION, false, 0, failure);
@@ -1218,13 +1232,13 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     // SECTION 5: OP_CHECKDATASIGVERIFY Tests
     // ========================================================================
     
-    // Test 14: CHECKDATASIGVERIFY success - Schnorr (stack should be empty)
+    // Test 16: CHECKDATASIGVERIFY success - Schnorr (stack should be empty)
     run_case("CHECKDATASIGVERIFY: Schnorr success",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIGVERIFY,
              0, true, SCRIPT_ERR_OK, true, 0, failure);
 
-    // Test 15: CHECKDATASIGVERIFY failure - wrong signature
+    // Test 17: CHECKDATASIGVERIFY failure - wrong signature
     run_case("CHECKDATASIGVERIFY: Wrong signature fails",
              CScript() << invalid_schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIGVERIFY,
@@ -1235,25 +1249,25 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     // SECTION 6: Cross-Validation Tests (Wrong Algorithm)
     // ========================================================================
     
-    // Test 16: Use ECDSA signature with Schnorr sig_func (0x02)
+    // Test 18: Use ECDSA signature with Schnorr sig_func (0x02)
     run_case("Cross: ECDSA sig with Schnorr sig_func",
              CScript() << ecdsa_comp_sig << test_message << compressed_pubkey_vec
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 17: Use Schnorr signature with ECDSA sig_func (0x01)
+    // Test 19: Use Schnorr signature with ECDSA sig_func (0x01)
     run_case("Cross: Schnorr sig with ECDSA sig_func",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 18: Use ECDSA compressed key with Schnorr signature
+    // Test 20: Use ECDSA compressed key with Schnorr signature
     run_case("Cross: ECDSA pubkey with Schnorr sig and sig_func",
              CScript() << schnorr_sig << schnorr_message << compressed_pubkey_vec
                        << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 19: Use Schnorr key with ECDSA signature
+    // Test 21: Use Schnorr key with ECDSA signature
     run_case("Cross: Schnorr pubkey with ECDSA sig and sig_func",
              CScript() << ecdsa_comp_sig << test_message << schnorr_pubkey
                        << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
