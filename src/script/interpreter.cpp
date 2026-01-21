@@ -18,6 +18,7 @@
 #include "uint256.h"
 #include "consensus/consensus.h"
 #include "script_config.h"
+#include "x_only_pubkey.h"
 
 namespace {
 
@@ -2187,16 +2188,45 @@ bool TransactionSignatureChecker::CheckSig(
     return true;
 }
 
+namespace {
+bool CheckDataSigECDSA(
+    const std::vector<uint8_t> &vchPubKey,
+    const uint256 &messageHash,
+    const std::vector<uint8_t> &vchSig) {
+    if (vchPubKey.size() != 33 && vchPubKey.size() != 65) {
+        return false;
+    }
+
+    CPubKey pubkey(vchPubKey);
+    if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    return pubkey.Verify(messageHash, vchSig);
+}
+
+bool CheckDataSigSchnorr(
+    const std::vector<uint8_t> &vchPubKey,
+    const uint256 &messageHash,
+    const std::vector<uint8_t> &vchSig) {
+    if (vchPubKey.size() != 32) {
+        return false;
+    }
+
+    XOnlyPubKey pubkey(vchPubKey);
+    if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    return pubkey.VerifySchnorr(messageHash, vchSig);
+}
+}
+
 bool TransactionSignatureChecker::CheckDataSig(
     const std::vector<uint8_t> &vchSig,
     const std::vector<uint8_t> &vchMessage,
     const std::vector<uint8_t> &vchPubKey,
     const std::vector<uint8_t> &vchSigFuncFlag) const {
-    
-    CPubKey pubkey(vchPubKey);
-    if (!pubkey.IsValid()) {
-        return false;
-    }
 
     if (vchSig.empty()) {
         return false;
@@ -2204,10 +2234,20 @@ bool TransactionSignatureChecker::CheckDataSig(
 
     uint256 messageHash = MessageHash(vchMessage);
 
-    if (VerifySignature(vchSig, pubkey, messageHash)) {
-        return true;
+    if (vchSigFuncFlag.size() != 1) {
+        return false;
     }
 
+    switch (vchSigFuncFlag[0]) {
+        case 0x01:
+            return CheckDataSigECDSA(vchPubKey, messageHash, vchSig);
+        case 0x02:
+            return CheckDataSigSchnorr(vchPubKey, messageHash, vchSig);
+        default:
+            return false;
+    }
+
+    // Should not reach here
     return false;
 }
 
