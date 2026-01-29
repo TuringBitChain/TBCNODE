@@ -50,7 +50,6 @@
 #include "warnings.h"
 #include "blockfileinfostore.h"
 #include "time_consuming.h"
-#include "x_only_pubkey.h"
 #include "script/script_num.h"
 #include "key.h"
 #include "pubkey.h"

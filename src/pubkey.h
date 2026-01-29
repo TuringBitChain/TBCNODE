@@ -196,6 +196,79 @@ struct CExtPubKey {
 };
 
 /**
+ * An encapsulated x-only public key (32 bytes) for Schnorr signatures.
+ */
+class XOnlyPubKey {
+private:
+    /**
+     * Store the 32-byte x-coordinate of the public key.
+     */
+    uint8_t vch[32];
+
+    //! Set this key data to be invalid
+    void Invalidate() { 
+        memset(vch, 0, 32); 
+    }
+
+public:
+    //! Construct an invalid public key.
+    XOnlyPubKey() { Invalidate(); }
+
+    //! Initialize a public key using begin/end iterators to byte data.
+    template <typename T> void Set(const T pbegin, const T pend) {
+        if (pend - pbegin == 32) {
+            memcpy(vch, (uint8_t *)&pbegin[0], 32);
+        } else {
+            Invalidate();
+        }
+    }
+
+    //! Construct a public key using begin/end iterators to byte data.
+    template <typename T> XOnlyPubKey(const T pbegin, const T pend) {
+        Set(pbegin, pend);
+    }
+
+    //! Construct a public key from a byte vector.
+    XOnlyPubKey(const std::vector<uint8_t> &_vch) {
+        Set(_vch.begin(), _vch.end()); 
+    }
+
+    //! Simple read-only vector-like interface to the pubkey data.
+    unsigned int size() const { return 32; }
+    const uint8_t *begin() const { return vch; }
+    const uint8_t *end() const { return vch + 32; }
+    const uint8_t &operator[](unsigned int pos) const { return vch[pos]; }
+
+    //! Comparator implementation.
+    friend bool operator==(const XOnlyPubKey &a, const XOnlyPubKey &b) {
+        return memcmp(a.vch, b.vch, 32) == 0;
+    }
+    friend bool operator!=(const XOnlyPubKey &a, const XOnlyPubKey &b) {
+        return !(a == b);
+    }
+    friend bool operator<(const XOnlyPubKey &a, const XOnlyPubKey &b) {
+        return memcmp(a.vch, b.vch, 32) < 0;
+    }
+
+    /*
+     * Check syntactic correctness (32 bytes, non-zero).
+     *
+     * Note that this is consensus critical as CheckSig() calls it!
+     */
+    bool IsValid() const;
+
+    //! fully validate whether this is a valid x-only public key
+    bool IsFullyValid() const;
+
+    /**
+     * Verify a Schnorr signature (64 bytes).
+     * If this public key is not fully valid, the return value will be false.
+     */
+    bool VerifySchnorr(const uint256 &hash, 
+                      const std::vector<uint8_t> &vchSig) const;
+};
+
+/**
  * Users of this module must hold an ECCVerifyHandle. The constructor and
  * destructor of these are not allowed to run in parallel, though.
  */
