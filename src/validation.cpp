@@ -863,7 +863,7 @@ bool FilledMinerBill(const CTransaction& tx)
     uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
     uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
     if (coinbaseFee < lowestLimitCoinbaseFee) {
-        LogPrintf("Coinbase fees are not within the permitted range.\n");
+        LogPrintf("Coinbase fees are not within the permitted range.txid:%s, coinbaseFee=%ld, lowestLimitCoinbaseFee=%ld\n", tx.GetHash().ToString(), coinbaseFee, lowestLimitCoinbaseFee);
         return false;
     }
 
@@ -990,14 +990,18 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
         if (chainActive.Height() >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
             if (chainActive.Height() >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
                 if (!FilledMinerBillV2(tx, prevBlockHash)) {
-                    LogPrintf("chainHeight type:%s sigHeight:%s 1000000 num type:%s\n",\
-                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+                    LogPrintf("Judgment condition %d chainHeight=%d sigHeight=%d\n",
+                        kycV2ActivationHeight,
+                        chainActive.Height(),
+                        scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
                 }
             } else {
                 if (!FilledMinerBill(tx)) {
-                    LogPrintf("chainHeight type:%s sigHeight:%s 824189 num type:%s\n",\
-                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+                    LogPrintf("Judgment condition %d chainHeight=%d sigHeight=%d\n",
+                        kycV1ActivationHeight,
+                        chainActive.Height(),
+                        scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
                 }
             }
