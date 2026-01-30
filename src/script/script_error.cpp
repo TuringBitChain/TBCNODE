@@ -85,6 +85,12 @@ const char *ScriptErrorString(const ScriptError serror) {
         case SCRIPT_ERR_SIG_NULLFAIL:
             return "Signature must be zero for failed CHECK(MULTI)SIG "
                    "operation";
+        case SCRIPT_ERR_CHECKDATASIG_FLAG:
+            return "Invalid CHECKDATASIG flag";
+        case SCRIPT_ERR_X_ONLY_PUBKEY_SIZE:
+            return "Invalid x-only public key size";
+        case SCRIPT_ERR_SCHNORR_SIG_SIZE:
+            return "Invalid schnorr signature size";
         case SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS:
             return "NOPx reserved for soft-fork upgrades";
         case SCRIPT_ERR_PUBKEYTYPE:

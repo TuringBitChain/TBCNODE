@@ -1055,33 +1055,39 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
     CPubKey uncompressed_pubkey = key_uncomp.GetPubKey();
     std::vector<uint8_t> uncompressed_pubkey_vec(uncompressed_pubkey.begin(), uncompressed_pubkey.end());
     
-    // Create a message and sign it with compressed key
-    std::vector<uint8_t> test_message{0x01, 0x02, 0x03, 0x04};
-    uint256 message_hash;
-    CHashWriter ss(SER_GETHASH, 0);
-    for (const uint8_t &i : test_message) {
-        ss << i;
-    }
-    message_hash = ss.GetHash();
+    // Create a message
+    std::vector<uint8_t> ecdsa_message{0x01, 0x02, 0x03, 0x04};
+
+    // single SHA256 hash  
+    uint256 ecdsa_message_single_sha256_hash;
+    CHash256().Write(ecdsa_message.data(), ecdsa_message.size()).SingleFinalize(ecdsa_message_single_sha256_hash.begin());
+    std::vector<uint8_t> ecdsa_message_single_sha256(ecdsa_message_single_sha256_hash.begin(), ecdsa_message_single_sha256_hash.end());
+
+    // double SHA256 hash 
+    uint256 ecdsa_message_double_sha256_hash;
+    CHash256().Write(ecdsa_message.data(), ecdsa_message.size()).Finalize(ecdsa_message_double_sha256_hash.begin());
     
+    // Sign double SHA256 hash with compressed key
     std::vector<uint8_t> ecdsa_comp_sig;
-    if (!key_comp.Sign(message_hash, ecdsa_comp_sig)) {
+    if (!key_comp.Sign(ecdsa_message_double_sha256_hash, ecdsa_comp_sig)) {
         BOOST_FAIL("Failed to generate ECDSA signature for compressed key");
     }
 
-    // Sign with uncompressed key
+    // Sign double SHA256 hash with uncompressed key
     std::vector<uint8_t> ecdsa_uncomp_sig;
-    if (!key_uncomp.Sign(message_hash, ecdsa_uncomp_sig)) {
+    if (!key_uncomp.Sign(ecdsa_message_double_sha256_hash, ecdsa_uncomp_sig)) {
         BOOST_FAIL("Failed to generate ECDSA signature for uncompressed key");
     }
     
     // ========== Schnorr test data setup ==========
     string schnorr_pubkey_str = "4acaff36ad050361ba617c7597cbab7e9145b77da06f07cf32681139bbf599c8";
     string schnorr_msg_str = "68656c6c6f";
+    string schnorr_msg_single_sha256_str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
     string schnorr_sig_str = "0a75f4eed0e32143ff8fe1500824e17168d224e01441c51cd47602084ba14e36023a495d06c7f7bef067e7ced1afef92244e383e284bd45657f41fb676096450";
 
     std::vector<uint8_t> schnorr_pubkey = ParseHex(schnorr_pubkey_str);
     std::vector<uint8_t> schnorr_message = ParseHex(schnorr_msg_str); 
+    std::vector<uint8_t> schnorr_message_single_sha256 = ParseHex(schnorr_msg_single_sha256_str);
     std::vector<uint8_t> schnorr_sig = ParseHex(schnorr_sig_str);
 
     // Lambda to run test cases
@@ -1116,162 +1122,329 @@ BOOST_FIXTURE_TEST_CASE(op_checkdatasig, BasicTestingSetup)
         }
     };
 
+    // Flag format: [data_conversion_method, sig_func] where:
+    //   data_conversion_method: 0x01=SINGLE_SHA256, 0x02=DOUBLE_SHA256
+    //   sig_func: 0x01=ECDSA, 0x02=SCHNORR
     // ========================================================================
-    // SECTION 1: ECDSA Signature Tests (sig_func 0x01)
+    // SECTION 1: ECDSA Signature Tests
     // ========================================================================
-    
-    // Test 1: ECDSA with compressed pubkey - valid signature
-    run_case("ECDSA: Valid compressed pubkey",
-        CScript() << ecdsa_comp_sig << test_message << compressed_pubkey_vec
-                  << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+
+    // Test 1: ECDSA with compressed pubkey - valid signature (double sha256 method)
+    run_case("ECDSA: Valid compressed pubkey (double sha256 method)",
+        CScript() << ecdsa_comp_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
         0, true, SCRIPT_ERR_OK, true, 1, success);
 
-    // Test 2: ECDSA with uncompressed pubkey - valid signature
-    run_case("ECDSA: Valid uncompressed pubkey",
-            CScript() << ecdsa_uncomp_sig << test_message << uncompressed_pubkey_vec
-                    << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+    // Test 2: ECDSA with uncompressed pubkey - valid signature (double sha256 method)
+    run_case("ECDSA: Valid uncompressed pubkey (double sha256 method)",
+        CScript() << ecdsa_uncomp_sig << ecdsa_message << uncompressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+        0, true, SCRIPT_ERR_OK, true, 1, success);
+    
+    // Test 3: ECDSA with compressed pubkey - valid signature (single sha256 method)
+    run_case("ECDSA: Valid compressed pubkey (single sha256 method)",
+        CScript() << ecdsa_comp_sig << ecdsa_message_single_sha256 << compressed_pubkey_vec
+                  << std::vector<uint8_t>{0x01, 0x01} << OP_CHECKDATASIG,
+        0, true, SCRIPT_ERR_OK, true, 1, success);
+
+    // Test 4: ECDSA with uncompressed pubkey - valid signature (single sha256 method)
+    run_case("ECDSA: Valid uncompressed pubkey (single sha256 method)",
+            CScript() << ecdsa_uncomp_sig << ecdsa_message_single_sha256 << uncompressed_pubkey_vec
+                    << std::vector<uint8_t>{0x01, 0x01} << OP_CHECKDATASIG,
             0, true, SCRIPT_ERR_OK, true, 1, success);
 
-    // Test 3: ECDSA signature with invalid signature
-    std::vector<uint8_t> bad_ecdsa_sig{0x05, 0x06, 0x07, 0x08};
-    run_case("ECDSA: Invalid signature",
-            CScript() << bad_ecdsa_sig << test_message << compressed_pubkey_vec
-                    << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+    // Test 5: ECDSA signature with mismatched message
+    std::vector<uint8_t> mismatched_ecdsa_message{0x05, 0x06, 0x07, 0x08};
+    run_case("ECDSA: Mismatched message",
+            CScript() << ecdsa_comp_sig << mismatched_ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
             0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 4: ECDSA signature with invalid message
-    std::vector<uint8_t> bad_ecdsa_message{0x05, 0x06, 0x07, 0x08};
-    run_case("ECDSA: Invalid message",
-            CScript() << ecdsa_comp_sig << bad_ecdsa_message << compressed_pubkey_vec
-                    << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+    // Test 6: ECDSA signature with invalid signature (no flags)
+    std::vector<uint8_t> invalid_ecdsa_sig{0x05, 0x06, 0x07, 0x08};
+    run_case("ECDSA: Invalid signature (no flags)",
+            CScript() << invalid_ecdsa_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
             0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 5: ECDSA - Invalid pubkey size (not 33 or 65 bytes)
+    // Test 7: ECDSA signature with invalid signature (strict encoding check)
+    run_case("ECDSA: Invalid signature (strict encoding check)",
+            CScript() << invalid_ecdsa_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_STRICTENC | SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S, 
+            false, SCRIPT_ERR_SIG_DER, false, 0, failure);
+
+    // Test 8: ECDSA - Signature with high S value (should fail with LOW_S flag)
+    // DER signature with high S: 0x304502...022100... (S value > order/2)
+    std::vector<uint8_t> high_s_sig = ParseHex(
+        "304502203e4516da7253cf068effec6b95c41221c0cf3a8e6ccb8cbf1725b562e9afde2c"
+        "022100ab1e3da73d67e32045a20e0b999e049978ea8d6ee5480d485fcf2ce0d03b2ef001");
+    run_case("ECDSA: Signature with high S value",
+            CScript() << high_s_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_LOW_S, 
+            false, SCRIPT_ERR_SIG_HIGH_S, false, 0, failure);
+
+    // Test 9: ECDSA - Signature with invalid hashtype
+    // DER signature with invalid hashtype 0xFF
+    std::vector<uint8_t> invalid_hashtype_sig = ParseHex(
+        "3044022057292e2d4dfe775becdd0a9e6547997c728cdf35390f6a017da56d654d374e49"
+        "02206b643be2fc53763b4e284845bfea2c597d2dc7759941dce937636c9d341b71edff");
+    run_case("ECDSA: Signature with invalid hashtype",
+            CScript() << invalid_hashtype_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_STRICTENC, 
+            false, SCRIPT_ERR_SIG_HASHTYPE, false, 0, failure);
+
+    // Test 10: ECDSA - Signature uses FORKID but flag doesn't enable it
+    // DER signature with SIGHASH_FORKID (0x40) set in hashtype
+    std::vector<uint8_t> forkid_sig = ParseHex(
+        "3044022057292e2d4dfe775becdd0a9e6547997c728cdf35390f6a017da56d654d374e49"
+        "02206b643be2fc53763b4e284845bfea2c597d2dc7759941dce937636c9d341b71ed41");
+    run_case("ECDSA: Signature with FORKID but flag not enabled",
+            CScript() << forkid_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_STRICTENC,
+            false, SCRIPT_ERR_ILLEGAL_FORKID, false, 0, failure);
+
+    // Test 11: ECDSA - FORKID enabled but signature doesn't use it
+    // DER signature with regular SIGHASH_ALL (0x01) without FORKID
+    std::vector<uint8_t> no_forkid_sig = ParseHex(
+        "3044022057292e2d4dfe775becdd0a9e6547997c728cdf35390f6a017da56d654d374e49"
+        "02206b643be2fc53763b4e284845bfea2c597d2dc7759941dce937636c9d341b71ed01");
+    run_case("ECDSA: FORKID enabled but signature doesn't use it",
+            CScript() << no_forkid_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_STRICTENC | SCRIPT_ENABLE_SIGHASH_FORKID,
+            false, SCRIPT_ERR_MUST_USE_FORKID, false, 0, failure);
+
+    // Test 12: ECDSA - Invalid pubkey (no flags)
     std::vector<uint8_t> invalid_ecdsa_pubkey(32, 0x11);
-    run_case("ECDSA: Invalid pubkey size",
-            CScript() << ecdsa_comp_sig << test_message << invalid_ecdsa_pubkey
-                    << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+    run_case("ECDSA: Invalid pubkey (no flags)",
+            CScript() << ecdsa_comp_sig << ecdsa_message << invalid_ecdsa_pubkey
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 13: ECDSA - Invalid pubkey size (strict encoding check)
+    run_case("ECDSA: Invalid pubkey (strict encoding check)",
+            CScript() << ecdsa_comp_sig << ecdsa_message << invalid_ecdsa_pubkey
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_STRICTENC | SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S, 
+            false, SCRIPT_ERR_PUBKEYTYPE, false, 0, failure);
+
+    // Test 14: ECDSA - Uncompressed pubkey with COMPRESSED_PUBKEYTYPE flags
+    run_case("ECDSA: Uncompressed pubkey rejected with COMPRESSED_PUBKEYTYPE flags",
+            CScript() << ecdsa_uncomp_sig << ecdsa_message << uncompressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+            SCRIPT_VERIFY_COMPRESSED_PUBKEYTYPE,
+            false, SCRIPT_ERR_NONCOMPRESSED_PUBKEY, false, 0, failure);
 
     // ========================================================================
-    // SECTION 2: Schnorr Signature Tests (sig_func 0x02)
+    // SECTION 2: Schnorr Signature Tests
     // ========================================================================
     
-    // Test 6: Valid Schnorr signature verification
-    run_case("Schnorr: Valid signature",
+    // Test 15: Valid Schnorr signature verification (double sha256 method)
+    run_case("Schnorr: Valid signature (double sha256 method)",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, success);
 
-    // Test 7: Schnorr - Invalid signature (all 0xFF)
+    // Test 16: Valid Schnorr signature verification (single sha256 method)
+    run_case("Schnorr: Valid signature (single sha256 method)",
+             CScript() << schnorr_sig << schnorr_message_single_sha256 << schnorr_pubkey
+                       << std::vector<uint8_t>{0x01, 0x02} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, success);
+
+    // Test 17: Schnorr - Mismatched message
+    std::vector<uint8_t> mismatched_schnorr_message{0x05, 0x06, 0x07, 0x08};
+    run_case("Schnorr: Mismatched message",
+             CScript() << schnorr_sig << mismatched_schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 18: Schnorr - Invalid signature
     std::vector<uint8_t> invalid_schnorr_sig(64, 0xff);
     run_case("Schnorr: Invalid signature bytes",
              CScript() << invalid_schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
-    // Test 8: Schnorr - Invalid signature length (not 64 bytes)
+    // Test 19: Schnorr - Invalid signature length
     std::vector<uint8_t> short_schnorr_sig(32, 0x11);
     run_case("Schnorr: Invalid signature length",
              CScript() << short_schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_SCHNORR_SIG_SIZE, false, 0, failure);
 
-    // Test 9: Schnorr - Invalid message
-    std::vector<uint8_t> bad_schnorr_message{0x05, 0x06, 0x07, 0x08};
-    run_case("Schnorr: Invalid message",
-             CScript() << schnorr_sig << bad_schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
-
-    // Test 10: Schnorr - Invalid pubkey size (not 32 bytes)
+    // Test 20: Schnorr - Invalid pubkey size
     std::vector<uint8_t> bad_schnorr_pubkey(33, 0x11);
     run_case("Schnorr: Invalid pubkey size",
              CScript() << schnorr_sig << schnorr_message << bad_schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_X_ONLY_PUBKEY_SIZE, false, 0, failure);
+
+    // ========================================================================
+    // SECTION 3: Flag Validation Tests
+    // ========================================================================
+    
+    // Test 21: Invalid message type flag (0x00)
+    run_case("Flag: Invalid message type 0x00",
+             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x00, 0x02} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_CHECKDATASIG_FLAG, false, 0, failure);
+
+    // Test 22: Invalid sig_func (0x00)
+    run_case("Flag: Invalid sig_func 0x00",
+             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x01, 0x00} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_CHECKDATASIG_FLAG, false, 0, failure);
+
+    // Test 23: Flag length too short
+    run_case("Flag: Length too short (1 byte)",
+        CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
+                  << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
+        0, false, SCRIPT_ERR_CHECKDATASIG_FLAG, false, 0, failure);
+
+    // Test 24: Flag length too long
+    run_case("Flag: Length too long (3 bytes)",
+             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x01, 0x02, 0x03} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_CHECKDATASIG_FLAG, false, 0, failure);
+
+    // ========================================================================
+    // SECTION 4: Data Conversion Method MisMatch Tests
+    // ========================================================================
+
+    // Test 27: Flag is Double SHA256 (0x02) but message passed is already SHA256 hashed
+    run_case("Data Conversion Method Mismatch: Double SHA256 flag but SHA256 hashed message passed",
+             CScript() << schnorr_sig << schnorr_message_single_sha256 << schnorr_pubkey
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 28: Flag is Single SHA256 (0x01) but raw message passed
+    run_case("Data Conversion Method Mismatch: Single SHA256 flag but raw message passed",
+             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x01, 0x02} << OP_CHECKDATASIG,
              0, true, SCRIPT_ERR_OK, true, 1, failure);
 
     // ========================================================================
-    // SECTION 3: Signature Function Validation Tests
+    // SECTION 5: Sig Function MisMatch Tests
+    // ========================================================================
+
+    // Test 29: ECDSA with Schnorr flag
+    run_case("Sig Function Mismatch: ECDSA with Schnorr flag",
+             CScript() << ecdsa_comp_sig << ecdsa_message << compressed_pubkey_vec
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_X_ONLY_PUBKEY_SIZE, false, 0, failure);
+
+    // Test 30: Schnorr with ECDSA flag
+    run_case("Sig Function Mismatch: Schnorr with ECDSA flag",
+             CScript() << schnorr_sig << ecdsa_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+             SCRIPT_VERIFY_STRICTENC | SCRIPT_VERIFY_DERSIG, false, SCRIPT_ERR_PUBKEYTYPE, false, 0, failure);
+
+    // ========================================================================
+    // SECTION 6: Signature Mismatch Tests
+    // ========================================================================
+
+    // Test 31: Use Schnorr signature with ECDSA
+    run_case("Signature Mismatch: Schnorr sig with ECDSA",
+        CScript() << schnorr_sig << ecdsa_message << compressed_pubkey_vec
+                << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+        SCRIPT_VERIFY_STRICTENC | SCRIPT_VERIFY_DERSIG, false, SCRIPT_ERR_SIG_DER, false, 0, failure);
+
+    // Test 32: Use ECDSA signature with Schnorr
+    run_case("Signature Mismatch: ECDSA sig with Schnorr",
+        CScript() << ecdsa_comp_sig << ecdsa_message << schnorr_pubkey
+                  << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+        0, false, SCRIPT_ERR_SCHNORR_SIG_SIZE, false, 0, failure);
+
+    // ========================================================================
+    // SECTION 7: Pubkey Mismatch Tests
+    // ========================================================================
+
+    // Test 33: Use Schnorr key with ECDSA signature
+    run_case("Pubkey Mismatch: Schnorr pubkey with ECDSA",
+        CScript() << ecdsa_comp_sig << ecdsa_message << schnorr_pubkey
+                << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+        SCRIPT_VERIFY_STRICTENC, false, SCRIPT_ERR_PUBKEYTYPE, false, 0, failure);
+
+    // Test 34: Use ECDSA compressed key with Schnorr signature
+    run_case("Pubkey Mismatch: ECDSA pubkey with Schnorr",
+            CScript() << schnorr_sig << schnorr_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+            0, false, SCRIPT_ERR_X_ONLY_PUBKEY_SIZE, false, 0, failure);
+
+    // ========================================================================
+    // SECTION 8: Empty Signature Tests
+    // ========================================================================
+
+    // Test 35: Empty signature with ECDSA sig_func
+    // Note: Empty signature is allowed as a compact way to provide an invalid signature
+    std::vector<uint8_t> empty_sig;
+    run_case("Empty: Zero-length signature (ECDSA)",
+             CScript() << empty_sig << ecdsa_message << compressed_pubkey_vec
+                       << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // Test 36: Empty signature with Schnorr sig_func
+    // Note: Empty signature is allowed as a compact way to provide an invalid signature
+    run_case("Empty: Zero-length signature (Schnorr)",
+             CScript() << empty_sig << schnorr_message << schnorr_pubkey
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
+             0, true, SCRIPT_ERR_OK, true, 1, failure);
+
+    // ========================================================================
+    // SECTION 9: Stack and Parameter Validation Tests
     // ========================================================================
     
-    // Test 11: Invalid sig_func (0x03) - unsupported
-    run_case("sig_func: Invalid value 0x03",
-             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x03} << OP_CHECKDATASIG,
-             0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
-
-    // Test 12: Invalid sig_func (0x00) - unsupported
-    run_case("sig_func: Invalid value 0x00",
-             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x00} << OP_CHECKDATASIG,
-             0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
-
-    // Test 13: sig_func length not 1 (too long)
-    run_case("sig_func: Length too long",
-             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x01, 0x02} << OP_CHECKDATASIG,
-             0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
-
-    // Test 14: sig_func length not 1 (empty)
-    run_case("sig_func: Empty",
-             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{} << OP_CHECKDATASIG,
-             0, false, SCRIPT_ERR_DATA_SIG_FUNCTION, false, 0, failure);
-
-    // ========================================================================
-    // SECTION 4: Stack and Parameter Validation Tests
-    // ========================================================================
-    
-    // Test 15: Insufficient stack parameters (empty stack)
-    run_case("Stack: Insufficient parameters",
+    // Test 37: Insufficient stack parameters (empty stack)
+    run_case("Stack: Insufficient parameters (0 elements)",
              CScript() << OP_CHECKDATASIG, 
              0, false, SCRIPT_ERR_INVALID_STACK_OPERATION, false, 0, failure);
 
+    // Test 38: Insufficient stack parameters (1 element)
+    run_case("Stack: Insufficient parameters (1 element)",
+             CScript() << schnorr_sig << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_INVALID_STACK_OPERATION, false, 0, failure);
+
+    // Test 39: Insufficient stack parameters (2 elements)
+    run_case("Stack: Insufficient parameters (2 elements)",
+             CScript() << schnorr_sig << schnorr_message << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_INVALID_STACK_OPERATION, false, 0, failure);
+
+    // Test 40: Insufficient stack parameters (3 elements)
+    run_case("Stack: Insufficient parameters (3 elements)",
+             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey << OP_CHECKDATASIG,
+             0, false, SCRIPT_ERR_INVALID_STACK_OPERATION, false, 0, failure);
+
     // ========================================================================
-    // SECTION 5: OP_CHECKDATASIGVERIFY Tests
+    // SECTION 10: OP_CHECKDATASIGVERIFY Tests
     // ========================================================================
+
+    // Test 41: CHECKDATASIGVERIFY success - ECDSA (stack should be empty)
+    run_case("CHECKDATASIGVERIFY: ECDSA success",
+        CScript() << ecdsa_comp_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIGVERIFY,
+        0, true, SCRIPT_ERR_OK, true, 0, {});
     
-    // Test 16: CHECKDATASIGVERIFY success - Schnorr (stack should be empty)
+    // Test 42: CHECKDATASIGVERIFY success - Schnorr (stack should be empty)
     run_case("CHECKDATASIGVERIFY: Schnorr success",
              CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIGVERIFY,
-             0, true, SCRIPT_ERR_OK, true, 0, failure);
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIGVERIFY,
+             0, true, SCRIPT_ERR_OK, true, 0, {});
 
-    // Test 17: CHECKDATASIGVERIFY failure - wrong signature
+    // Test 43: CHECKDATASIGVERIFY failure - wrong signature (ECDSA)
+    run_case("CHECKDATASIGVERIFY: Wrong signature fails",
+        CScript() << invalid_ecdsa_sig << ecdsa_message << compressed_pubkey_vec
+                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIGVERIFY,
+        0, false, SCRIPT_ERR_CHECKDATASIGVERIFY, false, 0, failure);        
+
+    // Test 44: CHECKDATASIGVERIFY failure - wrong signature (Schnorr)
     run_case("CHECKDATASIGVERIFY: Wrong signature fails",
              CScript() << invalid_schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIGVERIFY,
+                       << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIGVERIFY,
              0, false, SCRIPT_ERR_CHECKDATASIGVERIFY, false, 0, failure);
-
-
-    // ========================================================================
-    // SECTION 6: Cross-Validation Tests (Wrong Algorithm)
-    // ========================================================================
-    
-    // Test 18: Use ECDSA signature with Schnorr sig_func (0x02)
-    run_case("Cross: ECDSA sig with Schnorr sig_func",
-             CScript() << ecdsa_comp_sig << test_message << compressed_pubkey_vec
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
-
-    // Test 19: Use Schnorr signature with ECDSA sig_func (0x01)
-    run_case("Cross: Schnorr sig with ECDSA sig_func",
-             CScript() << schnorr_sig << schnorr_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
-
-    // Test 20: Use ECDSA compressed key with Schnorr signature
-    run_case("Cross: ECDSA pubkey with Schnorr sig and sig_func",
-             CScript() << schnorr_sig << schnorr_message << compressed_pubkey_vec
-                       << std::vector<uint8_t>{0x02} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
-
-    // Test 21: Use Schnorr key with ECDSA signature
-    run_case("Cross: Schnorr pubkey with ECDSA sig and sig_func",
-             CScript() << ecdsa_comp_sig << test_message << schnorr_pubkey
-                       << std::vector<uint8_t>{0x01} << OP_CHECKDATASIG,
-             0, true, SCRIPT_ERR_OK, true, 1, failure);
 }
 
 BOOST_AUTO_TEST_CASE(op_checkmultisig)
