@@ -969,38 +969,43 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 }
 
-bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash)
+bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
     int kycV1ActivationHeight = 824189;
     int kycV2ActivationHeight = 927000;
     int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
     int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
 
+    // Use block height being validated when provided (>=0); otherwise fall back to chain tip (e.g. wallet/test).
+    // Using the block's height ensures the same block always gets the same checker (FilledMinerBill vs FilledMinerBillV2),
+    // avoiding non-determinism when chainActive.Height() differs across threads.
+    int checkBlockheight = (blockHeight >= 0) ? blockHeight : chainActive.Height();
+
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
         HeightFormScript(tx,scriptSigHeight);
-        if ((chainActive.Height() >= kycV1ActivationTipHeight) && (scriptSigHeight >= kycV1ActivationHeight) && tx.nVersion != 10) {
+        if ((checkBlockheight >= kycV1ActivationTipHeight) && (scriptSigHeight >= (uint64_t)kycV1ActivationHeight) && tx.nVersion != 10) {
             std::stringstream error_message;
             error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
-                << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
+                << " checkBlockheight:" << checkBlockheight << " scriptSigHeight:" << scriptSigHeight;
             return state.Invalid(false, 0, "", error_message.str());
         }
 
         // Miner KYC veriry.
-        if (chainActive.Height() >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
-            if (chainActive.Height() >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
+        if (checkBlockheight >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
+            if (checkBlockheight >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
                 if (!FilledMinerBillV2(tx, prevBlockHash)) {
-                    LogPrintf("Judgment condition %d chainHeight=%d sigHeight=%d\n",
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
                         kycV2ActivationHeight,
-                        chainActive.Height(),
+                        checkBlockheight,
                         scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
                 }
             } else {
                 if (!FilledMinerBill(tx)) {
-                    LogPrintf("Judgment condition %d chainHeight=%d sigHeight=%d\n",
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
                         kycV1ActivationHeight,
-                        chainActive.Height(),
+                        checkBlockheight,
                         scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
                 }
@@ -5928,7 +5933,7 @@ bool CheckBlock(const Config &config, const CBlock &block,
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
 
     // And a valid coinbase.
-    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock)) {
+    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock, blockHeight)) {
         return state.Invalid(false, state.GetRejectCode(),
                              state.GetRejectReason(),
                              strprintf("Coinbase check failed (txid %s) %s",
