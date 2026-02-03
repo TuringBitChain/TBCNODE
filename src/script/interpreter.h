@@ -28,8 +28,8 @@ namespace task
   class CCancellationToken;
 }
 
-bool CheckSignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags,
-                            ScriptError *serror);
+bool CheckTransactionSignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags,
+                                ScriptError *serror);
 
 uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
                       unsigned int nIn, SigHashType sigHashType,

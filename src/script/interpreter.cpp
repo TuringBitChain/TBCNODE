@@ -154,7 +154,7 @@ static bool IsCompressedPubKey(const valtype &vchPubKey) {
 
 /**
  * A canonical signature exists of: <30> <total len> <02> <len R> <R> <02> <len
- * S> <S> <hashtype>, where R and S are not negative (their first byte has its
+ * S> <S>, where R and S are not negative (their first byte has its
  * highest bit not set), and not excessively padded (do not start with a 0 byte,
  * unless an otherwise negative number follows, in which case a single 0 byte is
  * necessary and even required).
@@ -163,11 +163,9 @@ static bool IsCompressedPubKey(const valtype &vchPubKey) {
  *
  * This function is consensus-critical since BIP66.
  */
-static bool IsValidSignatureEncoding(const std::vector<uint8_t> &sig) {
+static bool IsValidDERSignatureEncoding(const std::vector<uint8_t> &sig) {
     // Format: 0x30 [total-length] 0x02 [R-length] [R] 0x02 [S-length] [S]
-    // [sighash]
-    // * total-length: 1-byte length descriptor of everything that follows,
-    // excluding the sighash byte.
+    // * total-length: 1-byte length descriptor of everything that follows
     // * R-length: 1-byte length descriptor of the R value that follows.
     // * R: arbitrary-length big-endian encoded R value. It must use the
     // shortest possible encoding for a positive integers (which means no null
@@ -175,18 +173,16 @@ static bool IsValidSignatureEncoding(const std::vector<uint8_t> &sig) {
     // highest bit set).
     // * S-length: 1-byte length descriptor of the S value that follows.
     // * S: arbitrary-length big-endian encoded S value. The same rules apply.
-    // * sighash: 1-byte value indicating what data is hashed (not part of the
-    // DER signature)
 
     // Minimum and maximum size constraints.
-    if (sig.size() < 9) return false;
-    if (sig.size() > 73) return false;
+    if (sig.size() < 8) return false;
+    if (sig.size() > 72) return false;
 
     // A signature is of type 0x30 (compound).
     if (sig[0] != 0x30) return false;
 
     // Make sure the length covers the entire signature.
-    if (sig[1] != sig.size() - 3) return false;
+    if (sig[1] != sig.size() - 2) return false;
 
     // Extract the length of the R element.
     unsigned int lenR = sig[3];
@@ -199,7 +195,7 @@ static bool IsValidSignatureEncoding(const std::vector<uint8_t> &sig) {
 
     // Verify that the length of the signature matches the sum of the length
     // of the elements.
-    if ((size_t)(lenR + lenS + 7) != sig.size()) return false;
+    if ((size_t)(lenR + lenS + 6) != sig.size()) return false;
 
     // Check whether the R element is an integer.
     if (sig[2] != 0x02) return false;
@@ -232,13 +228,13 @@ static bool IsValidSignatureEncoding(const std::vector<uint8_t> &sig) {
     return true;
 }
 
+// exclude sighash byte
 static bool IsLowDERSignature(const valtype &vchSig, ScriptError *serror) {
-    if (!IsValidSignatureEncoding(vchSig)) {
+    if (!IsValidDERSignatureEncoding(vchSig)) {
         return set_error(serror, SCRIPT_ERR_SIG_DER);
     }
-    std::vector<uint8_t> vchSigCopy(vchSig.begin(),
-                                    vchSig.begin() + vchSig.size() - 1);
-    if (!CPubKey::CheckLowS(vchSigCopy)) {
+
+    if (!CPubKey::CheckLowS(vchSig)) {
         return set_error(serror, SCRIPT_ERR_SIG_HIGH_S);
     }
     return true;
@@ -262,41 +258,42 @@ static void CleanupScriptCode(CScript &scriptCode,
     }
 }
 
-bool CheckSignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags,
-                            ScriptError *serror) {
-    // Empty signature. Not strictly DER encoded, but allowed to provide a
-    // compact way to provide an invalid signature for use with CHECK(MULTI)SIG
-    if (vchSig.size() == 0) {
-        return true;
-    }
-    if ((flags & (SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S |
-                  SCRIPT_VERIFY_STRICTENC)) != 0 &&
-        !IsValidSignatureEncoding(vchSig)) {
-        return set_error(serror, SCRIPT_ERR_SIG_DER);
-    }
-    if ((flags & SCRIPT_VERIFY_LOW_S) != 0 &&
-        !IsLowDERSignature(vchSig, serror)) {
-        // serror is set
-        return false;
-    }
-    if ((flags & SCRIPT_VERIFY_STRICTENC) != 0) {
-        if (!GetHashType(vchSig).isDefined()) {
-            return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
-        }
-        bool usesForkId = GetHashType(vchSig).hasForkId();
-        bool forkIdEnabled = flags & SCRIPT_ENABLE_SIGHASH_FORKID;
-        if (!forkIdEnabled && usesForkId) {
-            return set_error(serror, SCRIPT_ERR_ILLEGAL_FORKID);
-        }
-        if (forkIdEnabled && !usesForkId) {
-            return set_error(serror, SCRIPT_ERR_MUST_USE_FORKID);
-        }
-    }
-    return true;
+namespace {
+enum class DataConversionMethod : uint8_t {
+    SINGLE_SHA256 = 0x01,
+    DOUBLE_SHA256 = 0x02,
+};
+
+enum class SignatureMethod : uint8_t {
+    ECDSA = 0x01,
+    SCHNORR = 0x02,
+};
+
+bool IsValidDataConversionMethod(DataConversionMethod dataConversionMethod) {
+    return dataConversionMethod == DataConversionMethod::SINGLE_SHA256 || dataConversionMethod == DataConversionMethod::DOUBLE_SHA256;
 }
 
-static bool CheckPubKeyEncoding(const valtype &vchPubKey, uint32_t flags,
-                                ScriptError *serror) {
+bool IsValidSignatureMethod(SignatureMethod signatureMethod) {
+    return signatureMethod == SignatureMethod::ECDSA || signatureMethod == SignatureMethod::SCHNORR;
+}
+
+bool CheckDataFlag(const std::vector<uint8_t> &vchFlag, uint32_t flags,
+                            ScriptError *serror) {
+    if (vchFlag.size() != 2) {
+        return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
+    }
+
+    DataConversionMethod dataConversionMethod = static_cast<DataConversionMethod>(vchFlag[0]);
+    SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
+
+    if (IsValidDataConversionMethod(dataConversionMethod) && IsValidSignatureMethod(signatureMethod)) {
+        return true;
+    }
+
+    return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
+}
+
+bool CheckLegacyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
     if ((flags & SCRIPT_VERIFY_STRICTENC) != 0 &&
         !IsCompressedOrUncompressedPubKey(vchPubKey)) {
         return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
@@ -310,60 +307,23 @@ static bool CheckPubKeyEncoding(const valtype &vchPubKey, uint32_t flags,
     return true;
 }
 
-namespace {
-enum class DataConversionMethod : uint8_t {
-    SINGLE_SHA256 = 0x01,
-    DOUBLE_SHA256 = 0x02,
-};
-
-enum class SigFunction : uint8_t {
-    ECDSA = 0x01,
-    SCHNORR = 0x02,
-};
-
-bool IsValidDataConversionMethod(DataConversionMethod method) {
-    return method == DataConversionMethod::SINGLE_SHA256 || method == DataConversionMethod::DOUBLE_SHA256;
-}
-
-bool IsValidSigFunction(SigFunction function) {
-    return function == SigFunction::ECDSA || function == SigFunction::SCHNORR;
-}
-
-bool CheckCheckDataSigFlag(const std::vector<uint8_t> &vchFlag, uint32_t flags,
-                            ScriptError *serror) {
-    if (vchFlag.size() != 2) {
-        return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
-    }
-
-    DataConversionMethod method = static_cast<DataConversionMethod>(vchFlag[0]);
-    SigFunction function = static_cast<SigFunction>(vchFlag[1]);
-
-    if (IsValidDataConversionMethod(method) && IsValidSigFunction(function)) {
-        return true;
-    }
-
-    return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
-}
-
 bool IsXOnlyPubKey(const valtype &vchPubKey) {
     return vchPubKey.size() == 32;
 }
 
-bool CheckXOnlyPubKey(const valtype &vchPubKey, uint32_t flags,
-                                ScriptError *serror) {
+bool CheckXOnlyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
     if (!IsXOnlyPubKey(vchPubKey)) {
         return set_error(serror, SCRIPT_ERR_X_ONLY_PUBKEY_SIZE);
     }
     return true;
 }
 
-bool CheckPubKeyBySigFunction(SigFunction function, const valtype &vchPubKey, uint32_t flags,
-                                ScriptError *serror) {
-    switch (function) {
-        case SigFunction::ECDSA:
-            return CheckPubKeyEncoding(vchPubKey, flags, serror);
-        case SigFunction::SCHNORR:
-            return CheckXOnlyPubKey(vchPubKey, flags, serror);
+bool CheckDataPubKeyEncoding(SignatureMethod signatureMethod, const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
+    switch (signatureMethod) {
+        case SignatureMethod::ECDSA:
+            return CheckLegacyPubKeyEncoding(vchPubKey, flags, serror);
+        case SignatureMethod::SCHNORR:
+            return CheckXOnlyPubKeyEncoding(vchPubKey, flags, serror);
         // unreachable
         default:
             return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
@@ -372,29 +332,42 @@ bool CheckPubKeyBySigFunction(SigFunction function, const valtype &vchPubKey, ui
     return false;
 }
 
-bool IsSchnorrSig(const valtype &vchSig) {
+bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags, ScriptError *serror) {
+    if ((flags & (SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S | SCRIPT_VERIFY_STRICTENC)) != 0 &&
+        !IsValidDERSignatureEncoding(vchSig)) {
+        return set_error(serror, SCRIPT_ERR_SIG_DER);
+    }
+    if ((flags & SCRIPT_VERIFY_LOW_S) != 0 &&
+        !IsLowDERSignature(vchSig, serror)) {
+        // serror is set
+        return false;
+    }
+    return true;
+}
+
+bool IsSchnorrSignature(const valtype &vchSig) {
     return vchSig.size() == 64;
 }
 
-bool CheckSchnorrSig(const valtype &vchSig, uint32_t flags, ScriptError *serror) {
-    if (!IsSchnorrSig(vchSig)) {
+bool CheckSchnorrSignatureEncoding(const valtype &vchSig, uint32_t flags, ScriptError *serror) {
+    if (!IsSchnorrSignature(vchSig)) {
         return set_error(serror, SCRIPT_ERR_SCHNORR_SIG_SIZE);
     }
     return true;
 }
 
-bool CheckSigBySigFunction(SigFunction function, const valtype &vchSig, uint32_t flags,
+bool CheckDataSignatureEncoding(SignatureMethod signatureMethod, const valtype &vchSig, uint32_t flags,
                             ScriptError *serror) {
     // Empty signature is allowed to provide a compact way to provide an invalid signature
     if (vchSig.empty()) {
         return true;
     }
 
-    switch (function) {
-        case SigFunction::ECDSA:
-            return CheckSignatureEncoding(vchSig, flags, serror);
-        case SigFunction::SCHNORR:
-            return CheckSchnorrSig(vchSig, flags, serror);
+    switch (signatureMethod) {
+        case SignatureMethod::ECDSA:
+            return CheckECDSASignatureEncoding(vchSig, flags, serror);
+        case SignatureMethod::SCHNORR:
+            return CheckSchnorrSignatureEncoding(vchSig, flags, serror);
         // unreachable
         default:
             return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
@@ -402,6 +375,51 @@ bool CheckSigBySigFunction(SigFunction function, const valtype &vchSig, uint32_t
     // unreachable
     return false;
 }
+} // namespace
+
+namespace {
+bool CheckSigHashEncoding(SigHashType sigHashType, uint32_t flags, ScriptError *serror) {
+    if ((flags & SCRIPT_VERIFY_STRICTENC) != 0) {
+        if (!sigHashType.isDefined()) {
+            return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+        }
+        bool usesForkId = sigHashType.hasForkId();
+        bool forkIdEnabled = flags & SCRIPT_ENABLE_SIGHASH_FORKID;
+        if (!forkIdEnabled && usesForkId) {
+            return set_error(serror, SCRIPT_ERR_ILLEGAL_FORKID);
+        }
+        if (forkIdEnabled && !usesForkId) {
+            return set_error(serror, SCRIPT_ERR_MUST_USE_FORKID);
+        }
+    }
+    return true;
+}
+} // namespace
+
+bool CheckTransactionSignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags,
+    ScriptError *serror) {
+    // Empty signature. Not strictly DER encoded, but allowed to provide a
+    // compact way to provide an invalid signature for use with CHECK(MULTI)SIG
+    if (vchSigWithHashType.size() == 0) {
+        return true;
+    }
+
+    std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
+    
+    if (IsSchnorrSignature(vchSig) || CheckECDSASignatureEncoding(vchSig, flags, serror)) {
+        return CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror);
+    }
+    
+    // serror is set
+    return false;
+}
+
+namespace {
+bool CheckTransactionPubKeyEncoding(const std::vector<uint8_t> &vchPubKeyWithHashType, uint32_t flags,
+    ScriptError *serror) {
+    return true;
+}
+
 } // namespace
 
 static bool CheckMinimalPush(const valtype &data, opcodetype opcode) {
@@ -1557,8 +1575,8 @@ std::optional<bool> EvalScript(
                         LimitedVector &vchSig = stack.stacktop(-2);
                         LimitedVector &vchPubKey = stack.stacktop(-1);
 
-                        if (!CheckSignatureEncoding(vchSig.GetElement(), flags, serror) ||
-                            !CheckPubKeyEncoding(vchPubKey.GetElement(), flags, serror)) {
+                        if (!CheckTransactionSignatureEncoding(vchSig.GetElement(), flags, serror) ||
+                            !CheckTransactionPubKeyEncoding(vchPubKey.GetElement(), flags, serror)) {
                             // serror is set
                             return false;
                         }
@@ -1604,14 +1622,14 @@ std::optional<bool> EvalScript(
                         LimitedVector &vchPubKey = stack.stacktop(-2);
                         LimitedVector &vchFlag = stack.stacktop(-1);                        
 
-                        if (!CheckCheckDataSigFlag(vchFlag.GetElement(), flags, serror)) {
+                        if (!CheckDataFlag(vchFlag.GetElement(), flags, serror)) {
                             // serror is set
                             return false;
                         }
 
-                        SigFunction function = static_cast<SigFunction>(vchFlag[1]);
-                        if (!CheckPubKeyBySigFunction(function, vchPubKey.GetElement(), flags, serror) ||
-                            !CheckSigBySigFunction(function, vchSig.GetElement(), flags, serror)) {
+                        SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
+                        if (!CheckDataPubKeyEncoding(signatureMethod, vchPubKey.GetElement(), flags, serror) ||
+                            !CheckDataSignatureEncoding(signatureMethod, vchSig.GetElement(), flags, serror)) {
                             // serror is set
                             return false;
                         }
@@ -1722,8 +1740,8 @@ std::optional<bool> EvalScript(
                             // CHECKMULTISIG NOT if the STRICTENC flag is set.
                             // See the script_(in)valid tests for details.
 
-                            if (!CheckSignatureEncoding(vchSig.GetElement(), flags, serror) ||
-                                !CheckPubKeyEncoding(vchPubKey.GetElement(), flags, serror)) {
+                            if (!CheckTransactionSignatureEncoding(vchSig.GetElement(), flags, serror) ||
+                                !CheckTransactionPubKeyEncoding(vchPubKey.GetElement(), flags, serror)) {
                                 // serror is set
                                 return false;
                             }
@@ -2310,14 +2328,14 @@ bool VerifyDataSigSchnorr(
 }
 
 bool VerifyDataSig(
-    SigFunction function,
+    SignatureMethod signatureMethod,
     const std::vector<uint8_t> &vchPubKey,
     const uint256 &messageHash,
     const std::vector<uint8_t> &vchSig) {
-    switch (function) {
-        case SigFunction::ECDSA:
+    switch (signatureMethod) {
+        case SignatureMethod::ECDSA:
             return VerifyDataSigECDSA(vchPubKey, messageHash, vchSig);
-        case SigFunction::SCHNORR:
+        case SignatureMethod::SCHNORR:
             return VerifyDataSigSchnorr(vchPubKey, messageHash, vchSig);
         // unreachable
         default:
@@ -2337,11 +2355,11 @@ bool TransactionSignatureChecker::CheckDataSig(
         return false;
     }
 
-    DataConversionMethod method = static_cast<DataConversionMethod>(vchFlag[0]);
-    uint256 messageHash = GetMessageHash(method, vchMessage);
+    DataConversionMethod dataConversionMethod = static_cast<DataConversionMethod>(vchFlag[0]);
+    uint256 messageHash = GetMessageHash(dataConversionMethod, vchMessage);
 
-    SigFunction function = static_cast<SigFunction>(vchFlag[1]);
-    return VerifyDataSig(function, vchPubKey, messageHash, vchSig);
+    SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
+    return VerifyDataSig(signatureMethod, vchPubKey, messageHash, vchSig);
 }
 
 bool TransactionSignatureChecker::CheckLockTime(
