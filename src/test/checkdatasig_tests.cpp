@@ -17,29 +17,6 @@ const std::vector<uint8_t> success = {1};
 
 std::array<uint32_t, 2> flagset{{0, STANDARD_SCRIPT_VERIFY_FLAGS}};
 
-MutableTransactionSignatureChecker CreateChecker() {
-    // Create a dummy transaction for TransactionSignatureChecker
-    CMutableTransaction txCredit;
-    txCredit.nVersion = 1;
-    txCredit.vin.resize(1);
-    txCredit.vin[0].prevout = COutPoint();
-    txCredit.vin[0].scriptSig = CScript();
-    txCredit.vout.resize(1);
-    txCredit.vout[0].nValue = Amount(1);
-    txCredit.vout[0].scriptPubKey = CScript();
-
-    CMutableTransaction txSpend;
-    txSpend.nVersion = 1;
-    txSpend.vin.resize(1);
-    txSpend.vin[0].prevout = COutPoint(txCredit.GetId(), 0);
-    txSpend.vin[0].scriptSig = CScript();
-    txSpend.vout.resize(1);
-    txSpend.vout[0].nValue = Amount(1);
-    txSpend.vout[0].scriptPubKey = CScript();
-
-    return MutableTransactionSignatureChecker(&txSpend, 0, txCredit.vout[0].nValue);
-}
-
 // Function to run test cases
 void RunCase(const std::string& test_name,
              const CScript& script,
@@ -51,7 +28,7 @@ void RunCase(const std::string& test_name,
              const std::vector<uint8_t>& exp_stack_top) {
     const Config& config = GlobalConfig::GetConfig();
 
-    auto checker = CreateChecker();
+    BaseSignatureChecker checker;
 
     ScriptError error;
     LimitedStack stack(UINT32_MAX);

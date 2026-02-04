@@ -2030,6 +2030,79 @@ std::optional<bool> EvalScript(
 }
 
 namespace {
+uint256 GetMessageHash(DataConversionMethod type, const std::vector<uint8_t> &vchMessage) {
+    uint256 messageHash;
+    switch (type) {
+        case DataConversionMethod::SINGLE_SHA256:
+            CHash256().Write(vchMessage.data(), vchMessage.size()).SingleFinalize(messageHash.begin());
+            break;
+        case DataConversionMethod::DOUBLE_SHA256:
+            CHash256().Write(vchMessage.data(), vchMessage.size()).Finalize(messageHash.begin());
+            break;
+        // unreachable
+        default:
+            break;
+    }
+    return messageHash;
+}
+
+bool VerifyDataSigECDSA(const std::vector<uint8_t> &vchPubKey,
+                        const uint256 &messageHash,
+                        const std::vector<uint8_t> &vchSig) {
+    CPubKey pubkey(vchPubKey);
+    if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    return pubkey.Verify(messageHash, vchSig);
+}
+
+bool VerifyDataSigSchnorr(const std::vector<uint8_t> &vchPubKey,
+                          const uint256 &messageHash,
+                          const std::vector<uint8_t> &vchSig) {
+    XOnlyPubKey pubkey(vchPubKey);
+    if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    return pubkey.VerifySchnorr(messageHash, vchSig);
+}
+
+bool VerifyDataSig(SignatureMethod signatureMethod,
+                   const std::vector<uint8_t> &vchPubKey,
+                   const uint256 &messageHash,
+                   const std::vector<uint8_t> &vchSig) {
+    switch (signatureMethod) {
+        case SignatureMethod::ECDSA:
+            return VerifyDataSigECDSA(vchPubKey, messageHash, vchSig);
+        case SignatureMethod::SCHNORR:
+            return VerifyDataSigSchnorr(vchPubKey, messageHash, vchSig);
+        // unreachable
+        case SignatureMethod::NONE:
+        default:
+            return false;
+    }
+    // unreachable
+    return false;
+}
+}
+
+bool BaseSignatureChecker::CheckDataSig(const std::vector<uint8_t> &vchSig,
+                                        const std::vector<uint8_t> &vchMessage,
+                                        const std::vector<uint8_t> &vchPubKey,
+                                        const std::vector<uint8_t> &vchFlag) const {
+    if (vchSig.empty()) {
+        return false;
+    }
+
+    DataConversionMethod dataConversionMethod = static_cast<DataConversionMethod>(vchFlag[0]);
+    uint256 messageHash = GetMessageHash(dataConversionMethod, vchMessage);
+
+    SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
+    return VerifyDataSig(signatureMethod, vchPubKey, messageHash, vchSig);
+}
+
+namespace {
 
 /**
  * Wrapper that serializes like CTransaction, but with the modifications
@@ -2313,83 +2386,6 @@ bool TransactionSignatureChecker::CheckSig(
     }
 
     return true;
-}
-
-namespace {
-uint256 GetMessageHash(DataConversionMethod type, const std::vector<uint8_t> &vchMessage) {
-    uint256 messageHash;
-    switch (type) {
-        case DataConversionMethod::SINGLE_SHA256:
-            CHash256().Write(vchMessage.data(), vchMessage.size()).SingleFinalize(messageHash.begin());
-            break;
-        case DataConversionMethod::DOUBLE_SHA256:
-            CHash256().Write(vchMessage.data(), vchMessage.size()).Finalize(messageHash.begin());
-            break;
-        // unreachable
-        default:
-            break;
-    }
-    return messageHash;
-}
-
-bool VerifyDataSigECDSA(
-    const std::vector<uint8_t> &vchPubKey,
-    const uint256 &messageHash,
-    const std::vector<uint8_t> &vchSig) {
-    CPubKey pubkey(vchPubKey);
-    if (!pubkey.IsValid()) {
-        return false;
-    }
-
-    return pubkey.Verify(messageHash, vchSig);
-}
-
-bool VerifyDataSigSchnorr(
-    const std::vector<uint8_t> &vchPubKey,
-    const uint256 &messageHash,
-    const std::vector<uint8_t> &vchSig) {
-    XOnlyPubKey pubkey(vchPubKey);
-    if (!pubkey.IsValid()) {
-        return false;
-    }
-
-    return pubkey.VerifySchnorr(messageHash, vchSig);
-}
-
-bool VerifyDataSig(
-    SignatureMethod signatureMethod,
-    const std::vector<uint8_t> &vchPubKey,
-    const uint256 &messageHash,
-    const std::vector<uint8_t> &vchSig) {
-    switch (signatureMethod) {
-        case SignatureMethod::ECDSA:
-            return VerifyDataSigECDSA(vchPubKey, messageHash, vchSig);
-        case SignatureMethod::SCHNORR:
-            return VerifyDataSigSchnorr(vchPubKey, messageHash, vchSig);
-        // unreachable
-        case SignatureMethod::NONE:
-        default:
-            return false;
-    }
-    // unreachable
-    return false;
-}
-}
-
-bool TransactionSignatureChecker::CheckDataSig(
-    const std::vector<uint8_t> &vchSig,
-    const std::vector<uint8_t> &vchMessage,
-    const std::vector<uint8_t> &vchPubKey,
-    const std::vector<uint8_t> &vchFlag) const {
-    if (vchSig.empty()) {
-        return false;
-    }
-
-    DataConversionMethod dataConversionMethod = static_cast<DataConversionMethod>(vchFlag[0]);
-    uint256 messageHash = GetMessageHash(dataConversionMethod, vchMessage);
-
-    SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
-    return VerifyDataSig(signatureMethod, vchPubKey, messageHash, vchSig);
 }
 
 bool TransactionSignatureChecker::CheckLockTime(
