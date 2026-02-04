@@ -85,17 +85,23 @@ const char *ScriptErrorString(const ScriptError serror) {
         case SCRIPT_ERR_MINIMALIF:
             return "OP_IF/NOTIF argument must be minimal";
         case SCRIPT_ERR_SIG_NULLFAIL:
-            return "Signature must be zero for failed CHECK(MULTI)SIG "
+            return "Signature must be zero for failed CHECK(MULTI/DATA)SIG "
                    "operation";
         case SCRIPT_ERR_CHECKDATASIG_FLAG:
             return "Invalid CHECKDATASIG flag";
-        case SCRIPT_ERR_X_ONLY_PUBKEY_SIZE:
-            return "Invalid x-only public key size";
+        case SCRIPT_ERR_EMPTY_SIG_SIZE:
+            return "Empty signature size must be 0";
+        case SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_LEGACY:
+            return "Public key is neither x-only, compressed, nor uncompressed";
+        case SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_COMPRESSED:
+            return "Public key is neither x-only nor compressed";
+        case SCRIPT_ERR_XONLY_PUBKEY_SIZE:
+            return "X-only public key size must be 32 bytes";
         case SCRIPT_ERR_SCHNORR_SIG_SIZE:
-            return "Invalid schnorr signature size";
+            return "Schnorr signature size must be 64 bytes";
         case SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS:
             return "NOPx reserved for soft-fork upgrades";
-        case SCRIPT_ERR_PUBKEYTYPE:
+        case SCRIPT_ERR_LEGACY_PUBKEY:
             return "Public key is neither compressed or uncompressed";
         case SCRIPT_ERR_CLEANSTACK:
             return "Script did not clean its stack";

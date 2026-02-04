@@ -265,16 +265,20 @@ enum class DataConversionMethod : uint8_t {
 };
 
 enum class SignatureMethod : uint8_t {
+    NONE = 0x00,
     ECDSA = 0x01,
     SCHNORR = 0x02,
 };
 
 bool IsValidDataConversionMethod(DataConversionMethod dataConversionMethod) {
-    return dataConversionMethod == DataConversionMethod::SINGLE_SHA256 || dataConversionMethod == DataConversionMethod::DOUBLE_SHA256;
+    return dataConversionMethod == DataConversionMethod::SINGLE_SHA256 || 
+            dataConversionMethod == DataConversionMethod::DOUBLE_SHA256;
 }
 
 bool IsValidSignatureMethod(SignatureMethod signatureMethod) {
-    return signatureMethod == SignatureMethod::ECDSA || signatureMethod == SignatureMethod::SCHNORR;
+    return signatureMethod == SignatureMethod::NONE || 
+            signatureMethod == SignatureMethod::ECDSA || 
+            signatureMethod == SignatureMethod::SCHNORR;
 }
 
 bool CheckDataFlag(const std::vector<uint8_t> &vchFlag, uint32_t flags,
@@ -293,18 +297,27 @@ bool CheckDataFlag(const std::vector<uint8_t> &vchFlag, uint32_t flags,
     return set_error(serror, SCRIPT_ERR_CHECKDATASIG_FLAG);
 }
 
-bool CheckLegacyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
+namespace {
+bool CheckLegacyPubKeyEncodingImpl(const valtype &vchPubKey, uint32_t flags, ScriptError *serror,
+                                    ScriptError strictEncError, ScriptError compressedError) {
     if ((flags & SCRIPT_VERIFY_STRICTENC) != 0 &&
         !IsCompressedOrUncompressedPubKey(vchPubKey)) {
-        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+        return set_error(serror, strictEncError);
     }
     // Only compressed keys are accepted when
     // SCRIPT_VERIFY_COMPRESSED_PUBKEYTYPE is enabled.
     if (flags & SCRIPT_VERIFY_COMPRESSED_PUBKEYTYPE &&
         !IsCompressedPubKey(vchPubKey)) {
-        return set_error(serror, SCRIPT_ERR_NONCOMPRESSED_PUBKEY);
+        return set_error(serror, compressedError);
     }
     return true;
+}
+} // namespace
+
+bool CheckLegacyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
+    return CheckLegacyPubKeyEncodingImpl(vchPubKey, flags, serror,
+                                         SCRIPT_ERR_LEGACY_PUBKEY, 
+                                         SCRIPT_ERR_NONCOMPRESSED_PUBKEY);
 }
 
 bool IsXOnlyPubKey(const valtype &vchPubKey) {
@@ -313,13 +326,25 @@ bool IsXOnlyPubKey(const valtype &vchPubKey) {
 
 bool CheckXOnlyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
     if (!IsXOnlyPubKey(vchPubKey)) {
-        return set_error(serror, SCRIPT_ERR_X_ONLY_PUBKEY_SIZE);
+        return set_error(serror, SCRIPT_ERR_XONLY_PUBKEY_SIZE);
     }
     return true;
 }
 
+bool CheckLegacyOrXOnlyPubKeyEncoding(const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
+    if (IsXOnlyPubKey(vchPubKey)) {
+        return true;
+    }
+
+    return CheckLegacyPubKeyEncodingImpl(vchPubKey, flags, serror,
+                                         SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_LEGACY,
+                                         SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_COMPRESSED);
+}
+
 bool CheckDataPubKeyEncoding(SignatureMethod signatureMethod, const valtype &vchPubKey, uint32_t flags, ScriptError *serror) {
     switch (signatureMethod) {
+        case SignatureMethod::NONE:
+            return CheckLegacyOrXOnlyPubKeyEncoding(vchPubKey, flags, serror);
         case SignatureMethod::ECDSA:
             return CheckLegacyPubKeyEncoding(vchPubKey, flags, serror);
         case SignatureMethod::SCHNORR:
@@ -330,6 +355,13 @@ bool CheckDataPubKeyEncoding(SignatureMethod signatureMethod, const valtype &vch
     }
     // unreachable
     return false;
+}
+
+bool CheckEmptySignatureEncoding(const valtype &vchSig, uint32_t flags, ScriptError *serror) {
+    if (!vchSig.empty()) {
+        return set_error(serror, SCRIPT_ERR_EMPTY_SIG_SIZE);
+    }
+    return true;
 }
 
 bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags, ScriptError *serror) {
@@ -358,12 +390,9 @@ bool CheckSchnorrSignatureEncoding(const valtype &vchSig, uint32_t flags, Script
 
 bool CheckDataSignatureEncoding(SignatureMethod signatureMethod, const valtype &vchSig, uint32_t flags,
                             ScriptError *serror) {
-    // Empty signature is allowed to provide a compact way to provide an invalid signature
-    if (vchSig.empty()) {
-        return true;
-    }
-
     switch (signatureMethod) {
+        case SignatureMethod::NONE:
+            return CheckEmptySignatureEncoding(vchSig, flags, serror);
         case SignatureMethod::ECDSA:
             return CheckECDSASignatureEncoding(vchSig, flags, serror);
         case SignatureMethod::SCHNORR:
@@ -1628,8 +1657,8 @@ std::optional<bool> EvalScript(
                         }
 
                         SignatureMethod signatureMethod = static_cast<SignatureMethod>(vchFlag[1]);
-                        if (!CheckDataPubKeyEncoding(signatureMethod, vchPubKey.GetElement(), flags, serror) ||
-                            !CheckDataSignatureEncoding(signatureMethod, vchSig.GetElement(), flags, serror)) {
+                        if (!CheckDataSignatureEncoding(signatureMethod, vchSig.GetElement(), flags, serror) ||
+                            !CheckDataPubKeyEncoding(signatureMethod, vchPubKey.GetElement(), flags, serror)) {
                             // serror is set
                             return false;
                         }
@@ -2338,6 +2367,7 @@ bool VerifyDataSig(
         case SignatureMethod::SCHNORR:
             return VerifyDataSigSchnorr(vchPubKey, messageHash, vchSig);
         // unreachable
+        case SignatureMethod::NONE:
         default:
             return false;
     }
