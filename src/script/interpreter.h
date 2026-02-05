@@ -11,6 +11,7 @@
 #include "script_error.h"
 #include "sighashtype.h"
 #include "limitedstack.h"
+#include "x_only_pubkey.h"
 
 #include <cstdint>
 #include <optional>
@@ -38,6 +39,28 @@ uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
                       bool enabledSighashForkid = true);
 
 class BaseSignatureChecker {
+protected:
+    bool VerifyECDSASignature(const std::vector<uint8_t> &vchSig,
+                              const std::vector<uint8_t> &vchPubKey,
+                              const uint256 &sighash) const;
+
+    bool VerifySchnorrSignature(const std::vector<uint8_t> &vchSig,
+                                const std::vector<uint8_t> &vchPubKey,
+                                const uint256 &sighash) const;
+
+    bool VerifySignatureByMethod(uint8_t signatureMethodFlag,
+                                 const std::vector<uint8_t> &vchSig,
+                                 const std::vector<uint8_t> &vchPubKey,
+                                 const uint256 &sighash) const;
+
+    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
+                                 const CPubKey &vchPubKey,
+                                 const uint256 &sighash) const;
+
+    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
+                                 const XOnlyPubKey &vchPubKey,
+                                 const uint256 &sighash) const;
+
 public:
     virtual bool CheckSig(const std::vector<uint8_t> &scriptSig,
                           const std::vector<uint8_t> &vchPubKey,
@@ -80,11 +103,6 @@ private:
     unsigned int nIn;
     const Amount amount;
     const PrecomputedTransactionData *txdata;
-
-protected:
-    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
-                                 const CPubKey &vchPubKey,
-                                 const uint256 &sighash) const;
 
 public:
     TransactionSignatureChecker(const CTransaction *txToIn, unsigned int nInIn,

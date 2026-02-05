@@ -11,6 +11,7 @@
 #include "random.h"
 #include "uint256.h"
 #include "util.h"
+#include "x_only_pubkey.h"
 
 #include <boost/thread.hpp>
 
@@ -36,13 +37,14 @@ private:
 public:
     CSignatureCache() { GetRandBytes(nonce.begin(), 32); }
 
+    template<typename PubKeyType>
     void ComputeEntry(uint256 &entry, const uint256 &hash,
                       const std::vector<uint8_t> &vchSig,
-                      const CPubKey &pubkey) {
+                      const PubKeyType &pubkey) {
         CSHA256()
             .Write(nonce.begin(), 32)
             .Write(hash.begin(), 32)
-            .Write(&pubkey[0], pubkey.size())
+            .Write(pubkey.begin(), pubkey.size())
             .Write(&vchSig[0], vchSig.size())
             .Finalize(entry.begin());
     }
@@ -98,9 +100,10 @@ void InitSignatureCache() {
     initCache("-maxinvalidsigcachesize", DEFAULT_INVALID_MAX_SIG_CACHE_SIZE, "invalid ", signatureCache, &CSignatureCache::setup_bytes_invalid);
 }
 
-
-bool CachingTransactionSignatureChecker::VerifySignature(
-    const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
+template<typename PubKeyType>
+bool CachingTransactionSignatureChecker::VerifySignatureImpl(
+    const std::vector<uint8_t> &vchSig,
+    const PubKeyType &pubkey,
     const uint256 &sighash) const {
     uint256 entry;
     signatureCache.ComputeEntry(entry, sighash, vchSig, pubkey);
@@ -121,4 +124,16 @@ bool CachingTransactionSignatureChecker::VerifySignature(
         signatureCache.Set(entry);
     }
     return true;
+}
+
+bool CachingTransactionSignatureChecker::VerifySignature(
+    const std::vector<uint8_t> &vchSig, const CPubKey &pubkey,
+    const uint256 &sighash) const {
+    return VerifySignatureImpl(vchSig, pubkey, sighash);
+}
+
+bool CachingTransactionSignatureChecker::VerifySignature(
+    const std::vector<uint8_t> &vchSig, const XOnlyPubKey &pubkey,
+    const uint256 &sighash) const {
+    return VerifySignatureImpl(vchSig, pubkey, sighash);
 }
