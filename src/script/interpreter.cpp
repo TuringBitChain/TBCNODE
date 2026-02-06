@@ -357,6 +357,23 @@ bool CheckPubKeyEncoding(SignatureMethod signatureMethod, const valtype &vchPubK
     return false;
 }
 
+bool CheckSigHashEncoding(SigHashType sigHashType, uint32_t flags, ScriptError *serror) {
+    if ((flags & SCRIPT_VERIFY_STRICTENC) != 0) {
+        if (!sigHashType.isDefined()) {
+            return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+        }
+        bool usesForkId = sigHashType.hasForkId();
+        bool forkIdEnabled = flags & SCRIPT_ENABLE_SIGHASH_FORKID;
+        if (!forkIdEnabled && usesForkId) {
+            return set_error(serror, SCRIPT_ERR_ILLEGAL_FORKID);
+        }
+        if (forkIdEnabled && !usesForkId) {
+            return set_error(serror, SCRIPT_ERR_MUST_USE_FORKID);
+        }
+    }
+    return true;
+}
+
 bool CheckEmptySignatureEncoding(const valtype &vchSig, uint32_t flags, ScriptError *serror) {
     if (!vchSig.empty()) {
         return set_error(serror, SCRIPT_ERR_EMPTY_SIG_SIZE);
@@ -364,7 +381,15 @@ bool CheckEmptySignatureEncoding(const valtype &vchSig, uint32_t flags, ScriptEr
     return true;
 }
 
+bool IsSchnorrSignature(const valtype &vchSig) {
+    return vchSig.size() == 64;
+}
+
 bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags, ScriptError *serror) {
+    if (IsSchnorrSignature(vchSig)) {
+        return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
+    }
+
     if ((flags & (SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S | SCRIPT_VERIFY_STRICTENC)) != 0 &&
         !IsValidDERSignatureEncoding(vchSig)) {
         return set_error(serror, SCRIPT_ERR_SIG_DER);
@@ -377,8 +402,10 @@ bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t fl
     return true;
 }
 
-bool IsSchnorrSignature(const valtype &vchSig) {
-    return vchSig.size() == 64;
+bool CheckTransactionECDSASignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags, ScriptError *serror) {
+    std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
+    return CheckECDSASignatureEncoding(vchSig, flags, serror) && 
+        CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror);
 }
 
 bool CheckSchnorrSignatureEncoding(const valtype &vchSig, uint32_t flags, ScriptError *serror) {
@@ -386,6 +413,12 @@ bool CheckSchnorrSignatureEncoding(const valtype &vchSig, uint32_t flags, Script
         return set_error(serror, SCRIPT_ERR_SCHNORR_SIG_SIZE);
     }
     return true;
+}
+
+bool CheckTransactionSchnorrSignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags, ScriptError *serror) {
+    std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
+    return CheckSchnorrSignatureEncoding(vchSig, flags, serror) && 
+        CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror);
 }
 
 bool CheckDataSignatureEncoding(SignatureMethod signatureMethod, const valtype &vchSig, uint32_t flags,
@@ -403,25 +436,6 @@ bool CheckDataSignatureEncoding(SignatureMethod signatureMethod, const valtype &
     }
     // unreachable
     return false;
-}
-} // namespace
-
-namespace {
-bool CheckSigHashEncoding(SigHashType sigHashType, uint32_t flags, ScriptError *serror) {
-    if ((flags & SCRIPT_VERIFY_STRICTENC) != 0) {
-        if (!sigHashType.isDefined()) {
-            return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
-        }
-        bool usesForkId = sigHashType.hasForkId();
-        bool forkIdEnabled = flags & SCRIPT_ENABLE_SIGHASH_FORKID;
-        if (!forkIdEnabled && usesForkId) {
-            return set_error(serror, SCRIPT_ERR_ILLEGAL_FORKID);
-        }
-        if (forkIdEnabled && !usesForkId) {
-            return set_error(serror, SCRIPT_ERR_MUST_USE_FORKID);
-        }
-    }
-    return true;
 }
 
 std::optional<SignatureMethod> GetTransactionSignatureMethod(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags,
@@ -453,6 +467,46 @@ bool CheckTransactionSignatureEncoding(const std::vector<uint8_t> &vchSigWithHas
     ScriptError *serror) {
     return GetTransactionSignatureMethod(vchSigWithHashType, flags, serror).has_value();
 }
+
+namespace {
+
+// use std::vector<bool> to save memory
+// use little-endian encoding to remain consistent with Bitcoin's system conventions
+std::optional<std::vector<bool>> DecodeBitfield(const std::vector<uint8_t> &vch, uint64_t bitCount, uint32_t flags, ScriptError *serror) {
+    const uint64_t expectedVchSize = (bitCount + 7) / 8;
+    if (vch.size() != expectedVchSize) {
+        set_error(serror, SCRIPT_ERR_BITFIELD_SIZE);
+        return std::nullopt;
+    }
+
+    // check padding bits in the last byte
+    const unsigned int bitCountInLastByte = bitCount % 8;
+    if (bitCountInLastByte != 0) {
+        uint8_t mask = (1 << bitCountInLastByte) - 1;
+        if ((vch.back() & ~mask) != 0) {
+            set_error(serror, SCRIPT_ERR_BITFIELD_RANGE);
+            return std::nullopt;
+        }
+    }
+
+    // decode bytes to bitfield in little-endian order
+    std::vector<bool> bitfield(bitCount);
+    for (size_t i = 0; i < vch.size(); ++i) {
+        for (int j = 0; j < 8; ++j) {
+            const size_t bitIndex = i * 8 + j;
+            if (bitIndex < bitCount) {
+                bitfield[bitIndex] = (vch[i] >> j) & 1;
+            }
+        }
+    }
+
+    return bitfield;
+}
+
+uint64_t CountBits(const std::vector<bool> &bitfield) {
+    return std::count(bitfield.begin(), bitfield.end(), true);
+}
+} // namespace
 
 static bool CheckMinimalPush(const valtype &data, opcodetype opcode) {
     if (data.size() == 0) {
@@ -1719,11 +1773,6 @@ std::optional<bool> EvalScript(
                             return set_error(serror, SCRIPT_ERR_OP_COUNT);
                         }
                         uint64_t ikey = ++i;
-                        // ikey2 is the position of last non-signature item in
-                        // the stack. Top stack item = 1. With
-                        // SCRIPT_VERIFY_NULLFAIL, this is used for cleanup if
-                        // operation fails.
-                        uint64_t ikey2 = nKeysCount + 2;
                         i += nKeysCount;
                         if (stack.size() < i) {
                             return set_error(
@@ -1743,91 +1792,158 @@ std::optional<bool> EvalScript(
 
                         uint64_t isig = ++i;
                         i += nSigsCount;
-                        if (stack.size() < i) {
+
+                        if (stack.size() < i + 1) {
                             return set_error(
                                 serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
 
-                        // Subset of script starting at the most recent
                         // codeseparator
                         CScript scriptCode(pbegincodehash, pend);
-
-                        // Remove signature for pre-fork scripts
-                        for (uint64_t k = 0; k < nSigsCount; k++) {
-                            LimitedVector &vchSig = stack.stacktop(-isig - k);
-                            CleanupScriptCode(scriptCode, vchSig.GetElement(), flags);
-                        }
-
+                        LimitedVector &vchDummy = stack.stacktop(-(i + 1));
                         bool fSuccess = true;
-                        while (fSuccess && nSigsCount > 0) {
-                            if (token.IsCanceled())
-                            {
-                                return {};
+                        if ((flags & SCRIPT_ENABLE_SCHNORR_MULTISIG) && !vchDummy.empty()) {
+                            // schnorr multisig
+                            auto checkBitsOpt = DecodeBitfield(vchDummy.GetElement(), nKeysCount, flags, serror);
+                            if (!checkBitsOpt.has_value()) {
+                                // serror is set
+                                return false;
                             }
 
-                            LimitedVector &vchSig = stack.stacktop(-isig);
-                            LimitedVector &vchPubKey = stack.stacktop(-ikey);
-
-                            // Note how this makes the exact order of
-                            // pubkey/signature evaluation distinguishable by
-                            // CHECKMULTISIG NOT if the STRICTENC flag is set.
-                            // See the script_(in)valid tests for details.
-
-                            // if (!CheckTransactionSignatureEncoding(vchSig.GetElement(), flags, serror) ||
-                            //     !CheckTransactionPubKeyEncoding(vchPubKey.GetElement(), flags, serror)) {
-                            //     // serror is set
-                            //     return false;
-                            // }
-
-                            // Check signature
-                            bool fOk = checker.CheckSig(vchSig.GetElement(), vchPubKey.GetElement(),
-                                                        scriptCode, flags & SCRIPT_ENABLE_SIGHASH_FORKID);
-
-                            if (fOk) {
-                                isig++;
-                                nSigsCount--;
+                            const auto& checkBits = checkBitsOpt.value();
+                            if (CountBits(checkBits) != nSigsCount) {
+                                return set_error(serror, SCRIPT_ERR_BIT_COUNT);
                             }
-                            ikey++;
-                            nKeysCount--;
 
-                            // If there are more signatures left than keys left,
-                            // then too many signatures have failed. Exit early,
-                            // without checking any further signatures.
-                            if (nSigsCount > nKeysCount) {
-                                fSuccess = false;
+                            // maintain the same verification order as ECDSA
+                            const uint64_t iBottomKey = ikey + nKeysCount - 1;
+                            auto reverseIt = checkBits.rbegin();
+                            while (fSuccess && nSigsCount > 0) {
+                                if (token.IsCanceled())
+                                {
+                                    return {};
+                                }
+    
+                                reverseIt = std::find(reverseIt, checkBits.rend(), true);
+                                // just for safety, unreachable
+                                if (reverseIt == checkBits.rend()) {
+                                    return set_error(serror, SCRIPT_ERR_BIT_COUNT);
+                                }
+                                uint64_t keyIndex = std::distance(checkBits.begin(), reverseIt.base() - 1);
+                                reverseIt++;
+
+                                LimitedVector &vchSig = stack.stacktop(-isig);
+                                LimitedVector &vchPubKey = stack.stacktop(-(iBottomKey - keyIndex));
+    
+                                if (!CheckTransactionSchnorrSignatureEncoding(vchSig.GetElement(), flags, serror) ||
+                                    !CheckPubKeyEncoding(SignatureMethod::SCHNORR, vchPubKey.GetElement(), flags, serror)) {
+                                    // serror is set
+                                    return false;
+                                }
+    
+                                // Check signature
+                                bool fOk = checker.CheckSig(vchSig.GetElement(), vchPubKey.GetElement(),
+                                                            scriptCode, flags & SCRIPT_ENABLE_SIGHASH_FORKID);
+    
+                                if (fOk) {
+                                    isig++;
+                                    nSigsCount--;
+                                } else {
+                                    return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
+                                }
+                            }
+                        } else {
+                            // ecdsa multisig
+                            if ((flags & SCRIPT_VERIFY_NULLDUMMY) &&
+                                !vchDummy.empty()) {
+                                return set_error(serror, SCRIPT_ERR_SIG_NULLDUMMY);
+                            }
+
+                            // Remove signature for pre-fork scripts
+                            for (uint64_t k = 0; k < nSigsCount; k++) {
+                                LimitedVector &vchSig = stack.stacktop(-isig - k);
+                                CleanupScriptCode(scriptCode, vchSig.GetElement(), flags);
+                            }
+
+                            // For empty signature, its pubkey can be xonly or legacy
+                            // For non-empty signature, its pubkey must be legacy
+                            // Check empty signature first
+                            bool hasEmptySignature = false;
+                            bool areAllSignaturesEmpty = true;
+                            for (uint64_t k = 0; k < nSigsCount; k++) {
+                                LimitedVector &vchSig = stack.stacktop(-(isig + k));
+                                if (vchSig.empty()) {
+                                    hasEmptySignature = true;
+                                } else {
+                                    areAllSignaturesEmpty = false;
+                                }
+                            }
+
+                            if (hasEmptySignature) {
+                                // check pubkey encoding
+                                if (areAllSignaturesEmpty) {
+                                    // all signatures are empty, check pubkey encoding
+                                    for (uint64_t k = 0; k < nKeysCount; k++) {
+                                        LimitedVector &vchPubKey = stack.stacktop(-ikey - k);
+                                        if (!CheckPubKeyEncoding(SignatureMethod::NONE, vchPubKey.GetElement(), flags, serror)) {
+                                            // serror is set
+                                            return false;
+                                        }
+                                    }
+                                    fSuccess = false;
+                                } else {
+                                    if (flags & SCRIPT_VERIFY_NULLFAIL) {
+                                        return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
+                                    } else {
+                                        fSuccess = false;
+                                    }
+                                }
+                            } else {
+                                while (fSuccess && nSigsCount > 0) {
+                                    if (token.IsCanceled())
+                                    {
+                                        return {};
+                                    }
+        
+                                    LimitedVector &vchSig = stack.stacktop(-isig);
+                                    LimitedVector &vchPubKey = stack.stacktop(-ikey);
+        
+                                    // Note how this makes the exact order of
+                                    // pubkey/signature evaluation distinguishable by
+                                    // CHECKMULTISIG NOT if the STRICTENC flag is set.
+                                    // See the script_(in)valid tests for details.
+        
+                                    if (!CheckTransactionECDSASignatureEncoding(vchSig.GetElement(), flags, serror) ||
+                                        !CheckPubKeyEncoding(SignatureMethod::ECDSA, vchPubKey.GetElement(), flags, serror)) {
+                                        // serror is set
+                                        return false;
+                                    }
+        
+                                    // Check signature
+                                    bool fOk = checker.CheckSig(vchSig.GetElement(), vchPubKey.GetElement(),
+                                                                scriptCode, flags & SCRIPT_ENABLE_SIGHASH_FORKID);
+        
+                                    if (fOk) {
+                                        isig++;
+                                        nSigsCount--;
+                                    }
+                                    ikey++;
+                                    nKeysCount--;
+        
+                                    // If there are more signatures left than keys left,
+                                    // then too many signatures have failed. Exit early,
+                                    // without checking any further signatures.
+                                    if (nSigsCount > nKeysCount) {
+                                        fSuccess = false;
+                                    }
+                                }
                             }
                         }
 
-                        // Clean up stack of actual arguments
-                        while (i-- > 1) {
-                            // If the operation failed, we require that all
-                            // signatures must be empty vector
-                            if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) &&
-                                !ikey2 && stack.stacktop(-1).size()) {
-                                return set_error(serror,
-                                                 SCRIPT_ERR_SIG_NULLFAIL);
-                            }
-                            if (ikey2 > 0) {
-                                ikey2--;
-                            }
+                        // Clean up stack
+                        while (i--) {
                             stack.pop_back();
                         }
-
-                        // A bug causes CHECKMULTISIG to consume one extra
-                        // argument whose contents were not checked in any way.
-                        //
-                        // Unfortunately this is a potential source of
-                        // mutability, so optionally verify it is exactly equal
-                        // to zero prior to removing it from the stack.
-                        if (stack.size() < 1) {
-                            return set_error(
-                                serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                        }
-                        if ((flags & SCRIPT_VERIFY_NULLDUMMY) &&
-                            stack.stacktop(-1).size()) {
-                            return set_error(serror, SCRIPT_ERR_SIG_NULLDUMMY);
-                        }
-                        stack.pop_back();
 
                         stack.push_back(fSuccess ? vchTrue : vchFalse);
 
