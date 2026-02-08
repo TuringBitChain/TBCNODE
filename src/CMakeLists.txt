@@ -219,6 +219,7 @@ add_library(bitcoinconsensus
 	script/script_error.cpp
 	uint256.cpp
 	utilstrencodings.cpp
+	x_only_pubkey.cpp
 )
 
 target_link_libraries(bitcoinconsensus common)
