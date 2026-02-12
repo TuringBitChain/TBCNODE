@@ -13,7 +13,28 @@ bool CZMQAbstractNotifier::NotifyBlock(const CBlockIndex * /*CBlockIndex*/) {
     return true;
 }
 
+bool CZMQAbstractNotifier::NotifyBlock2(const CBlockIndex*)
+{
+    return true;
+}
+
+bool CZMQAbstractNotifier::NotifyTransaction2(const CTransaction&)
+{
+    return true;
+}
+
 bool CZMQAbstractNotifier::NotifyTransaction(
     const CTransaction & /*transaction*/) {
+    return true;
+}
+
+bool CZMQAbstractNotifier::NotifyRemovedFromMempool(const uint256& txid, MemPoolRemovalReason reason,
+                                                    const CTransaction* conflictedWith)
+{
+    return true;
+}
+
+bool CZMQAbstractNotifier::NotifyDiscardedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason)
+{
     return true;
 }

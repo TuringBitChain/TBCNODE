@@ -6,6 +6,8 @@
 
 #include <secp256k1.h>
 #include <secp256k1_recovery.h>
+#include <secp256k1_extrakeys.h>
+#include <secp256k1_schnorrsig.h>
 
 namespace {
 /* Global secp256k1_context object used for verification. */
@@ -299,6 +301,41 @@ bool CExtPubKey::Derive(CExtPubKey &out, unsigned int _nChild) const {
     }
     return (!secp256k1_ecdsa_signature_normalize(secp256k1_context_verify,
                                                  nullptr, &sig));
+}
+
+bool XOnlyPubKey::IsValid() const {
+    // Check that it's not all zeros
+    bool all_zero = true;
+    for (int i = 0; i < 32; i++) {
+        if (vch[i] != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    return !all_zero;
+}
+
+bool XOnlyPubKey::IsFullyValid() const {
+    if (!IsValid()) return false;
+
+    if (!secp256k1_context_verify) return false;
+
+    secp256k1_xonly_pubkey pk;
+    return secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &pk, vch);
+}
+
+bool XOnlyPubKey::VerifySchnorr(const uint256 &hash,
+                                const std::vector<uint8_t> &vchSig) const {
+    if (!IsValid()) return false;
+    if (vchSig.size() != 64) return false;
+    
+    if (!secp256k1_context_verify) { return false; }
+
+    secp256k1_xonly_pubkey pk;
+    if (!secp256k1_xonly_pubkey_parse(secp256k1_context_verify, &pk, vch)) { return false; }
+    
+    return secp256k1_schnorrsig_verify(secp256k1_context_verify, vchSig.data(), hash.begin(), 32, &pk) == 1;
+
 }
 
 /* static */ int ECCVerifyHandle::refcount = 0;
