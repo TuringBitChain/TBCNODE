@@ -469,31 +469,21 @@ BOOST_AUTO_TEST_CASE(checkdatasig_test) {
                                     << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIG,
                           SCRIPT_ERR_SCHNORR_SIG_SIZE);
 
-    // Test 33: Schnorr with ECDSA flag
-    CheckPass("Sig Function Mismatch: Schnorr with ECDSA flag",
-              CScript() << data.schnorr_sig << data.ecdsa_message << data.schnorr_pubkey
-                        << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
-              0, 1, failure);
-
-    CheckError("Sig Function Mismatch: Schnorr with ECDSA flag",
-               CScript() << data.schnorr_sig << data.ecdsa_message << data.schnorr_pubkey
-                         << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
-               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_DER);
+    // Test 33: Schnorr with ECDSA flag (64-byte sig rejected as ECDSA encoding)
+    CheckErrorForAllFlags("Sig Function Mismatch: Schnorr with ECDSA flag",
+                          CScript() << data.schnorr_sig << data.ecdsa_message << data.schnorr_pubkey
+                                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+                          SCRIPT_ERR_ECDSA_SIG_SIZE);
 
     // ========================================================================
     // SECTION 7: Signature Mismatch Tests
     // ========================================================================
 
-    // Test 34: Use Schnorr signature with ECDSA
-    CheckPass("Signature Mismatch: Schnorr sig with ECDSA",
-              CScript() << data.schnorr_sig << data.ecdsa_message << data.compressed_pubkey
-                        << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
-              0, 1, failure);
-
-    CheckError("Signature Mismatch: Schnorr sig with ECDSA",
-               CScript() << data.schnorr_sig << data.ecdsa_message << data.compressed_pubkey
-                         << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
-               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_DER);
+    // Test 34: Use Schnorr signature with ECDSA (64-byte sig rejected as ECDSA encoding)
+    CheckErrorForAllFlags("Signature Mismatch: Schnorr sig with ECDSA",
+                          CScript() << data.schnorr_sig << data.ecdsa_message << data.compressed_pubkey
+                                    << std::vector<uint8_t>{0x02, 0x01} << OP_CHECKDATASIG,
+                          SCRIPT_ERR_ECDSA_SIG_SIZE);
 
     // Test 35: Use ECDSA signature with Schnorr
     CheckErrorForAllFlags("Signature Mismatch: ECDSA sig with Schnorr",

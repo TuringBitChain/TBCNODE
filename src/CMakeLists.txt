@@ -90,6 +90,10 @@ add_subdirectory(config)
 # libraries
 add_subdirectory(crypto)
 add_subdirectory(leveldb)
+
+# Enable secp256k1 recovery module
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "Enable ECDSA pubkey recovery module." FORCE)
+
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
 
@@ -213,7 +217,6 @@ add_library(bitcoinconsensus
 	script/script_error.cpp
 	uint256.cpp
 	utilstrencodings.cpp
-	x_only_pubkey.cpp
 )
 
 target_link_libraries(bitcoinconsensus common)
@@ -282,7 +285,6 @@ add_library(server
 	validation.cpp
 	validationinterface.cpp
     vmtouch.cpp
-	x_only_pubkey.cpp
 )
 
 # This require libevent
