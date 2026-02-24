@@ -446,18 +446,22 @@ std::optional<SignatureMethod> GetTransactionSignatureMethod(const std::vector<u
     }
 
     std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
+    SigHashType sigHashType = GetHashType(vchSigWithHashType);
     
-    if (IsSchnorrSignature(vchSig) && 
-        CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror)) {
-        return SignatureMethod::SCHNORR;
+    if (IsSchnorrSignature(vchSig)) {
+        if (CheckSigHashEncoding(sigHashType, flags, serror)) {
+            return SignatureMethod::SCHNORR;
+        }
+        return std::nullopt;
     }
 
-    if (CheckECDSASignatureEncoding(vchSig, flags, serror) && 
-        CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror)) {
-        return SignatureMethod::ECDSA;
+    if (CheckECDSASignatureEncoding(vchSig, flags, serror)) {
+        if (CheckSigHashEncoding(sigHashType, flags, serror)) {
+            return SignatureMethod::ECDSA;
+        }
+        return std::nullopt;
     }
 
-    // serror is set
     return std::nullopt;
 }
 } // namespace
