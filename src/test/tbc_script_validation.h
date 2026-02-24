@@ -30,6 +30,11 @@ struct KeyMaterial {
     KeyMaterial();
 };
 
+enum class SignatureMethod {
+    ECDSA,
+    SCHNORR,
+};
+
 struct SignatureMaterial {
     std::vector<uint8_t> ecdsaSig;
     std::vector<uint8_t> schnorrSig;
@@ -44,6 +49,10 @@ struct TransactionSignatureCheckerMaterial {
     std::unique_ptr<TransactionSignatureChecker> ecdsaChecker;
     std::unique_ptr<TransactionSignatureChecker> schnorrChecker;
 };
+
+CMutableTransaction BuildCreditingTransaction(const CScript& scriptPubKey, const Amount nValue);
+
+CMutableTransaction BuildSpendingTransaction(const CScript& scriptSig, const CMutableTransaction& txCredit);
 
 // Shared constants for script validation tests (e.g. CHECKSIG, CHECKMULTISIG, CHECKDATASIG).
 inline const std::vector<uint8_t> failure = {};

@@ -1,5 +1,7 @@
 #include "tbc_script_validation.h"
 
+#include "script/script_num.h"
+
 namespace TBCScriptValidation {
 
 KeyMaterial::KeyMaterial() {
@@ -22,6 +24,34 @@ KeyMaterial::KeyMaterial() {
     xonlyPubkey.assign(xonly.begin(), xonly.end());
 }
 
+CMutableTransaction BuildCreditingTransaction(const CScript& scriptPubKey, const Amount nValue) {
+    CMutableTransaction txCredit;
+    txCredit.nVersion = 1;
+    txCredit.nLockTime = 0;
+    txCredit.vin.resize(1);
+    txCredit.vout.resize(1);
+    txCredit.vin[0].prevout = COutPoint();
+    txCredit.vin[0].scriptSig = CScript() << CScriptNum(0) << CScriptNum(0);
+    txCredit.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
+    txCredit.vout[0].scriptPubKey = scriptPubKey;
+    txCredit.vout[0].nValue = nValue;
+    return txCredit;
+}
+
+CMutableTransaction BuildSpendingTransaction(const CScript& scriptSig,
+                                             const CMutableTransaction& txCredit) {
+    CMutableTransaction txSpend;
+    txSpend.nVersion = 1;
+    txSpend.nLockTime = 0;
+    txSpend.vin.resize(1);
+    txSpend.vout.resize(1);
+    txSpend.vin[0].prevout = COutPoint(txCredit.GetId(), 0);
+    txSpend.vin[0].scriptSig = scriptSig;
+    txSpend.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
+    txSpend.vout[0].scriptPubKey = CScript();
+    txSpend.vout[0].nValue = txCredit.vout[0].nValue;
+    return txSpend;
+}
 namespace {
 /**
  * Run a single script validation test and assert expected status, error and optional stack.

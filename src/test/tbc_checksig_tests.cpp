@@ -10,11 +10,9 @@
 #include "key.h"
 #include "primitives/transaction.h"
 #include "script/script_flags.h"
-#include "script/script_num.h"
 #include "tbc_script_validation.h"
 
 BOOST_FIXTURE_TEST_SUITE(tbc_checksig_tests, BasicTestingSetup)
-
 namespace {
 using TBCScriptValidation::failure;
 using TBCScriptValidation::success;
@@ -23,56 +21,22 @@ using TBCScriptValidation::CheckPassForAllFlags;
 using TBCScriptValidation::CheckError;
 using TBCScriptValidation::CheckErrorForAllFlags;
 
-CMutableTransaction BuildCreditingTransaction(const CScript& scriptPubKey, const Amount nValue) {
-    CMutableTransaction txCredit;
-    txCredit.nVersion = 1;
-    txCredit.nLockTime = 0;
-    txCredit.vin.resize(1);
-    txCredit.vout.resize(1);
-    txCredit.vin[0].prevout = COutPoint();
-    txCredit.vin[0].scriptSig = CScript() << CScriptNum(0) << CScriptNum(0);
-    txCredit.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
-    txCredit.vout[0].scriptPubKey = scriptPubKey;
-    txCredit.vout[0].nValue = nValue;
-    return txCredit;
-}
-
-CMutableTransaction BuildSpendingTransaction(const CScript& scriptSig,
-                                             const CMutableTransaction& txCredit) {
-    CMutableTransaction txSpend;
-    txSpend.nVersion = 1;
-    txSpend.nLockTime = 0;
-    txSpend.vin.resize(1);
-    txSpend.vout.resize(1);
-    txSpend.vin[0].prevout = COutPoint(txCredit.GetId(), 0);
-    txSpend.vin[0].scriptSig = scriptSig;
-    txSpend.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
-    txSpend.vout[0].scriptPubKey = CScript();
-    txSpend.vout[0].nValue = txCredit.vout[0].nValue;
-    return txSpend;
-}
-
-enum class SignatureMethod {
-    ECDSA,
-    SCHNORR,
-};
-
-// return the signed transaction and the signature
-template <SignatureMethod signatureMethod>
-std::pair<CTransactionRef, std::vector<uint8_t>> BuildSignedTransaction(const CScript& scriptPubKey, 
+// return the signed transaction, checker and the signature
+template <TBCScriptValidation::SignatureMethod signatureMethod>
+std::tuple<CTransactionRef, std::unique_ptr<TransactionSignatureChecker>, std::vector<uint8_t>> BuildSignedTransaction(const CScript& scriptPubKey,
     Amount amount, SigHashType sigHashType, const CKey& key) {
 
-    CMutableTransaction txCredit = BuildCreditingTransaction(scriptPubKey, amount);
-    CMutableTransaction txSpend = BuildSpendingTransaction(CScript(), txCredit);
+    CMutableTransaction txCredit = TBCScriptValidation::BuildCreditingTransaction(scriptPubKey, amount);
+    CMutableTransaction txSpend = TBCScriptValidation::BuildSpendingTransaction(CScript(), txCredit);
     uint256 sighash = SignatureHash(scriptPubKey, CTransaction(txSpend), 0,
                                          sigHashType, amount, nullptr, true);
     std::vector<uint8_t> sig;
 
-    if constexpr (signatureMethod == SignatureMethod::ECDSA) {
+    if constexpr (signatureMethod == TBCScriptValidation::SignatureMethod::ECDSA) {
         if (!key.Sign(sighash, sig)) {
             BOOST_FAIL("Failed to generate ECDSA signature");
         }
-    } else if constexpr (signatureMethod == SignatureMethod::SCHNORR) {
+    } else if constexpr (signatureMethod == TBCScriptValidation::SignatureMethod::SCHNORR) {
         if (!key.SignSchnorr(sighash, sig)) {
             BOOST_FAIL("Failed to generate Schnorr signature");
         }
@@ -80,7 +44,8 @@ std::pair<CTransactionRef, std::vector<uint8_t>> BuildSignedTransaction(const CS
 
     sig.push_back(static_cast<uint8_t>(sigHashType.getRawSigHashType() & 0xff));
     txSpend.vin[0].scriptSig = CScript() << sig;
-    return {MakeTransactionRef(CTransaction(txSpend)), sig};
+    CTransactionRef txRef = MakeTransactionRef(CTransaction(txSpend));
+    return {txRef, std::make_unique<TransactionSignatureChecker>(txRef.get(), 0, amount), sig};
 }
 
 struct TestData {
@@ -100,14 +65,12 @@ struct TestData {
         opcodetype opcode = (op == OpCode::CHECKSIG) ? OP_CHECKSIG : OP_CHECKSIGVERIFY;
 
         // ECDSA
-        std::tie(txs.ecdsaTx, sigs.ecdsaSig) = BuildSignedTransaction<SignatureMethod::ECDSA>(
+        std::tie(txs.ecdsaTx, checkers.ecdsaChecker, sigs.ecdsaSig) = BuildSignedTransaction<TBCScriptValidation::SignatureMethod::ECDSA>(
             CScript() << keys.compressedPubkey << opcode, amount, sigHashType, keys.key);
-        checkers.ecdsaChecker = std::make_unique<TransactionSignatureChecker>(txs.ecdsaTx.get(), 0, amount);
 
         // Schnorr
-        std::tie(txs.schnorrTx, sigs.schnorrSig) = BuildSignedTransaction<SignatureMethod::SCHNORR>(
+        std::tie(txs.schnorrTx, checkers.schnorrChecker, sigs.schnorrSig) = BuildSignedTransaction<TBCScriptValidation::SignatureMethod::SCHNORR>(
             CScript() << keys.xonlyPubkey << opcode, amount, sigHashType, keys.key);
-        checkers.schnorrChecker = std::make_unique<TransactionSignatureChecker>(txs.schnorrTx.get(), 0, amount);
     }
 };
 
@@ -131,7 +94,14 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
               CScript() << checksigData.sigs.ecdsaSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
               STANDARD_SCRIPT_VERIFY_FLAGS, 1, success, *checksigData.checkers.ecdsaChecker);
 
-    // Test 2: ECDSA with uncompressed pubkey - sig was over compressed scriptCode, so tx checker verification fails.
+    // Test 2: ECDSA - Valid ForkID sig fails without ForkID flag (flags=0).
+    // The signature is correct but SCRIPT_ENABLE_SIGHASH_FORKID is not set, so sighash
+    // is computed without ForkID and verification fails, leaving false on the stack.
+    CheckPass("ECDSA: Valid ForkID sig fails without ForkID flag (flags=0)",
+                CScript() << checksigData.sigs.ecdsaSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
+                0, 1, failure, *checksigData.checkers.ecdsaChecker);
+
+    // Test 3: ECDSA with uncompressed pubkey - sig was over compressed scriptCode, so tx checker verification fails.
     CheckPass("ECDSA: Uncompressed pubkey (flags=0, expect false with tx checker)",
               CScript() << checksigData.sigs.ecdsaSig << OP_CODESEPARATOR << checksigData.keys.uncompressedPubkey << OP_CHECKSIG,
               0, 1, failure, *checksigData.checkers.ecdsaChecker);
@@ -140,12 +110,6 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
               CScript() << checksigData.sigs.ecdsaSig << OP_CODESEPARATOR << checksigData.keys.uncompressedPubkey << OP_CHECKSIG,
               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_NULLFAIL, *checksigData.checkers.ecdsaChecker);
 
-    // Test 3: ECDSA - Valid ForkID sig fails without ForkID flag (flags=0).
-    // The signature is correct but SCRIPT_ENABLE_SIGHASH_FORKID is not set, so sighash
-    // is computed without ForkID and verification fails, leaving false on the stack.
-    CheckPass("ECDSA: Valid ForkID sig fails without ForkID flag (flags=0)",
-              CScript() << checksigData.sigs.ecdsaSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
-              0, 1, failure, *checksigData.checkers.ecdsaChecker);
 
     // Test 4: ECDSA - tampered signature triggers NULLFAIL under STANDARD flags.
     std::vector<uint8_t> wrongEcdsaSig = checksigData.sigs.ecdsaSig;
@@ -177,7 +141,7 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
         "3044022057292e2d4dfe775becdd0a9e6547997c728cdf35390f6a017da56d654d374e49"
         "02206b643be2fc53763b4e284845bfea2c597d2dc7759941dce937636c9d341b71");
     invalidDerSig.pop_back();
-    invalidDerSig.push_back(0x01); // hashtype
+    invalidDerSig.push_back(SIGHASH_ALL | SIGHASH_FORKID);
     CheckError("ECDSA: Invalid DER signature encoding",
                CScript() << invalidDerSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_DER, *checksigData.checkers.ecdsaChecker);
@@ -186,7 +150,7 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
     std::vector<uint8_t> highSSig = ParseHex(
         "304502203e4516da7253cf068effec6b95c41221c0cf3a8e6ccb8cbf1725b562e9afde2c"
         "022100ab1e3da73d67e32045a20e0b999e049978ea8d6ee5480d485fcf2ce0d03b2ef0");
-    highSSig.push_back(0x01);
+    highSSig.push_back(SIGHASH_ALL | SIGHASH_FORKID);
     CheckError("ECDSA: Signature with high S value",
                CScript() << highSSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_HIGH_S, *checksigData.checkers.ecdsaChecker);
@@ -226,7 +190,7 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
 
     // Test 13: ECDSA - non-ForkID signature with STANDARD (must use ForkID)
     std::vector<uint8_t> nonForkIdEcdsaSig(checksigData.sigs.ecdsaSig.begin(), checksigData.sigs.ecdsaSig.end() - 1);
-    nonForkIdEcdsaSig.push_back(SIGHASH_ALL); // SIGHASH_ALL, no ForkID
+    nonForkIdEcdsaSig.push_back(SIGHASH_ALL);
     CheckError("ECDSA: Non-ForkID signature with STANDARD",
                CScript() << nonForkIdEcdsaSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_MUST_USE_FORKID, *checksigData.checkers.ecdsaChecker);
@@ -238,9 +202,9 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
                CScript() << undefinedHashtypeSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_HASHTYPE, *checksigData.checkers.ecdsaChecker);
 
-    // Test 15: ECDSA - 64-byte signature (Schnorr length) with ECDSA path -> SCRIPT_ERR_ECDSA_SIG_SIZE.
+    // Test 15: ECDSA - 64-byte signature (Schnorr length)
     std::vector<uint8_t> sixtyFourByteSig(64, 0x11);
-    sixtyFourByteSig.push_back(SIGHASH_ALL | SIGHASH_FORKID); // SIGHASH_ALL | FROKID
+    sixtyFourByteSig.push_back(SIGHASH_ALL | SIGHASH_FORKID);
     CheckError("ECDSA: 64-byte signature (ECDSA_SIG_SIZE)",
                CScript() << sixtyFourByteSig << OP_CODESEPARATOR << checksigData.keys.compressedPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_XONLY_PUBKEY_SIZE, *checksigData.checkers.ecdsaChecker);
@@ -278,14 +242,14 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
                CScript() << wrongSchnorrSig << OP_CODESEPARATOR << checksigData.keys.xonlyPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_NULLFAIL, *checksigData.checkers.schnorrChecker);
 
-    // Test 20: Schnorr - empty signature (OP_CHECKSIG pushes false; NULLFAIL exempts empty sig)
+    // Test 20: Schnorr - empty signature
     CheckPassForAllFlags("Schnorr: Empty signature",
                          CScript() << emptySig << OP_CODESEPARATOR << checksigData.keys.xonlyPubkey << OP_CHECKSIG,
                          1, failure, *checksigData.checkers.schnorrChecker);
 
     // Test 21: Schnorr - 63+1=64 bytes: not 65-byte Schnorr, falls through to ECDSA path -> invalid DER.
     std::vector<uint8_t> wrongLenSig(63, 0x11);
-    wrongLenSig.push_back(SIGHASH_ALL | SIGHASH_FORKID); // SIGHASH_ALL | FROKID
+    wrongLenSig.push_back(SIGHASH_ALL | SIGHASH_FORKID);
     CheckError("Schnorr: 63+1 byte sig (invalid DER in ECDSA path)",
                CScript() << wrongLenSig << OP_CODESEPARATOR << checksigData.keys.xonlyPubkey << OP_CHECKSIG,
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_DER, *checksigData.checkers.schnorrChecker);
@@ -304,7 +268,7 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
 
     // Test 24: Schnorr - non-ForkID signature (hashtype 0x01, no ForkID bit).
     std::vector<uint8_t> nonForkIdSchnorrSig(checksigData.sigs.schnorrSig.begin(), checksigData.sigs.schnorrSig.end() - 1);
-    nonForkIdSchnorrSig.push_back(SIGHASH_ALL); // SIGHASH_ALL, no ForkID
+    nonForkIdSchnorrSig.push_back(SIGHASH_ALL);
     CheckPass("Schnorr: Non-ForkID sig fails without strict hashtype check (flags=0)",
               CScript() << nonForkIdSchnorrSig << OP_CODESEPARATOR << checksigData.keys.xonlyPubkey << OP_CHECKSIG,
               0, 1, failure, *checksigData.checkers.schnorrChecker);
@@ -362,13 +326,13 @@ BOOST_AUTO_TEST_CASE(checksig_test) {
               CScript() << checksigverifyData.sigs.schnorrSig << OP_CODESEPARATOR << checksigverifyData.keys.xonlyPubkey << OP_CHECKSIGVERIFY,
               STANDARD_SCRIPT_VERIFY_FLAGS, 0, {}, *checksigverifyData.checkers.schnorrChecker);
 
-    // Test 31: CHECKSIGVERIFY - empty ECDSA signature
-    CheckErrorForAllFlags("CHECKSIGVERIFY: Empty ECDSA signature",
+    // Test 31: CHECKSIGVERIFY - empty signature for legacy pubkey
+    CheckErrorForAllFlags("CHECKSIGVERIFY: Empty signature for legacy pubkey",
                           CScript() << emptySig << OP_CODESEPARATOR << checksigverifyData.keys.compressedPubkey << OP_CHECKSIGVERIFY,
                           SCRIPT_ERR_CHECKSIGVERIFY, *checksigverifyData.checkers.ecdsaChecker);
 
-    // Test 32: CHECKSIGVERIFY - empty Schnorr signature
-    CheckErrorForAllFlags("CHECKSIGVERIFY: Empty Schnorr signature",
+    // Test 32: CHECKSIGVERIFY - empty signature for x-only pubkey
+    CheckErrorForAllFlags("CHECKSIGVERIFY: Empty signature for x-only pubkey",
                           CScript() << emptySig << OP_CODESEPARATOR << checksigverifyData.keys.xonlyPubkey << OP_CHECKSIGVERIFY,
                           SCRIPT_ERR_CHECKSIGVERIFY, *checksigverifyData.checkers.schnorrChecker);
 }
