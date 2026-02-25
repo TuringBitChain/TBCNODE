@@ -249,6 +249,8 @@ add_library(server
     net/net_message.cpp
 	net/net_processing.cpp
     net/stream.cpp
+  	net/validation_scheduler.cpp
+  	net/validation_scheduler.h
 	noui.cpp
 	orphan_txns.cpp
 	policy/fees.cpp

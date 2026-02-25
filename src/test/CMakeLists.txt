@@ -149,6 +149,7 @@ add_test_to_suite(bitcoin test_bitcoin
 	undo_tests.cpp
 	univalue_tests.cpp
 	util_tests.cpp
+    validation_scheduler_tests.cpp
 	validation_tests.cpp
 	filled_miner_bill_v2_tests.cpp
 	x_only_pubkey_tests.cpp

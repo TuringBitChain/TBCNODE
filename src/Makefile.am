@@ -264,6 +264,7 @@ libbitcoin_server_a_SOURCES = \
   net/net_message.cpp \
   net/net_processing.cpp \
   net/stream.cpp \
+  net/validation_scheduler.cpp \
   noui.cpp \
   orphan_txns.cpp \
   policy/fees.cpp \
