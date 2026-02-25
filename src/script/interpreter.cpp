@@ -1796,14 +1796,14 @@ std::optional<bool> EvalScript(
                         uint64_t isig = ++i;
                         i += nSigsCount;
 
-                        if (stack.size() < i + 1) {
+                        if (stack.size() < i) {
                             return set_error(
                                 serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
 
                         // codeseparator
                         CScript scriptCode(pbegincodehash, pend);
-                        LimitedVector &vchDummy = stack.stacktop(-(i + 1));
+                        LimitedVector &vchDummy = stack.stacktop(-i);
                         bool fSuccess = true;
                         if ((flags & SCRIPT_ENABLE_SCHNORR_MULTISIG) && !vchDummy.empty()) {
                             // schnorr multisig
@@ -1939,6 +1939,10 @@ std::optional<bool> EvalScript(
                                     if (nSigsCount > nKeysCount) {
                                         fSuccess = false;
                                     }
+                                }
+
+                                if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL)) {
+                                    return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
                                 }
                             }
                         }
