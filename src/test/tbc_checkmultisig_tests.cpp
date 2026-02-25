@@ -537,7 +537,7 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
                   multisigData.keys, multisigData.sigs, zeroBitDummy),
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_BIT_COUNT, *multisigData.checkers.schnorrChecker);
 
-    // Test 29: Schnorr
+    // Test 29: Schnorr - Wrong pubkey with STANDARD (NULLFAIL)
     std::vector<TBCScriptValidation::KeyMaterial> wrongSchnorrKeys = multisigData.keys;
     wrongSchnorrKeys[multisigData.sigToKey.back()] = otherKeys;
     CheckError("Schnorr CHECKMULTISIG: Wrong pubkey with STANDARD (NULLFAIL)",
@@ -553,11 +553,29 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
                    emptyXonlyKeys, multisigData.sigs, validSchnorrDummy),
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_XONLY_PUBKEY_SIZE, *multisigData.checkers.schnorrChecker);
 
+    // Test 31: Schnorr - Mixed empty/non-empty signatures.
+    std::vector<TBCScriptValidation::SignatureMaterial> mixedEmptySchnorr = multisigData.sigs;
+    mixedEmptySchnorr.back().schnorrSig.clear();
+    CheckError("Schnorr CHECKMULTISIG: Mixed empty/non-empty signatures",
+               BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
+                   multisigData.keys, mixedEmptySchnorr, validSchnorrDummy),
+               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SCHNORR_SIG_SIZE, *multisigData.checkers.schnorrChecker);
+
+    // Test 32: Schnorr - All signatures empty.
+    std::vector<TBCScriptValidation::SignatureMaterial> allEmptySchnorr = multisigData.sigs;
+    for (auto& sig : allEmptySchnorr) {
+        sig.schnorrSig.clear();
+    }
+    CheckError("Schnorr CHECKMULTISIG: All signatures empty",
+               BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
+                   multisigData.keys, allEmptySchnorr, validSchnorrDummy),
+               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SCHNORR_SIG_SIZE, *multisigData.checkers.schnorrChecker);
+
     // ========================================================================
     // SECTION 3: Mixed ECDSA/Schnorr signatures
     // ========================================================================
 
-    // Test 31: mixed ECDSA/Schnorr signatures are rejected in ECDSA branch.
+    // Test 33: mixed ECDSA/Schnorr signatures are rejected in ECDSA branch.
     std::vector<TBCScriptValidation::SignatureMaterial> mixedSigInEcdsaBranch = multisigData.sigs;
     mixedSigInEcdsaBranch.back().ecdsaSig = multisigData.sigs.back().schnorrSig;
     CheckError("CHECKMULTISIG: Mixed ECDSA/Schnorr signatures in ECDSA branch",
@@ -565,7 +583,7 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
                    multisigData.keys, mixedSigInEcdsaBranch, emptyDummy),
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_ECDSA_SIG_SIZE, *multisigData.checkers.ecdsaChecker);
 
-    // Test 32: mixed ECDSA/Schnorr signatures are rejected in Schnorr branch.
+    // Test 34: mixed ECDSA/Schnorr signatures are rejected in Schnorr branch.
     std::vector<TBCScriptValidation::SignatureMaterial> mixedSigInSchnorrBranch = multisigData.sigs;
     mixedSigInSchnorrBranch.back().schnorrSig = multisigData.sigs.back().ecdsaSig;
     CheckError("CHECKMULTISIG: Mixed ECDSA/Schnorr signatures in Schnorr branch",
@@ -577,7 +595,7 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
     // SECTION 4: Mixed x-only/compressed pubkeys
     // ========================================================================
 
-    // Test 33: x-only/compressed pubkey mix is rejected in ECDSA branch.
+    // Test 35: x-only/compressed pubkey mix is rejected in ECDSA branch.
     std::vector<TBCScriptValidation::KeyMaterial> mixedPubkeyInEcdsaBranch = multisigData.keys;
     mixedPubkeyInEcdsaBranch[multisigData.sigToKey.back()].compressedPubkey = multisigData.keys[multisigData.sigToKey.back()].xonlyPubkey;
     CheckError("CHECKMULTISIG: Mixed x-only/compressed pubkeys in ECDSA branch",
@@ -585,7 +603,7 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
                    mixedPubkeyInEcdsaBranch, multisigData.sigs, emptyDummy),
                STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_LEGACY_PUBKEY, *multisigData.checkers.ecdsaChecker);
 
-    // Test 34: x-only/compressed pubkey mix is rejected in Schnorr branch.
+    // Test 36: x-only/compressed pubkey mix is rejected in Schnorr branch.
     std::vector<TBCScriptValidation::KeyMaterial> mixedPubkeyInSchnorrBranch = multisigData.keys;
     mixedPubkeyInSchnorrBranch[multisigData.sigToKey.back()].xonlyPubkey = multisigData.keys[multisigData.sigToKey.back()].compressedPubkey;
     CheckError("CHECKMULTISIG: Mixed x-only/compressed pubkeys in Schnorr branch",
@@ -596,34 +614,34 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
     // ========================================================================
     // SECTION 5: Stack / count validation
     // ========================================================================
-    // Test 35: No stack parameters (0 elements).
+    // Test 37: No stack parameters (0 elements).
     CheckErrorForAllFlags("CHECKMULTISIG: Insufficient stack parameters (0 elements)",
                           CScript() << OP_CHECKMULTISIG,
                           SCRIPT_ERR_INVALID_STACK_OPERATION, *multisigData.checkers.ecdsaChecker);
 
-    // Test 36: Only dummy on stack (1 element); need nKeys, nSigs, sigs, then dummy.
+    // Test 38: Only dummy on stack (1 element); need nKeys, nSigs, sigs, then dummy.
     CheckErrorForAllFlags("CHECKMULTISIG: Insufficient stack parameters (1 element)",
                           CScript() << OP_0 << OP_CODESEPARATOR << OP_CHECKMULTISIG,
                           SCRIPT_ERR_INVALID_STACK_OPERATION, *multisigData.checkers.ecdsaChecker);
 
-    // Test 37: Negative pubkey count.
+    // Test 39: Negative pubkey count.
     CheckErrorForAllFlags("CHECKMULTISIG: Negative pubkey count",
                           CScript() << OP_0 << OP_1NEGATE << OP_CHECKMULTISIG,
                           SCRIPT_ERR_PUBKEY_COUNT, *multisigData.checkers.ecdsaChecker);
 
-    // Test 38: Negative signature count.
+    // Test 40: Negative signature count.
     CheckErrorForAllFlags("CHECKMULTISIG: Negative signature count",
                           CScript() << OP_0 << OP_1NEGATE << multisigData.keys[0].compressedPubkey
                                     << OP_1 << OP_CHECKMULTISIG,
                           SCRIPT_ERR_SIG_COUNT, *multisigData.checkers.ecdsaChecker);
 
-    // Test 39: Signature count larger than pubkey count.
+    // Test 41: Signature count larger than pubkey count.
     CheckErrorForAllFlags("CHECKMULTISIG: Signature count larger than pubkey count",
                           CScript() << OP_0 << OP_2 << multisigData.keys[0].compressedPubkey
                                     << OP_1 << OP_CHECKMULTISIG,
                           SCRIPT_ERR_SIG_COUNT, *multisigData.checkers.ecdsaChecker);
 
-    // Test 40: Pubkey count exceeds consensus limit.
+    // Test 42: Pubkey count exceeds consensus limit.
     CheckErrorForAllFlags("CHECKMULTISIG: Pubkey count exceeds consensus limit",
                           CScript() << OP_0 << 100 << OP_CHECKMULTISIG,
                           SCRIPT_ERR_PUBKEY_COUNT, *multisigData.checkers.ecdsaChecker);
@@ -635,19 +653,19 @@ BuildCheckmultisigScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
     std::vector<uint8_t> validVerifySchnorrDummy =
         multisigVerifyData.BuildSchnorrDummy(multisigVerifyData.keys.size());
 
-    // Test 41: CHECKMULTISIGVERIFY ECDSA success.
+    // Test 43: CHECKMULTISIGVERIFY ECDSA success.
     CheckPass("CHECKMULTISIGVERIFY: ECDSA success",
               BuildCheckmultisigverifyScript<TBCScriptValidation::SignatureMethod::ECDSA>(
                   multisigVerifyData.keys, multisigVerifyData.sigs, emptyDummy),
               STANDARD_SCRIPT_VERIFY_FLAGS, 0, {}, *multisigVerifyData.checkers.ecdsaChecker);
 
-    // Test 42: CHECKMULTISIGVERIFY Schnorr success.
+    // Test 44: CHECKMULTISIGVERIFY Schnorr success.
     CheckPass("CHECKMULTISIGVERIFY: Schnorr success",
               BuildCheckmultisigverifyScript<TBCScriptValidation::SignatureMethod::SCHNORR>(
                   multisigVerifyData.keys, multisigVerifyData.sigs, validVerifySchnorrDummy),
               STANDARD_SCRIPT_VERIFY_FLAGS, 0, {}, *multisigVerifyData.checkers.schnorrChecker);
 
-    // Test 43: CHECKMULTISIGVERIFY 1-of-1 with empty ECDSA signature
+    // Test 45: CHECKMULTISIGVERIFY 1-of-1 with empty ECDSA signature
     TestData oneOfOneVerify(1, 1, TestData::OpCode::CHECKMULTISIGVERIFY);
     std::vector<TBCScriptValidation::SignatureMaterial> oneEmptySig(1);
     std::vector<uint8_t> oneOfOneDummy;

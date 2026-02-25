@@ -4,6 +4,7 @@
 // Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "interpreter.h"
+#include "script/script_error.h"
 #include "script_flags.h"
 
 #include "crypto/ripemd160.h"
@@ -385,7 +386,7 @@ bool IsSchnorrSignature(const valtype &vchSig) {
 }
 
 bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags, ScriptError *serror) {
-    if (IsSchnorrSignature(vchSig)) {
+    if (vchSig.empty() || IsSchnorrSignature(vchSig)) {
         return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
     }
 
@@ -402,6 +403,10 @@ bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t fl
 }
 
 bool CheckTransactionECDSASignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags, ScriptError *serror) {
+    if (vchSigWithHashType.empty()) {
+        return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
+    }
+
     std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
     return CheckECDSASignatureEncoding(vchSig, flags, serror) && 
         CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror);
@@ -415,6 +420,10 @@ bool CheckSchnorrSignatureEncoding(const valtype &vchSig, uint32_t flags, Script
 }
 
 bool CheckTransactionSchnorrSignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags, ScriptError *serror) {
+    if (vchSigWithHashType.empty()) {
+        return set_error(serror, SCRIPT_ERR_SCHNORR_SIG_SIZE);
+    }
+
     std::vector<uint8_t> vchSig(vchSigWithHashType.begin(), vchSigWithHashType.end() - 1);
     return CheckSchnorrSignatureEncoding(vchSig, flags, serror) && 
         CheckSigHashEncoding(GetHashType(vchSigWithHashType), flags, serror);
@@ -441,7 +450,7 @@ std::optional<SignatureMethod> GetTransactionSignatureMethod(const std::vector<u
     ScriptError *serror) {
     // Empty signature, allowed to provide a compact way to 
     // provide an invalid signature for use with CHECK(MULTI/DATA)SIG
-    if (vchSigWithHashType.size() == 0) {
+    if (vchSigWithHashType.empty()) {
         return SignatureMethod::NONE;
     }
 
