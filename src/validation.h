@@ -641,10 +641,10 @@ bool IsGenesisEnabled(const Config& config, int nHeight);
 bool IsGenesisEnabled(const Config& config, const Coin& coin, int mempoolHeight  );
 int GetGenesisActivationHeight(const Config& config);
 
-/** Check if Schnorr has activated. */
-bool IsSchnorrEnabled(const Config &config, int nHeight);
-/** Check if Schnorr has activated. */
-bool IsSchnorrEnabled(const Config &config, const CBlockIndex *pindexPrev);
+/** Check if Schnorr Multisig has activated. */
+bool IsSchnorrMultisigEnabled(const Config &config, int nHeight);
+/** Check if Schnorr Multisig has activated. */
+bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex *pindexPrev);
 
 /**
  * A function used to produce a default value for a number of Low priority threads
