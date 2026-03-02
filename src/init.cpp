@@ -775,8 +775,8 @@ std::string HelpMessage(HelpMessageMode mode) {
                                        DEFAULT_STOPATHEIGHT));
         strUsage += HelpMessageOpt(
             "-limitancestorcount=<n>",
-            strprintf("Do not accept transactions if number of in-mempool "
-                      "ancestors is <n> or more (default: %u)",
+            strprintf("Do not accept transactions if maximum height of in-mempool "
+                      "ancestors chain is <n> or more (default: %u)",
                       DEFAULT_ANCESTOR_LIMIT));
         strUsage +=
             HelpMessageOpt("-limitancestorsize=<n>",

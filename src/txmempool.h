@@ -170,6 +170,10 @@ private:
     unsigned int entryHeight;
     //!< keep track of transactions that spend a coinbase
     bool spendsCoinbase;
+    // index of insertion to mempool, entry with smaller index is inserted before the one with larger
+    uint64_t insertionIndex;
+    // ancestors count
+    size_t ancestorsHeight;
 
 public:
     CTxMemPoolEntry(const CTransactionRef &_tx, const Amount _nFee,
@@ -221,6 +225,10 @@ public:
     int64_t GetSigOpCountWithAncestors() const {
         return nSigOpCountWithAncestors;
     }
+    size_t GetAncestorsHeight() const { return ancestorsHeight; }
+    void SetAncestorsHeight(size_t n) { ancestorsHeight = n; }
+    void SetInsertionIndex(uint64_t ndx) { insertionIndex = ndx; }
+    uint64_t GetInsertionIndex() const { return insertionIndex; }
 
     //!< Index in mempool's vTxHashes
     mutable size_t vTxHashesIdx;
@@ -576,6 +584,18 @@ public:
     // DEPRECATED - this will become private and ultimately changed or removed
     typedef std::set<txiter, CompareIteratorByHash> setEntries;
 
+    class InsertionOrderComparator
+    {
+    public:
+        bool operator() (const txiter& lhs, const txiter& rhs) const
+        { 
+            return lhs->GetInsertionIndex() < rhs->GetInsertionIndex(); 
+        }
+    };
+    // when inserting transaction to mempool, all of its mempool parents must be already inserted and none of its children should be inserted.
+    // transaction which is inserted later has larger insertion index. thus if we sort a sequence by insertion index it will be topo sorted
+    using setEntriesTopoSorted = std::set<txiter, InsertionOrderComparator>;
+
     // DEPRECATED - this will become private and ultimately changed or removed
     const setEntries &GetMemPoolParentsNL(txiter entry) const;
     // DEPRECATED - this will become private and ultimately changed or removed
@@ -597,6 +617,16 @@ private:
 
     std::vector<indexed_transaction_set::const_iterator>
     getSortedDepthAndScoreNL() const;
+
+    class InsertionIndex
+    {
+        uint64_t nextIndex = 1;
+    public:
+        uint64_t GetNext()
+        {
+            return nextIndex++;
+        }
+    } insertionIndex;
 
 public:
     // DEPRECATED - this will become private and ultimately changed or removed
@@ -947,7 +977,8 @@ private:
 
     void removeConflictsNL(
             const CTransaction &tx,
-            const mining::CJournalChangeSetPtr& changeSet);
+            const mining::CJournalChangeSetPtr& changeSet,
+            setEntriesTopoSorted& childrenOfToRemove);
 
     void clearNL();
 
@@ -1006,6 +1037,9 @@ private:
     // - "Child pays for parent" (cpfp) is taken into account here
     // - parents which are not in the affectedTransactions set are considered to be already mined or accepted to the journal
     void checkJournalAcceptanceNL(const setEntries& affectedTransactions, mining::CJournalChangeSet& changeSet) const;
+
+    // Walks recursively through all descendants of the items in the set and updates their ancestorsHeight.
+    void UpdateAncestorsHeightNL(setEntriesTopoSorted entries);
 };
 
 /**
