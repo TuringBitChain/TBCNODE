@@ -283,7 +283,6 @@ add_library(server
 	validation.cpp
 	validationinterface.cpp
     vmtouch.cpp
-	x_only_pubkey.cpp
 )
 
 # This require libevent
