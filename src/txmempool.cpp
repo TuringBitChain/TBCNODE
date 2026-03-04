@@ -280,7 +280,7 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
             }
             parentHashes.insert(piter);
             ancestorsHeight = std::max(ancestorsHeight, piter->GetAncestorsHeight() + 1);
-            if (ancestorsHeight > limitAncestorCount) {
+            if (ancestorsHeight >= limitAncestorCount) {
                 errString =
                     strprintf("too many unconfirmed parents [limit: %u]",
                               limitAncestorCount);
@@ -311,7 +311,7 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
                 parentHashes.insert(phash);
             }
             ancestorsHeight = std::max(ancestorsHeight, phash->GetAncestorsHeight() + 1);
-            if (ancestorsHeight >
+            if (ancestorsHeight >=
                 limitAncestorCount) {
                 errString =
                     strprintf("too many unconfirmed ancestors [limit: %u]",
