@@ -833,7 +833,13 @@ void CTxMemPool::removeConflictsNL(
             if (txConflict != tx) {
                 txiter conflictIt = mapTx.find(txConflict.GetId());
                 if (conflictIt != mapTx.end()) {
-                    childrenOfToRemove.erase(conflictIt);
+                    // Remove conflict tx and all its descendants from childrenOfToRemove
+                    // because removeRecursiveNL will delete them entirely
+                    setEntries setDescendants;
+                    CalculateDescendantsNL(conflictIt, setDescendants);
+                    for (txiter descendantIt : setDescendants) {
+                        childrenOfToRemove.erase(descendantIt);
+                    }
                 }
                 clearPrioritisationNL(txConflict.GetId());
                 removeRecursiveNL(txConflict, changeSet, MemPoolRemovalReason::CONFLICT, &tx);
@@ -1785,7 +1791,25 @@ void CTxMemPool::UpdateAncestorsHeightNL(CTxMemPool::setEntriesTopoSorted entrie
         txiter entry = *entries.begin();
         entries.erase(entries.begin());
 
-        for(auto child: GetMemPoolChildrenNL(entry))
+        // Collect children before checking - they may still need updating even if parent is gone
+        setEntries childrenToProcess;
+        if(mapLinks.find(entry) != mapLinks.end())
+        {
+            childrenToProcess = GetMemPoolChildrenNL(entry);
+        }
+
+        // Skip further processing if entry has been removed from mempool
+        if(mapLinks.find(entry) == mapLinks.end())
+        {
+            // Still need to process children whose parent was removed
+            for(auto child: childrenToProcess)
+            {
+                entries.insert(child);
+            }
+            continue;
+        }
+
+        for(auto child: childrenToProcess)
         {
             entries.insert(child);
         }
