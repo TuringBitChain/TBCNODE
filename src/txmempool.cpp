@@ -857,26 +857,83 @@ void CTxMemPool::RemoveForBlock(
     std::vector<CTransactionRef>& txNew){
 
     std::unique_lock lock(smtx);
-    std::vector<const CTxMemPoolEntry *> entries;
     setEntries toBeRemoved;
     setEntriesTopoSorted childrenOfToRemove; // we must collect all transaction which parents we have removed to update its ancestorCount
-    for (const auto &tx : vtx) {
+
+    // Iterate block transactions in reverse order (child before parent)
+    // This ensures we handle children first when processing conflicts
+    for (auto vtxIter = vtx.rbegin(); vtxIter != vtx.rend(); ++vtxIter)
+    {
+        const auto& tx = *vtxIter;
         uint256 txid = tx->GetId();
 
         indexed_transaction_set::iterator i = mapTx.find(txid);
         if (i != mapTx.end()) {
-            entries.push_back(&*i);
             toBeRemoved.insert(i);
-            for(auto child: GetMemPoolChildrenNL(i))
+            for (auto child : GetMemPoolChildrenNL(i))
             {
-                if(toBeRemoved.find(child) == toBeRemoved.end())
+                // Only add children that are not also being removed
+                if (toBeRemoved.find(child) == toBeRemoved.end())
                 {
                     childrenOfToRemove.insert(child);
                 }
             }
         }
+        else {
+            // Transaction not in mempool - check for conflicts (double-spends)
+            bool isConflict = false;
+            for (const CTxIn &txin : tx->vin)
+            {
+                auto it = mapNextTx.find(txin.prevout);
+                if (it != mapNextTx.end())
+                {
+                    // Found a conflict - a tx in mempool spending same input
+                    isConflict = true;
+                    const CTransaction &txConflict = *it->second;
+                    txiter conflictIt = mapTx.find(txConflict.GetId());
+                    if (conflictIt != mapTx.end()) {
+                        // Collect all descendants of the conflicting tx
+                        setEntries setDescendants;
+                        CalculateDescendantsNL(conflictIt, setDescendants);
+
+                        // Remove descendants from childrenOfToRemove since they will be removed
+                        for (txiter descendantIt : setDescendants)
+                        {
+                            childrenOfToRemove.erase(descendantIt);
+                        }
+
+                        // Remove the conflict and all its descendants
+                        removeStagedNL(setDescendants, false, changeSet, MemPoolRemovalReason::CONFLICT, true, tx.get());
+                    }
+                }
+            }
+            // Add tx to txNew only if it wasn't in mempool (regardless of conflict status)
+            txNew.push_back(tx);
+        }
     }
-    
+
+    // Disconnect children from soon-to-be-removed parents before removal
+    // This ensures mapLinks stays consistent during removal
+    std::vector<txiter> tempEntries;
+    for (txiter child : childrenOfToRemove)
+    {
+        // Find parents that are being removed
+        for (txiter parent : GetMemPoolParentsNL(child))
+        {
+            if (toBeRemoved.find(parent) != toBeRemoved.end())
+            {
+                tempEntries.push_back(parent);
+            }
+        }
+
+        // Disconnect all parents that we found
+        for (txiter parentToRemove : tempEntries)
+        {
+            updateParentNL(child, parentToRemove, false);
+        }
+        tempEntries.clear();
+    }
+
     // returns true if tx is not in the journal nor it is added to changeset
     auto isTxOutsideJournal = [this, &changeSet](txiter entry)
     {
@@ -885,7 +942,7 @@ void CTxMemPool::RemoveForBlock(
         {
             return false;
         }
-                
+
         if (changeSet && changeSet->checkTxnAdded(txid))
         {
             return false;
@@ -895,24 +952,14 @@ void CTxMemPool::RemoveForBlock(
 
     setEntries affectedStillInMempool = getConnectedNL(toBeRemoved, isTxOutsideJournal);
 
-    // Before the txs in the new block have been removed from the mempool,
-    for (const auto &tx : vtx) {
-        txiter it = mapTx.find(tx->GetId());
-        if (it != mapTx.end()) {
-            setEntries stage;
-            stage.insert(it);
-            removeStagedNL(stage, true, changeSet, MemPoolRemovalReason::BLOCK, false);
-        }
-        else{
-            txNew.push_back(tx);
-        }
-    }
+    // Remove block transactions from mempool
+    removeStagedNL(toBeRemoved, true, changeSet, MemPoolRemovalReason::BLOCK, false);
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
 
+    // Clear prioritisation for all block transactions
     for (const auto &tx : vtx) {
-        removeConflictsNL(*tx, changeSet, childrenOfToRemove);
         clearPrioritisationNL(tx->GetId());
     }
 
