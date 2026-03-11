@@ -615,6 +615,13 @@ private:
     void updateParentNL(txiter entry, txiter parent, bool add);
     void updateChildNL(txiter entry, txiter child, bool add);
 
+    // Debug logging for mempool tree visualization
+    static bool gDebugMempoolTree;
+    void DebugPrintMempoolTreeNL(const std::string& label, const setEntries* txsToRemove = nullptr) const;
+    void DebugPrintTxTreeRecursiveNL(txiter entry, std::set<txiter, CompareIteratorByHash>& visited, int depth,
+                                     const setEntries* txsToRemove, std::string& output) const;
+    std::string GetTxLabelNL(txiter entry, const setEntries* txsToRemove) const;
+
     std::vector<indexed_transaction_set::const_iterator>
     getSortedDepthAndScoreNL() const;
 

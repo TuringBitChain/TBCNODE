@@ -24,6 +24,9 @@
 
 using namespace mining;
 
+// Debug flag for mempool tree visualization - set to true to enable detailed logging
+bool CTxMemPool::gDebugMempoolTree = false;
+
 /**
  * class CTxPrioritizer
  */
@@ -860,6 +863,33 @@ void CTxMemPool::RemoveForBlock(
     setEntries toBeRemoved;
     setEntriesTopoSorted childrenOfToRemove; // we must collect all transaction which parents we have removed to update its ancestorCount
 
+    // Debug: Print mempool tree before removal with markers for block transactions
+    if (gDebugMempoolTree) {
+        // Build set of block transactions for marking
+        setEntries blockTxs;
+        for (const auto& tx : vtx) {
+            auto it = mapTx.find(tx->GetId());
+            if (it != mapTx.end()) {
+                blockTxs.insert(it);
+            }
+        }
+        DebugPrintMempoolTreeNL("Mempool Tree BEFORE RemoveForBlock (marked with ^ will be removed)", &blockTxs);
+
+        // Print block transaction list
+        std::string blockList;
+        blockList += "\n--- Block Transactions List ---\n";
+        for (const auto& tx : vtx) {
+            auto it = mapTx.find(tx->GetId());
+            if (it != mapTx.end()) {
+                blockList += "  " + tx->GetId().ToString().substr(0, 16) + "... (in mempool, ancestorsHeight=" + std::to_string(it->GetAncestorsHeight()) + ")\n";
+            } else {
+                blockList += "  " + tx->GetId().ToString().substr(0, 16) + "... (NOT in mempool)\n";
+            }
+        }
+        blockList += "------------------------------\n\n";
+        LogPrintf("%s", blockList.c_str());
+    }
+
     // Iterate block transactions in reverse order (child before parent)
     // This ensures we handle children first when processing conflicts
     for (auto vtxIter = vtx.rbegin(); vtxIter != vtx.rend(); ++vtxIter)
@@ -964,6 +994,11 @@ void CTxMemPool::RemoveForBlock(
     }
 
     UpdateAncestorsHeightNL(childrenOfToRemove);
+
+    // Debug: Print mempool tree after removal
+    if (gDebugMempoolTree) {
+        DebugPrintMempoolTreeNL("Mempool Tree AFTER RemoveForBlock", nullptr);
+    }
 
     lastRollingFeeUpdate = GetTime();
     blockSinceLastRollingFeeBump = true;
@@ -2137,3 +2172,105 @@ bool CTxMemPool::ExistsNL(const COutPoint &outpoint) const {
 SaltedTxidHasher::SaltedTxidHasher()
     : k0(GetRand(std::numeric_limits<uint64_t>::max())),
       k1(GetRand(std::numeric_limits<uint64_t>::max())) {}
+
+// Helper to get transaction label with ancestors height and removal marker
+std::string CTxMemPool::GetTxLabelNL(txiter entry, const setEntries* txsToRemove) const {
+    std::string label = entry->GetTx().GetId().ToString().substr(0, 8);
+    label += " " + std::to_string(entry->GetAncestorsHeight());
+    if (txsToRemove && txsToRemove->count(entry)) {
+        label += "^";  // Mark as to be removed
+    }
+    return label;
+}
+
+// Recursive helper to print tree structure - builds string for LogPrintf
+void CTxMemPool::DebugPrintTxTreeRecursiveNL(txiter entry, std::set<txiter, CompareIteratorByHash>& visited,
+                                              int depth, const setEntries* txsToRemove,
+                                              std::string& output) const {
+    if (visited.count(entry)) {
+        return;
+    }
+    visited.insert(entry);
+
+    // Print indentation with tree branches
+    for (int i = 0; i < depth; i++) {
+        output += "    ";
+    }
+
+    // Add current node
+    output += GetTxLabelNL(entry, txsToRemove);
+    output += "\n";
+
+    // Get children and process them
+    auto it = mapLinks.find(entry);
+    if (it != mapLinks.end()) {
+        const auto& children = it->second.children;
+        size_t childIdx = 0;
+        for (txiter child : children) {
+            DebugPrintTxTreeRecursiveNL(child, visited, depth + 1, txsToRemove, output);
+        }
+    }
+}
+
+// Main debug print function for mempool tree visualization
+void CTxMemPool::DebugPrintMempoolTreeNL(const std::string& label, const setEntries* txsToRemove) const {
+    if (!gDebugMempoolTree) {
+        return;
+    }
+
+    std::string output;
+    output += "\n" + std::string(60, '=') + "\n";
+    output += label + "\n";
+    output += std::string(60, '=') + "\n";
+
+    if (mapTx.empty()) {
+        output += "[Empty mempool]\n";
+        LogPrintf("%s", output.c_str());
+        return;
+    }
+
+    // Find root transactions (those with no parents in mempool)
+    setEntries roots;
+    for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+        txiter entry = mapTx.project<0>(it);
+        auto linksIt = mapLinks.find(entry);
+        if (linksIt == mapLinks.end() || linksIt->second.parents.empty()) {
+            roots.insert(entry);
+        }
+    }
+
+    if (roots.empty()) {
+        // No clear roots, just print all transactions
+        output += "[No root transactions found - printing all]:\n";
+        for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+            txiter entry = mapTx.project<0>(it);
+            output += "  " + GetTxLabelNL(entry, txsToRemove) + "\n";
+        }
+        LogPrintf("%s", output.c_str());
+        return;
+    }
+
+    // Print tree starting from roots
+    std::set<txiter, CompareIteratorByHash> visited;
+    for (txiter root : roots) {
+        DebugPrintTxTreeRecursiveNL(root, visited, 0, txsToRemove, output);
+    }
+
+    // Print any unvisited transactions (orphaned subtrees)
+    bool hasUnvisited = false;
+    std::string unvisitedStr;
+    for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+        txiter entry = mapTx.project<0>(it);
+        if (!visited.count(entry)) {
+            if (!hasUnvisited) {
+                unvisitedStr += "\n[Additional transactions not in main trees]:\n";
+                hasUnvisited = true;
+            }
+            unvisitedStr += "  " + GetTxLabelNL(entry, txsToRemove) + "\n";
+        }
+    }
+    output += unvisitedStr;
+
+    output += std::string(60, '=') + "\n\n";
+    LogPrintf("%s", output.c_str());
+}
