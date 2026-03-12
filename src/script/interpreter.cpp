@@ -18,7 +18,6 @@
 #include "uint256.h"
 #include "consensus/consensus.h"
 #include "script_config.h"
-#include "x_only_pubkey.h"
 
 namespace {
 

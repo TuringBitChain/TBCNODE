@@ -11,7 +11,7 @@
 #include "script_error.h"
 #include "sighashtype.h"
 #include "limitedstack.h"
-#include "x_only_pubkey.h"
+#include "pubkey.h"
 
 #include <cstdint>
 #include <optional>
