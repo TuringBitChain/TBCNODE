@@ -6,6 +6,7 @@
 #ifndef BITCOIN_CONSENSUS_VALIDATION_H
 #define BITCOIN_CONSENSUS_VALIDATION_H
 
+#include <cstdint>
 #include <string>
 
 /** "reject" message codes */

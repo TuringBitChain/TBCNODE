@@ -48,6 +48,11 @@ public:
 class CachingTransactionSignatureChecker : public TransactionSignatureChecker {
 private:
     bool store;
+    
+    template<typename PubKeyType>
+    bool VerifySignatureImpl(const std::vector<uint8_t> &vchSig,
+                             const PubKeyType &pubkey,
+                             const uint256 &sighash) const;
 
 public:
     CachingTransactionSignatureChecker(const CTransaction *txToIn,
@@ -59,6 +64,10 @@ public:
 
     bool VerifySignature(const std::vector<uint8_t> &vchSig,
                          const CPubKey &vchPubKey,
+                         const uint256 &sighash) const override;
+                         
+    bool VerifySignature(const std::vector<uint8_t> &vchSig,
+                         const XOnlyPubKey &vchPubKey,
                          const uint256 &sighash) const override;
 };
 

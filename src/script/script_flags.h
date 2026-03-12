@@ -101,8 +101,10 @@ enum {
     // This is per (input!) UTXO flag
     SCRIPT_UTXO_AFTER_GENESIS = (1U << 19),
 
+    SCRIPT_ENABLE_SCHNORR_MULTISIG = (1U << 20),
+
     // Not actual flag. Used for marking largest flag value.
-    SCRIPT_FLAG_LAST = (1U << 20)
+    SCRIPT_FLAG_LAST = (1U << 21)
 };
 
 #endif // BITCOIN_SCRIPT_SCRIPTFLAGS_H

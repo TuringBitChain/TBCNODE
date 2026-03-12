@@ -1131,6 +1131,18 @@ bool IsGenesisEnabled(const Config &config, const CBlockIndex* pindexPrev) {
     return IsGenesisEnabled(config, pindexPrev->nHeight + 1);
 }
 
+bool IsSchnorrEnabled(const Config &config, int nHeight) {
+    return nHeight >= config.GetChainParams().GetConsensus().schnorrHeight;
+}
+
+bool IsSchnorrEnabled(const Config &config, const CBlockIndex* pindexPrev) {
+    if (pindexPrev == nullptr) {
+        return false;
+    }
+
+    return IsSchnorrEnabled(config, pindexPrev->nHeight);
+}
+
 // Used to avoid mempool polluting consensus critical paths if CCoinsViewMempool
 // were somehow broken and returning the wrong scriptPubKeys.
 //
@@ -3920,6 +3932,10 @@ static uint32_t GetBlockScriptFlags(const Config &config,
     if (IsGenesisEnabled(config, pChainTip->nHeight + 1)) {
         flags |= SCRIPT_GENESIS;
         flags |= SCRIPT_VERIFY_SIGPUSHONLY;
+    }
+
+    if (IsSchnorrEnabled(config, pChainTip)) {
+        flags |= SCRIPT_ENABLE_SCHNORR_MULTISIG;
     }
 
     return flags;
