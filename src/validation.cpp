@@ -82,6 +82,9 @@ using namespace boost::placeholders;
 
 #define TBC_FORK_BLOCK_HEIGHT 824190
 
+// Used for block production testing
+bool gBlockProductionTest = false;
+
 /**
  * Global state
  */
@@ -685,8 +688,13 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
     std::vector<uint8_t> countryCodeVec;
 
     // Get pukeyManagerArr from hard code
-    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49")));
-    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
+    if (!gBlockProductionTest) {
+        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49")));
+        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
+    }
+    else{
+        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("b44895b362dac31d35cf8cda5385db2cc254ac31892e7cd9cac6447c039f0a18")));
+    }
 
     // Get date from Output Scirpt
     outputScriptIndex += 28;    // Skip P2PKH + op_return + op_pushdata + dataLength(25 + 1 + 1 + 1)
@@ -973,6 +981,9 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
 {
     int kycV1ActivationHeight = 824189;
     int kycV2ActivationHeight = 927000;
+    if(gBlockProductionTest){
+        kycV2ActivationHeight = 824200;
+    }
     int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
     int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
 
