@@ -11,7 +11,6 @@
 #include "random.h"
 #include "uint256.h"
 #include "util.h"
-#include "x_only_pubkey.h"
 
 #include <boost/thread.hpp>
 

@@ -11,7 +11,6 @@
 #include "script_error.h"
 #include "sighashtype.h"
 #include "limitedstack.h"
-#include "x_only_pubkey.h"
 
 #include <cstdint>
 #include <optional>
@@ -23,6 +22,7 @@ class CScript;
 class CScriptConfig;
 class CTransaction;
 class uint256;
+class XOnlyPubKey;
 
 namespace task
 {

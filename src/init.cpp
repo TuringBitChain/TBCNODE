@@ -48,7 +48,6 @@
 #include "validation.h"
 #include "validationinterface.h"
 #include "vmtouch.h"
-#include "x_only_pubkey.h"
 
 #ifdef ENABLE_WALLET
 #include "wallet/rpcdump.h"
@@ -71,13 +70,15 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
-#include <boost/bind.hpp>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/thread.hpp>
+#include <boost/bind/bind.hpp>
 
 #if ENABLE_ZMQ
 #include "zmq/zmqnotificationinterface.h"
 #endif
+
+using namespace boost::placeholders;
 
 static const bool DEFAULT_PROXYRANDOMIZE = true;
 static const bool DEFAULT_REST_ENABLE = false;
@@ -173,7 +174,6 @@ public:
 static CCoinsViewDB *pcoinsdbview = nullptr;
 static CCoinsViewErrorCatcher *pcoinscatcher = nullptr;
 static std::unique_ptr<ECCVerifyHandle> globalVerifyHandle;
-static std::unique_ptr<ECCSchnorrVerifyHandle> globalSchnorrVerifyHandle;
 
 void Interrupt(boost::thread_group &threadGroup) {
     InterruptHTTPServer();
@@ -708,6 +708,18 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-zmqpubrawtx=<address>",
                        _("Enable publish raw transaction in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempool=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempoolblock=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubhashtxincr=<address>",
+                                _("Enable publish hash transaction in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubrawtxincr=<address>",
+                                _("Enable publish raw transaction in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubhashblocknew=<address>",
+                                _("Enable publish hash block in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubrawblocknew=<address>",
+                                _("Enable publish raw block in <address>. "));
 #endif
 
     strUsage += HelpMessageGroup(_("Debugging/Testing options:"));
@@ -2229,7 +2241,6 @@ bool AppInitSanityChecks() {
     RandomInit();
     ECC_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
-    globalSchnorrVerifyHandle.reset(new ECCSchnorrVerifyHandle());
     
     // Sanity check
     if (!InitSanityCheck()) {

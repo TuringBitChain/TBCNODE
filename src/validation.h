@@ -641,10 +641,10 @@ bool IsGenesisEnabled(const Config& config, int nHeight);
 bool IsGenesisEnabled(const Config& config, const Coin& coin, int mempoolHeight  );
 int GetGenesisActivationHeight(const Config& config);
 
-/** Check if Schnorr has activated. */
-bool IsSchnorrEnabled(const Config &config, int nHeight);
-/** Check if Schnorr has activated. */
-bool IsSchnorrEnabled(const Config &config, const CBlockIndex *pindexPrev);
+/** Check if Schnorr Multisig has activated. */
+bool IsSchnorrMultisigEnabled(const Config &config, int nHeight);
+/** Check if Schnorr Multisig has activated. */
+bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex *pindexPrev);
 
 /**
  * A function used to produce a default value for a number of Low priority threads
@@ -872,7 +872,7 @@ bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state, ui
 
 void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight);
 
-bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash);
+bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight = -1);
 
 namespace Consensus {
 

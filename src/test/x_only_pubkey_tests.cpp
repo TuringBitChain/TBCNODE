@@ -1,6 +1,6 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
-#include "x_only_pubkey.h"
+#include "pubkey.h"
 #include "test/test_bitcoin.h"
 
 #include <boost/test/tools/old/interface.hpp>

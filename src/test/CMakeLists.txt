@@ -152,7 +152,10 @@ add_test_to_suite(bitcoin test_bitcoin
 	validation_tests.cpp
 	filled_miner_bill_v2_tests.cpp
 	x_only_pubkey_tests.cpp
-	checkdatasig_tests.cpp
+	tbc_script_validation.cpp
+	tbc_checkdatasig_tests.cpp
+	tbc_checksig_tests.cpp
+	tbc_checkmultisig_tests.cpp
 	# Tests generated from JSON
 	${JSON_HEADERS}
 )

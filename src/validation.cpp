@@ -50,7 +50,6 @@
 #include "warnings.h"
 #include "blockfileinfostore.h"
 #include "time_consuming.h"
-#include "x_only_pubkey.h"
 #include "script/script_num.h"
 #include "key.h"
 #include "pubkey.h"
@@ -67,7 +66,11 @@
 #include <boost/math/distributions/poisson.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/thread.hpp>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
+
+#include "script/script_num.h"
+#include <key.h>
+#include <pubkey.h>
 #include <vector>
 
 #if defined(NDEBUG)
@@ -75,6 +78,7 @@
 #endif
 
 using namespace mining;
+using namespace boost::placeholders;
 
 #define TBC_FORK_BLOCK_HEIGHT 824190
 
@@ -859,7 +863,7 @@ bool FilledMinerBill(const CTransaction& tx)
     uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
     uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
     if (coinbaseFee < lowestLimitCoinbaseFee) {
-        LogPrintf("Coinbase fees are not within the permitted range.\n");
+        LogPrintf("Coinbase fees are not within the permitted range.txid:%s, coinbaseFee=%ld, lowestLimitCoinbaseFee=%ld\n", tx.GetHash().ToString(), coinbaseFee, lowestLimitCoinbaseFee);
         return false;
     }
 
@@ -965,35 +969,44 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 }
 
-bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash)
+bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
     int kycV1ActivationHeight = 824189;
     int kycV2ActivationHeight = 927000;
     int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
     int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
 
+    // Use block height being validated when provided (>=0); otherwise fall back to chain tip (e.g. wallet/test).
+    // Using the block's height ensures the same block always gets the same checker (FilledMinerBill vs FilledMinerBillV2),
+    // avoiding non-determinism when chainActive.Height() differs across threads.
+    int checkBlockheight = (blockHeight >= 0) ? blockHeight : chainActive.Height();
+
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
         HeightFormScript(tx,scriptSigHeight);
-        if ((chainActive.Height() >= kycV1ActivationTipHeight) && (scriptSigHeight >= kycV1ActivationHeight) && tx.nVersion != 10) {
+        if ((checkBlockheight >= kycV1ActivationTipHeight) && (scriptSigHeight >= (uint64_t)kycV1ActivationHeight) && tx.nVersion != 10) {
             std::stringstream error_message;
             error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
-                << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
+                << " checkBlockheight:" << checkBlockheight << " scriptSigHeight:" << scriptSigHeight;
             return state.Invalid(false, 0, "", error_message.str());
         }
 
         // Miner KYC veriry.
-        if (chainActive.Height() >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
-            if (chainActive.Height() >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
+        if (checkBlockheight >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
+            if (checkBlockheight >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
                 if (!FilledMinerBillV2(tx, prevBlockHash)) {
-                    LogPrintf("chainHeight type:%s sigHeight:%s 1000000 num type:%s\n",\
-                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
+                        kycV2ActivationHeight,
+                        checkBlockheight,
+                        scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
                 }
             } else {
                 if (!FilledMinerBill(tx)) {
-                    LogPrintf("chainHeight type:%s sigHeight:%s 824189 num type:%s\n",\
-                        typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),typeid(824189).name());
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
+                        kycV1ActivationHeight,
+                        checkBlockheight,
+                        scriptSigHeight);
                     return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
                 }
             }
@@ -1118,16 +1131,16 @@ bool IsGenesisEnabled(const Config &config, const CBlockIndex* pindexPrev) {
     return IsGenesisEnabled(config, pindexPrev->nHeight + 1);
 }
 
-bool IsSchnorrEnabled(const Config &config, int nHeight) {
-    return nHeight >= config.GetChainParams().GetConsensus().schnorrHeight;
+bool IsSchnorrMultisigEnabled(const Config &config, int nHeight) {
+    return nHeight >= config.GetChainParams().GetConsensus().schnorrMultisigHeight;
 }
 
-bool IsSchnorrEnabled(const Config &config, const CBlockIndex* pindexPrev) {
+bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex* pindexPrev) {
     if (pindexPrev == nullptr) {
         return false;
     }
 
-    return IsSchnorrEnabled(config, pindexPrev->nHeight);
+    return IsSchnorrMultisigEnabled(config, pindexPrev->nHeight);
 }
 
 // Used to avoid mempool polluting consensus critical paths if CCoinsViewMempool
@@ -3921,7 +3934,7 @@ static uint32_t GetBlockScriptFlags(const Config &config,
         flags |= SCRIPT_VERIFY_SIGPUSHONLY;
     }
 
-    if (IsSchnorrEnabled(config, pChainTip)) {
+    if (IsSchnorrMultisigEnabled(config, pChainTip)) {
         flags |= SCRIPT_ENABLE_SCHNORR_MULTISIG;
     }
 
@@ -4696,6 +4709,7 @@ static int64_t nTimeConnectTotal = 0;
 static int64_t nTimeFlush = 0;
 static int64_t nTimeChainState = 0;
 static int64_t nTimePostConnect = 0;
+static int64_t nTimeRemoveFromMempool = 0;
 
 struct PerBlockConnectTrace {
     CBlockIndex *pindex = nullptr;
@@ -4880,6 +4894,22 @@ static bool ConnectTip(
         bool flushed = view.Flush();
         assert(flushed);
     }
+
+    std::vector<CTransactionRef> txNew;
+    auto asyncRemoveForBlock = std::async(std::launch::async, 
+        [&blockConnecting, &pindexNew, &changeSet, &txNew]()
+        {
+            RenameThread("Async RemoveForBlock");
+            int64_t nTimeRemoveForBlock = GetTimeMicros();
+            // Remove transactions from the mempool.;
+            mempool.RemoveForBlock(blockConnecting.vtx, changeSet, txNew);
+            nTimeRemoveForBlock = GetTimeMicros() - nTimeRemoveForBlock;
+            nTimeRemoveFromMempool += nTimeRemoveForBlock;
+            LogPrint(BCLog::BENCH, "    - Remove transactions from the mempool: %.2fms [%.2fs]\n",
+                    nTimeRemoveForBlock * 0.001, nTimeRemoveFromMempool * 0.000001);
+        }
+    );
+
     int64_t nTime4 = GetTimeMicros();
     nTimeFlush += nTime4 - nTime3;
     LogPrint(BCLog::BENCH, "  - Flush: %.2fms [%.2fs]\n",
@@ -4887,19 +4917,19 @@ static bool ConnectTip(
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(config.GetChainParams(), state,
                           FLUSH_STATE_IF_NEEDED)) {
+        asyncRemoveForBlock.wait();
         return false;
     }
     int64_t nTime5 = GetTimeMicros();
     nTimeChainState += nTime5 - nTime4;
     LogPrint(BCLog::BENCH, "  - Writing chainstate: %.2fms [%.2fs]\n",
              (nTime5 - nTime4) * 0.001, nTimeChainState * 0.000001);
-    // Remove conflicting transactions from the mempool.;
-    mempool.RemoveForBlock(blockConnecting.vtx, pindexNew->nHeight, changeSet);
     if(g_connman)
     {
         g_connman->DequeueTransactions(blockConnecting.vtx);
     }
     disconnectpool.removeForBlock(blockConnecting.vtx);
+    asyncRemoveForBlock.wait();
     // Update chainActive & related variables.
     UpdateTip(config, pindexNew);
 
@@ -4912,6 +4942,7 @@ static bool ConnectTip(
              (nTime6 - nTime1) * 0.001, nTimeTotal * 0.000001);
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
+    GetMainSignals().BlockConnected2(pindexNew, txNew);
 
     FinalizeGenesisCrossing(config, pindexNew->nHeight, changeSet);
 
@@ -5918,7 +5949,7 @@ bool CheckBlock(const Config &config, const CBlock &block,
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
 
     // And a valid coinbase.
-    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock)) {
+    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock, blockHeight)) {
         return state.Invalid(false, state.GetRejectCode(),
                              state.GetRejectReason(),
                              strprintf("Coinbase check failed (txid %s) %s",
