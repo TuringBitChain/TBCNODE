@@ -693,6 +693,7 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
         pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
     }
     else{
+        LogPrintf("=============== Block production test mode: using test manager public key ===============\n");
         pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("b44895b362dac31d35cf8cda5385db2cc254ac31892e7cd9cac6447c039f0a18")));
     }
 
