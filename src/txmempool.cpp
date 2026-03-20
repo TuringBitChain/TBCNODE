@@ -907,6 +907,7 @@ void CTxMemPool::RemoveForBlock(
 
     // Iterate block transactions in reverse order (child before parent)
     // This ensures we handle children first when processing conflicts
+    size_t depth = 0;
     for (auto vtxIter = vtx.rbegin(); vtxIter != vtx.rend(); ++vtxIter)
     {
         const auto& tx = *vtxIter;
@@ -914,6 +915,7 @@ void CTxMemPool::RemoveForBlock(
 
         indexed_transaction_set::iterator i = mapTx.find(txid);
         if (i != mapTx.end()) {
+            depth = std::max(depth, i->GetAncestorsHeight());
             toBeRemoved.insert(i);
             for (auto child : GetMemPoolChildrenNL(i))
             {
@@ -1019,9 +1021,9 @@ void CTxMemPool::RemoveForBlock(
     blockSinceLastRollingFeeBump = true;
 
     int64_t nDuration = GetTimeMicros() - nStartTime;
-    LogPrint(BCLog::MEMPOOL, "MempoolRemove-Block: txs_removed=%zu, "
+    LogPrint(BCLog::MEMPOOL, "MempoolRemove-Block: txs_removed=%zu, max depth=%zu, "
             "time=%.3fms, mempool_size_after=%zu\n",
-            nTxCount,
+            nTxCount,depth,
             nDuration * 0.001, mapTx.size());
 }
 
