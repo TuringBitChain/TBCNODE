@@ -961,7 +961,8 @@ private:
 
     void updateForRemoveFromMempoolNL(
             const setEntries &entriesToRemove,
-            bool updateDescendants);
+            bool updateDescendants,
+            bool isBlockRemove = false);
 
     /**
      * Sever link between specified transaction and direct children.
@@ -1004,7 +1005,8 @@ private:
             const mining::CJournalChangeSetPtr& changeSet,
             MemPoolRemovalReason reason = MemPoolRemovalReason::UNKNOWN,
             bool updateJournal = true,
-            const CTransaction* conflictedwith = nullptr);
+            const CTransaction* conflictedwith = nullptr,
+            bool isBlockRemove = false);
 
     void prioritiseTransactionNL(
             const uint256& hash,

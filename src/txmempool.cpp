@@ -367,7 +367,10 @@ void CTxMemPool::updateChildrenForRemovalNL(txiter it) {
 }
 
 void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
-                                            bool updateDescendants) {
+                                            bool updateDescendants,
+                                            bool isBlockRemove) {
+    // Timing stats for block removal (Async RemoveForBlock thread)
+    int64_t nStartTime = isBlockRemove ? GetTimeMicros() : 0;
     // For each entry, walk back all ancestors and decrement size associated
     // with this transaction.
     const uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
@@ -431,6 +434,16 @@ void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
     // setMemPoolParents for each direct child of a transaction being removed).
     for (txiter removeIt : entriesToRemove) {
         updateChildrenForRemovalNL(removeIt);
+    }
+
+    // Log timing stats for block removal
+    if (isBlockRemove) {
+        int64_t nDuration = GetTimeMicros() - nStartTime;
+        LogPrint(BCLog::MEMPOOL, "MempoolUpdateForRemove-Block: entries=%zu, "
+                "updateDescendants=%s, time=%.3fms\n",
+                entriesToRemove.size(),
+                updateDescendants ? "true" : "false",
+                nDuration * 0.001);
     }
 }
 
@@ -860,6 +873,8 @@ void CTxMemPool::RemoveForBlock(
     std::vector<CTransactionRef>& txNew){
 
     std::unique_lock lock(smtx);
+    int64_t nStartTime = GetTimeMicros();
+    size_t nTxCount = vtx.size();
     setEntries toBeRemoved;
     setEntriesTopoSorted childrenOfToRemove; // we must collect all transaction which parents we have removed to update its ancestorCount
 
@@ -983,7 +998,7 @@ void CTxMemPool::RemoveForBlock(
     setEntries affectedStillInMempool = getConnectedNL(toBeRemoved, isTxOutsideJournal);
 
     // Remove block transactions from mempool
-    removeStagedNL(toBeRemoved, true, changeSet, MemPoolRemovalReason::BLOCK, false);
+    removeStagedNL(toBeRemoved, true, changeSet, MemPoolRemovalReason::BLOCK, false, nullptr, true);
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
@@ -1002,6 +1017,12 @@ void CTxMemPool::RemoveForBlock(
 
     lastRollingFeeUpdate = GetTime();
     blockSinceLastRollingFeeBump = true;
+
+    int64_t nDuration = GetTimeMicros() - nStartTime;
+    LogPrint(BCLog::MEMPOOL, "MempoolRemove-Block: txs_removed=%zu, "
+            "time=%.3fms, mempool_size_after=%zu\n",
+            nTxCount,
+            nDuration * 0.001, mapTx.size());
 }
 
 void CTxMemPool::clearNL() {
@@ -1913,9 +1934,10 @@ void CTxMemPool::removeStagedNL(
     const CJournalChangeSetPtr& changeSet,
     MemPoolRemovalReason reason,
     bool updateJournal,
-    const CTransaction* conflictedWith) {
+    const CTransaction* conflictedWith,
+    bool isBlockRemove) {
 
-    updateForRemoveFromMempoolNL(stage, updateDescendants);
+    updateForRemoveFromMempoolNL(stage, updateDescendants, isBlockRemove);
 
     if(updateJournal)
     {
