@@ -1000,7 +1000,10 @@ void CTxMemPool::RemoveForBlock(
     setEntries affectedStillInMempool = getConnectedNL(toBeRemoved, isTxOutsideJournal);
 
     // Remove block transactions from mempool
-    removeStagedNL(toBeRemoved, true, changeSet, MemPoolRemovalReason::BLOCK, false, nullptr, true);
+    for (txiter entry : toBeRemoved)                                                                                     
+    {                                                                                                                    
+        removeUncheckedNL(entry, changeSet, MemPoolRemovalReason::BLOCK, nullptr);                                       
+    }
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
