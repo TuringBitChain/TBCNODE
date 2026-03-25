@@ -37,8 +37,8 @@ struct Params {
       * It is not the height of the last block with the old rules.
       */
     int genesisHeight;
-    /** Block height at which Schnorr becomes active */
-    int schnorrHeight;
+    /** Block height at which Schnorr Multisig becomes active */
+    int schnorrMultisigHeight;
     /**
      * Minimum blocks including miner confirmation of the total of 2016 blocks
      * in a retargeting period, (nPowTargetTimespan / nPowTargetSpacing) which

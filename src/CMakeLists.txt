@@ -90,6 +90,10 @@ add_subdirectory(config)
 # libraries
 add_subdirectory(crypto)
 add_subdirectory(leveldb)
+
+# Enable secp256k1 recovery module
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "Enable ECDSA pubkey recovery module." FORCE)
+
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
 

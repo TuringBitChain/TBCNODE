@@ -23,6 +23,7 @@ class CScript;
 class CScriptConfig;
 class CTransaction;
 class uint256;
+class XOnlyPubKey;
 
 namespace task
 {
