@@ -2419,7 +2419,7 @@ bool CWallet::SelectCoinsMinConf(
         }
 
         if (!mempool.TransactionWithinChainLimit(pcoin->GetId(),
-                                                 nMaxAncestors)) {
+                                                 nMaxAncestors - 1)) {
             continue;
         }
 

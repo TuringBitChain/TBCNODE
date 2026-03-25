@@ -572,7 +572,8 @@ CTxnValidator::CIntermediateResult CTxnValidator::processNewTransactionsNL(
                 txns,
                 handlers,
                 fUseLimits,
-                maxasynctasksrunduration)
+                maxasynctasksrunduration,
+                mConfig.GetPTVTaskScheduleStrategy())
     };
     CIntermediateResult imdResult {};
     // Process validation results

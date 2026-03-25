@@ -43,7 +43,7 @@ void UnregisterValidationInterface(CValidationInterface *pwalletIn) {
     g_signals.BlockDisconnected.disconnect( boost::bind(&CValidationInterface::BlockDisconnected, pwalletIn, _1));
     g_signals.UpdatedBlockTip.disconnect(boost::bind( &CValidationInterface::UpdatedBlockTip, pwalletIn, _1, _2, _3));
     g_signals.NewPoWValidBlock.disconnect(boost::bind( &CValidationInterface::NewPoWValidBlock, pwalletIn, _1, _2));
-    g_signals.TransactionAddedToMempool.connect(boost::bind(&CValidationInterface::TransactionAdded, pwalletIn, _1));
+    g_signals.TransactionAddedToMempool.disconnect(boost::bind(&CValidationInterface::TransactionAdded, pwalletIn, _1));
     g_signals.BlockConnected2.disconnect(boost::bind(&CValidationInterface::BlockConnected2, pwalletIn, _1, _2));
     g_signals.InvalidTxMessageZMQ.disconnect(boost::bind(&CValidationInterface::InvalidTxMessageZMQ, pwalletIn, _1));
     g_signals.TransactionDiscardedFromMempool.disconnect(boost::bind(&CValidationInterface::TransactionDiscardedFromMempool, pwalletIn, _1, _2, _3));

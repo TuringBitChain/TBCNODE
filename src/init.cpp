@@ -775,8 +775,8 @@ std::string HelpMessage(HelpMessageMode mode) {
                                        DEFAULT_STOPATHEIGHT));
         strUsage += HelpMessageOpt(
             "-limitancestorcount=<n>",
-            strprintf("Do not accept transactions if number of in-mempool "
-                      "ancestors is <n> or more (default: %u)",
+            strprintf("Do not accept transactions if maximum height of in-mempool "
+                      "ancestors chain is <n> or more (default: %u)",
                       DEFAULT_ANCESTOR_LIMIT));
         strUsage +=
             HelpMessageOpt("-limitancestorsize=<n>",
@@ -1195,6 +1195,12 @@ std::string HelpMessage(HelpMessageMode mode) {
         "-txnvalidationasynchrunfreq=<n>",
         strprintf("Set run frequency in asynchronous mode (default: %dms)",
             CTxnValidator::DEFAULT_ASYNCH_RUN_FREQUENCY_MILLIS)) ;
+    // The message below assumes that default strategy is TOPO_SORT, therefore we assert here.
+    static_assert(DEFAULT_PTV_TASK_SCHEDULE_STRATEGY == PTVTaskScheduleStrategy::TOPO_SORT);
+    strUsage += HelpMessageOpt(
+            "-txnvalidationschedulestrategy=<strategy>",
+            "Set task scheduling strategy to use in parallel transaction validation."
+                    "Available strategies: CHAIN_DETECTOR (legacy, deprecated), TOPO_SORT (default)");
     strUsage += HelpMessageOpt(
         "-maxtxnvalidatorasynctasksrunduration=<n>",
         strprintf("Set the maximum validation duration for async tasks in a single run (default: %dms)",
@@ -2044,6 +2050,16 @@ bool AppInitParameterInteraction(Config &config) {
         config.GetMaxNonStdTxnValidationDuration().count())) {
         return InitError(
             strprintf("maxtxnvalidatorasynctasksrunduration must be greater than maxnonstdtxvalidationduration"));
+    }
+
+    if (gArgs.IsArgSet("-txnvalidationschedulestrategy"))
+    {
+        const std::string strategyStr { boost::to_upper_copy<std::string>(gArgs.GetArg("-txnvalidationschedulestrategy", "")) };
+        PTVTaskScheduleStrategy strategy { enum_cast<PTVTaskScheduleStrategy>(strategyStr) };
+        if (std::string err; !config.SetPTVTaskScheduleStrategy(strategy, &err))
+        {
+            return InitError(err);
+        }
     }
 
     if(std::string err; !config.SetMaxCoinsViewCacheSize(
