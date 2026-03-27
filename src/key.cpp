@@ -4,6 +4,8 @@
 
 #include "key.h"
 
+#include <array>
+
 #include "arith_uint256.h"
 #include "crypto/common.h"
 #include "crypto/hmac_sha512.h"
@@ -188,6 +190,27 @@ CPubKey CKey::GetPubKey() const {
     return result;
 }
 
+XOnlyPubKey CKey::GetXOnlyPubKey() const {
+    assert(fValid);
+    secp256k1_keypair keypair;
+    int ret = secp256k1_keypair_create(secp256k1_context_sign, &keypair,
+                                       begin());
+    assert(ret);
+    secp256k1_xonly_pubkey xonly_pubkey;
+    ret = secp256k1_keypair_xonly_pub(secp256k1_context_sign, &xonly_pubkey,
+                                      nullptr, &keypair);
+    assert(ret);
+    std::array<uint8_t, 32> buf;
+    ret = secp256k1_xonly_pubkey_serialize(secp256k1_context_sign, buf.data(),
+                                           &xonly_pubkey);
+    assert(ret);
+    return XOnlyPubKey(buf);
+}
+
+KeyPair CKey::ComputeKeyPair() const {
+    return KeyPair(*this);
+}
+
 bool CKey::Sign(const uint256 &hash, std::vector<uint8_t> &vchSig,
                 uint32_t test_case) const {
     if (!fValid) return false;
@@ -204,6 +227,12 @@ bool CKey::Sign(const uint256 &hash, std::vector<uint8_t> &vchSig,
         secp256k1_context_sign, (uint8_t *)&vchSig[0], &nSigLen, &sig);
     vchSig.resize(nSigLen);
     return true;
+}
+
+bool CKey::SignSchnorr(const uint256 &hash, std::vector<uint8_t> &vchSig, uint32_t test_case) const
+{
+    KeyPair kp = ComputeKeyPair();
+    return kp.SignSchnorr(hash, vchSig, test_case);
 }
 
 bool CKey::VerifyPubKey(const CPubKey &pubkey) const {
@@ -294,7 +323,7 @@ bool CKey::Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
     }
     memcpy(ccChild.begin(), vout.data() + 32, 32);
     memcpy((uint8_t *)keyChild.begin(), begin(), 32);
-    bool ret = secp256k1_ec_privkey_tweak_add(
+    bool ret = secp256k1_ec_seckey_tweak_add(
         secp256k1_context_sign, (uint8_t *)keyChild.begin(), vout.data());
     keyChild.fCompressed = true;
     keyChild.fValid = ret;
@@ -330,7 +359,7 @@ ECDHSecret CKey::ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift, c
                                           bsv::UCharCast(initiating ? their_ellswift.data() : our_ellswift.data()),
                                           keydata.data(),
                                           initiating ? 0 : 1,
-                                          ellswift_xdh_hash_function_bip324,  //TODO  secp256k1_ellswift_xdh_hash_function_bip324
+                                          secp256k1_ellswift_xdh_hash_function_bip324,
                                           nullptr);
     // Should always succeed for valid keys (assert above).
     assert(success);
@@ -396,6 +425,38 @@ void CExtKey::Decode(const uint8_t code[BIP32_EXTKEY_SIZE]) {
     memcpy(chaincode.begin(), code + 9, 32);
     key.Set(code + 42, code + BIP32_EXTKEY_SIZE, true);
 }
+
+KeyPair::KeyPair(const CKey& key)
+{
+    if (!key.IsValid() || key.size() != 32) {
+        return;
+    }
+    keypair.resize(sizeof(secp256k1_keypair));
+    auto kp = reinterpret_cast<secp256k1_keypair*>(keypair.data());
+    bool success = secp256k1_keypair_create(secp256k1_context_sign, kp, reinterpret_cast<const unsigned char*>(key.begin()));
+    if (!success) {
+        keypair.clear();
+    }
+}
+
+bool KeyPair::SignSchnorr(const uint256& hash, std::vector<uint8_t> &vchSig, uint32_t test_case) const
+{
+    if (!IsValid()) return false;
+    vchSig.resize(64);
+    auto kp = reinterpret_cast<const secp256k1_keypair*>(keypair.data());
+    uint8_t extra_entropy[32] = {0};
+    WriteLE32(extra_entropy, test_case);
+    bool ret = secp256k1_schnorrsig_sign32(secp256k1_context_sign, vchSig.data(), hash.begin(), kp, test_case ? extra_entropy : nullptr);
+    if (ret) {
+        // Additional verification step to prevent using a potentially corrupted signature
+        secp256k1_xonly_pubkey pubkey_verify;
+        ret = secp256k1_keypair_xonly_pub(secp256k1_context_static, &pubkey_verify, nullptr, kp);
+        ret &= secp256k1_schnorrsig_verify(secp256k1_context_static, vchSig.data(), hash.begin(), 32, &pubkey_verify);
+    }
+    if (!ret) memory_cleanse(vchSig.data(), vchSig.size());
+    return ret;
+}
+
 
 bool ECC_InitSanityCheck() {
     CKey key;

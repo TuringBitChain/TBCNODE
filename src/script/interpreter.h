@@ -11,6 +11,7 @@
 #include "script_error.h"
 #include "sighashtype.h"
 #include "limitedstack.h"
+#include "pubkey.h"
 
 #include <cstdint>
 #include <optional>
@@ -22,14 +23,15 @@ class CScript;
 class CScriptConfig;
 class CTransaction;
 class uint256;
+class XOnlyPubKey;
 
 namespace task
 {
   class CCancellationToken;
 }
 
-bool CheckSignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags,
-                            ScriptError *serror);
+bool CheckTransactionSignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags,
+                                ScriptError *serror);
 
 uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
                       unsigned int nIn, SigHashType sigHashType,
@@ -38,6 +40,28 @@ uint256 SignatureHash(const CScript &scriptCode, const CTransaction &txTo,
                       bool enabledSighashForkid = true);
 
 class BaseSignatureChecker {
+protected:
+    bool VerifyECDSASignature(const std::vector<uint8_t> &vchSig,
+                              const std::vector<uint8_t> &vchPubKey,
+                              const uint256 &sighash) const;
+
+    bool VerifySchnorrSignature(const std::vector<uint8_t> &vchSig,
+                                const std::vector<uint8_t> &vchPubKey,
+                                const uint256 &sighash) const;
+
+    bool VerifySignatureByMethod(uint8_t signatureMethodFlag,
+                                 const std::vector<uint8_t> &vchSig,
+                                 const std::vector<uint8_t> &vchPubKey,
+                                 const uint256 &sighash) const;
+
+    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
+                                 const CPubKey &vchPubKey,
+                                 const uint256 &sighash) const;
+
+    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
+                                 const XOnlyPubKey &vchPubKey,
+                                 const uint256 &sighash) const;
+
 public:
     virtual bool CheckSig(const std::vector<uint8_t> &scriptSig,
                           const std::vector<uint8_t> &vchPubKey,
@@ -45,12 +69,10 @@ public:
         return false;
     }
 
-    virtual bool CheckDataSig(const std::vector<uint8_t> &vchSig,
-                              const std::vector<uint8_t> &vchMessage,
-                              const std::vector<uint8_t> &vchPubKey,
-                              const std::vector<uint8_t> &vchSigFunc) const {
-        return false;
-    }
+    bool CheckDataSig(const std::vector<uint8_t> &vchSig,
+                      const std::vector<uint8_t> &vchMessage,
+                      const std::vector<uint8_t> &vchPubKey,
+                      const std::vector<uint8_t> &vchFlag) const;
 
     virtual uint256 getSha256Inputs() const {
         return uint256(); 
@@ -83,11 +105,6 @@ private:
     const Amount amount;
     const PrecomputedTransactionData *txdata;
 
-protected:
-    virtual bool VerifySignature(const std::vector<uint8_t> &vchSig,
-                                 const CPubKey &vchPubKey,
-                                 const uint256 &sighash) const;
-
 public:
     TransactionSignatureChecker(const CTransaction *txToIn, unsigned int nInIn,
                                 const Amount amountIn)
@@ -99,10 +116,7 @@ public:
     bool CheckSig(const std::vector<uint8_t> &scriptSig,
                   const std::vector<uint8_t> &vchPubKey,
                   const CScript &scriptCode, bool enabledSighashForkid) const override;
-    bool CheckDataSig(const std::vector<uint8_t> &vchSig,
-                      const std::vector<uint8_t> &vchMessage,
-                      const std::vector<uint8_t> &vchPubKey,
-                      const std::vector<uint8_t> &vchSigFunc) const override;
+
     uint256 getSha256Inputs() const override;
     uint256 getSha256Outputs() const override;
     bool CheckLockTime(const CScriptNum &nLockTime) const override;

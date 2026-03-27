@@ -9,7 +9,6 @@
 
 #include "int128.h"
 #include "modinv64.h"
-#include "int128_native_impl.h"
 
 /* This file implements modular inversion based on the paper "Fast constant-time gcd computation and
  * modular inversion" by Daniel J. Bernstein and Bo-Yin Yang.
@@ -27,7 +26,7 @@ typedef struct {
     int64_t u, v, q, r;
 } secp256k1_modinv64_trans2x2;
 
-/*#ifdef VERIFY*/
+#ifdef VERIFY
 /* Helper function to compute the absolute value of an int64_t.
  * (we don't use abs/labs/llabs as it depends on the int sizes). */
 static int64_t secp256k1_modinv64_abs(int64_t v) {
@@ -80,7 +79,7 @@ static int secp256k1_modinv64_det_check_pow2(const secp256k1_modinv64_trans2x2 *
     if (abs && secp256k1_i128_check_pow2(&a, n, -1)) return 1;
     return 0;
 }
-/*#endif*/
+#endif
 
 /* Take as input a signed62 number in range (-2*modulus,modulus), and add a multiple of the modulus
  * to it to bring it to range [0,modulus). If sign < 0, the input will also be negated in the
@@ -622,13 +621,12 @@ static void secp256k1_modinv64(secp256k1_modinv64_signed62 *x, const secp256k1_m
 
     /* g == 0 */
     VERIFY_CHECK(secp256k1_modinv64_mul_cmp_62(&g, 5, &SECP256K1_SIGNED62_ONE, 0) == 0);
-    /* |f| == 1, or (x == 0 and d == 0 and |f|=modulus) */
+    /* |f| == 1, or (x == 0 and d == 0 and f == modulus) */
     VERIFY_CHECK(secp256k1_modinv64_mul_cmp_62(&f, 5, &SECP256K1_SIGNED62_ONE, -1) == 0 ||
                  secp256k1_modinv64_mul_cmp_62(&f, 5, &SECP256K1_SIGNED62_ONE, 1) == 0 ||
                  (secp256k1_modinv64_mul_cmp_62(x, 5, &SECP256K1_SIGNED62_ONE, 0) == 0 &&
                   secp256k1_modinv64_mul_cmp_62(&d, 5, &SECP256K1_SIGNED62_ONE, 0) == 0 &&
-                  (secp256k1_modinv64_mul_cmp_62(&f, 5, &modinfo->modulus, 1) == 0 ||
-                   secp256k1_modinv64_mul_cmp_62(&f, 5, &modinfo->modulus, -1) == 0)));
+                  secp256k1_modinv64_mul_cmp_62(&f, 5, &modinfo->modulus, 1) == 0));
 
     /* Optionally negate d, normalize to [0,modulus), and return it. */
     secp256k1_modinv64_normalize_62(&d, f.v[4], modinfo);
@@ -642,9 +640,9 @@ static void secp256k1_modinv64_var(secp256k1_modinv64_signed62 *x, const secp256
     secp256k1_modinv64_signed62 e = {{1, 0, 0, 0, 0}};
     secp256k1_modinv64_signed62 f = modinfo->modulus;
     secp256k1_modinv64_signed62 g = *x;
-/*#ifdef VERIFY*/
+#ifdef VERIFY
     int i = 0;
-/*#endif*/
+#endif
     int j, len = 5;
     int64_t eta = -1; /* eta = -delta; delta is initially 1 */
     int64_t cond, fn, gn;
@@ -699,13 +697,12 @@ static void secp256k1_modinv64_var(secp256k1_modinv64_signed62 *x, const secp256
 
     /* g == 0 */
     VERIFY_CHECK(secp256k1_modinv64_mul_cmp_62(&g, len, &SECP256K1_SIGNED62_ONE, 0) == 0);
-    /* |f| == 1, or (x == 0 and d == 0 and |f|=modulus) */
+    /* |f| == 1, or (x == 0 and d == 0 and f == modulus) */
     VERIFY_CHECK(secp256k1_modinv64_mul_cmp_62(&f, len, &SECP256K1_SIGNED62_ONE, -1) == 0 ||
                  secp256k1_modinv64_mul_cmp_62(&f, len, &SECP256K1_SIGNED62_ONE, 1) == 0 ||
                  (secp256k1_modinv64_mul_cmp_62(x, 5, &SECP256K1_SIGNED62_ONE, 0) == 0 &&
                   secp256k1_modinv64_mul_cmp_62(&d, 5, &SECP256K1_SIGNED62_ONE, 0) == 0 &&
-                  (secp256k1_modinv64_mul_cmp_62(&f, len, &modinfo->modulus, 1) == 0 ||
-                   secp256k1_modinv64_mul_cmp_62(&f, len, &modinfo->modulus, -1) == 0)));
+                  secp256k1_modinv64_mul_cmp_62(&f, len, &modinfo->modulus, 1) == 0));
 
     /* Optionally negate d, normalize to [0,modulus), and return it. */
     secp256k1_modinv64_normalize_62(&d, f.v[len - 1], modinfo);

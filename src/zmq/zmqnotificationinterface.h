@@ -6,6 +6,7 @@
 #define BITCOIN_ZMQ_ZMQNOTIFICATIONINTERFACE_H
 
 #include "validationinterface.h"
+#include "txmempool.h"
 
 #include <list>
 #include <map>
@@ -25,12 +26,20 @@ protected:
 
     // CValidationInterface
     void TransactionAddedToMempool(const CTransactionRef &tx) override;
+    void TransactionAdded(const CTransactionRef& tx) override;
+    void TransactionDiscardedFromMempool(const uint256& txid,
+                                       MemPoolRemovalReason reason,
+                                       const CTransaction* conflictedWith) override;
+    void TransactionRemovedFromMempoolBlock(const uint256& txid,
+                                            MemPoolRemovalReason reason) override;
     void
     BlockConnected(const std::shared_ptr<const CBlock> &pblock,
                    const CBlockIndex *pindexConnected,
                    const std::vector<CTransactionRef> &vtxConflicted) override;
     void
     BlockDisconnected(const std::shared_ptr<const CBlock> &pblock) override;
+    void BlockConnected2(const CBlockIndex* pindexConnected,
+                   const std::vector<CTransactionRef>& vtxNew) override;
     void UpdatedBlockTip(const CBlockIndex *pindexNew,
                          const CBlockIndex *pindexFork,
                          bool fInitialDownload) override;

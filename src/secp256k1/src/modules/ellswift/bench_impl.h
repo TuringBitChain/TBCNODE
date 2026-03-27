@@ -83,7 +83,7 @@ static void bench_ellswift_xdh(void *arg, int iters) {
                                      data->rnd64,
                                      data->rnd64 + ((i + 16) % 33),
                                      party,
-                                     ellswift_xdh_hash_function_bip324,
+                                     secp256k1_ellswift_xdh_hash_function_bip324,
                                      NULL) == 1);
     }
 }

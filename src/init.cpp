@@ -73,13 +73,15 @@
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
-#include <boost/bind.hpp>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/thread.hpp>
+#include <boost/bind/bind.hpp>
 
 #if ENABLE_ZMQ
 #include "zmq/zmqnotificationinterface.h"
 #endif
+
+using namespace boost::placeholders;
 
 static const bool DEFAULT_PROXYRANDOMIZE = true;
 static const bool DEFAULT_REST_ENABLE = false;
@@ -709,6 +711,18 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-zmqpubrawtx=<address>",
                        _("Enable publish raw transaction in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempool=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubremovedfrommempoolblock=<address>",
+                               _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubhashtxincr=<address>",
+                                _("Enable publish hash transaction in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubrawtxincr=<address>",
+                                _("Enable publish raw transaction in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubhashblocknew=<address>",
+                                _("Enable publish hash block in <address>. "));
+    strUsage += HelpMessageOpt("-zmqpubrawblocknew=<address>",
+                                _("Enable publish raw block in <address>. "));
 #endif
 
     strUsage += HelpMessageGroup(_("Debugging/Testing options:"));
@@ -764,8 +778,8 @@ std::string HelpMessage(HelpMessageMode mode) {
                                        DEFAULT_STOPATHEIGHT));
         strUsage += HelpMessageOpt(
             "-limitancestorcount=<n>",
-            strprintf("Do not accept transactions if number of in-mempool "
-                      "ancestors is <n> or more (default: %u)",
+            strprintf("Do not accept transactions if maximum height of in-mempool "
+                      "ancestors chain is <n> or more (default: %u)",
                       DEFAULT_ANCESTOR_LIMIT));
         strUsage +=
             HelpMessageOpt("-limitancestorsize=<n>",
@@ -1184,6 +1198,12 @@ std::string HelpMessage(HelpMessageMode mode) {
         "-txnvalidationasynchrunfreq=<n>",
         strprintf("Set run frequency in asynchronous mode (default: %dms)",
             CTxnValidator::DEFAULT_ASYNCH_RUN_FREQUENCY_MILLIS)) ;
+    // The message below assumes that default strategy is TOPO_SORT, therefore we assert here.
+    static_assert(DEFAULT_PTV_TASK_SCHEDULE_STRATEGY == PTVTaskScheduleStrategy::TOPO_SORT);
+    strUsage += HelpMessageOpt(
+            "-txnvalidationschedulestrategy=<strategy>",
+            "Set task scheduling strategy to use in parallel transaction validation."
+                    "Available strategies: CHAIN_DETECTOR (legacy, deprecated), TOPO_SORT (default)");
     strUsage += HelpMessageOpt(
         "-maxtxnvalidatorasynctasksrunduration=<n>",
         strprintf("Set the maximum validation duration for async tasks in a single run (default: %dms)",
@@ -2040,6 +2060,16 @@ bool AppInitParameterInteraction(Config &config) {
             strprintf("maxtxnvalidatorasynctasksrunduration must be greater than maxnonstdtxvalidationduration"));
     }
 
+    if (gArgs.IsArgSet("-txnvalidationschedulestrategy"))
+    {
+        const std::string strategyStr { boost::to_upper_copy<std::string>(gArgs.GetArg("-txnvalidationschedulestrategy", "")) };
+        PTVTaskScheduleStrategy strategy { enum_cast<PTVTaskScheduleStrategy>(strategyStr) };
+        if (std::string err; !config.SetPTVTaskScheduleStrategy(strategy, &err))
+        {
+            return InitError(err);
+        }
+    }
+
     if(std::string err; !config.SetMaxCoinsViewCacheSize(
         gArgs.GetArgAsBytes("-maxcoinsviewcachesize", 0), &err))
     {
@@ -2235,7 +2265,7 @@ bool AppInitSanityChecks() {
     RandomInit();
     ECC_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
-
+    
     // Sanity check
     if (!InitSanityCheck()) {
         return InitError(strprintf(

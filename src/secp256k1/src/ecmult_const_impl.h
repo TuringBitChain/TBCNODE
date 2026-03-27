@@ -1,8 +1,8 @@
-/**********************************************************************
- * Copyright (c) 2015 Pieter Wuille, Andrew Poelstra                  *
- * Distributed under the MIT software license, see the accompanying   *
- * file COPYING or http://www.opensource.org/licenses/mit-license.php.*
- **********************************************************************/
+/***********************************************************************
+ * Copyright (c) 2015, 2022 Pieter Wuille, Andrew Poelstra             *
+ * Distributed under the MIT software license, see the accompanying    *
+ * file COPYING or https://www.opensource.org/licenses/mit-license.php.*
+ ***********************************************************************/
 
 #ifndef SECP256K1_ECMULT_CONST_IMPL_H
 #define SECP256K1_ECMULT_CONST_IMPL_H
@@ -12,229 +12,257 @@
 #include "ecmult_const.h"
 #include "ecmult_impl.h"
 
-#ifdef USE_ENDOMORPHISM
-    #define WNAF_BITS 128
+#if defined(EXHAUSTIVE_TEST_ORDER)
+/* We need 2^ECMULT_CONST_GROUP_SIZE - 1 to be less than EXHAUSTIVE_TEST_ORDER, because
+ * the tables cannot have infinities in them (this breaks the effective-affine technique's
+ * z-ratio tracking) */
+#  if EXHAUSTIVE_TEST_ORDER == 199
+#    define ECMULT_CONST_GROUP_SIZE 4
+#  elif EXHAUSTIVE_TEST_ORDER == 13
+#    define ECMULT_CONST_GROUP_SIZE 3
+#  elif EXHAUSTIVE_TEST_ORDER == 7
+#    define ECMULT_CONST_GROUP_SIZE 2
+#  else
+#    error "Unknown EXHAUSTIVE_TEST_ORDER"
+#  endif
 #else
-    #define WNAF_BITS 256
+/* Group size 4 or 5 appears optimal. */
+#  define ECMULT_CONST_GROUP_SIZE 5
 #endif
-#define WNAF_SIZE(w) ((WNAF_BITS + (w) - 1) / (w))
 
-/* This is like `ECMULT_TABLE_GET_GE` but is constant time */
-#define ECMULT_CONST_TABLE_GET_GE(r,pre,n,w) do { \
-    int m; \
-    int abs_n = (n) * (((n) > 0) * 2 - 1); \
-    int idx_n = abs_n / 2; \
-    secp256k1_fe neg_y; \
-    VERIFY_CHECK(((n) & 1) == 1); \
-    VERIFY_CHECK((n) >= -((1 << ((w)-1)) - 1)); \
-    VERIFY_CHECK((n) <=  ((1 << ((w)-1)) - 1)); \
-    VERIFY_SETUP(secp256k1_fe_clear(&(r)->x)); \
-    VERIFY_SETUP(secp256k1_fe_clear(&(r)->y)); \
-    for (m = 0; m < ECMULT_TABLE_SIZE(w); m++) { \
-        /* This loop is used to avoid secret data in array indices. See
-         * the comment in ecmult_gen_impl.h for rationale. */ \
-        secp256k1_fe_cmov(&(r)->x, &(pre)[m].x, m == idx_n); \
-        secp256k1_fe_cmov(&(r)->y, &(pre)[m].y, m == idx_n); \
-    } \
-    (r)->infinity = 0; \
-    secp256k1_fe_negate(&neg_y, &(r)->y, 1); \
-    secp256k1_fe_cmov(&(r)->y, &neg_y, (n) != abs_n); \
-} while(0)
+#define ECMULT_CONST_TABLE_SIZE (1L << (ECMULT_CONST_GROUP_SIZE - 1))
+#define ECMULT_CONST_GROUPS ((129 + ECMULT_CONST_GROUP_SIZE - 1) / ECMULT_CONST_GROUP_SIZE)
+#define ECMULT_CONST_BITS (ECMULT_CONST_GROUPS * ECMULT_CONST_GROUP_SIZE)
 
-
-/** Convert a number to WNAF notation.
- *  The number becomes represented by sum(2^{wi} * wnaf[i], i=0..WNAF_SIZE(w)+1) - return_val.
- *  It has the following guarantees:
- *  - each wnaf[i] an odd integer between -(1 << w) and (1 << w)
- *  - each wnaf[i] is nonzero
- *  - the number of words set is always WNAF_SIZE(w) + 1
+/** Fill a table 'pre' with precomputed odd multiples of a.
  *
- *  Adapted from `The Width-w NAF Method Provides Small Memory and Fast Elliptic Scalar
- *  Multiplications Secure against Side Channel Attacks`, Okeya and Tagaki. M. Joye (Ed.)
- *  CT-RSA 2003, LNCS 2612, pp. 328-443, 2003. Springer-Verlagy Berlin Heidelberg 2003
+ *  The resulting point set is brought to a single constant Z denominator, stores the X and Y
+ *  coordinates as ge points in pre, and stores the global Z in globalz.
  *
- *  Numbers reference steps of `Algorithm SPA-resistant Width-w NAF with Odd Scalar` on pp. 335
+ *  'pre' must be an array of size ECMULT_CONST_TABLE_SIZE.
  */
-static int secp256k1_wnaf_const(int *wnaf, secp256k1_scalar s, int w) {
-    int global_sign;
-    int skew = 0;
-    int word = 0;
+static void secp256k1_ecmult_const_odd_multiples_table_globalz(secp256k1_ge *pre, secp256k1_fe *globalz, const secp256k1_gej *a) {
+    secp256k1_fe zr[ECMULT_CONST_TABLE_SIZE];
 
-    /* 1 2 3 */
-    int u_last;
-    int u;
-
-    int flip;
-    int bit;
-    secp256k1_scalar neg_s;
-    int not_neg_one;
-    /* Note that we cannot handle even numbers by negating them to be odd, as is
-     * done in other implementations, since if our scalars were specified to have
-     * width < 256 for performance reasons, their negations would have width 256
-     * and we'd lose any performance benefit. Instead, we use a technique from
-     * Section 4.2 of the Okeya/Tagaki paper, which is to add either 1 (for even)
-     * or 2 (for odd) to the number we are encoding, returning a skew value indicating
-     * this, and having the caller compensate after doing the multiplication. */
-
-    /* Negative numbers will be negated to keep their bit representation below the maximum width */
-    flip = secp256k1_scalar_is_high(&s);
-    /* We add 1 to even numbers, 2 to odd ones, noting that negation flips parity */
-    bit = flip ^ !secp256k1_scalar_is_even(&s);
-    /* We check for negative one, since adding 2 to it will cause an overflow */
-    secp256k1_scalar_negate(&neg_s, &s);
-    not_neg_one = !secp256k1_scalar_is_one(&neg_s);
-    secp256k1_scalar_cadd_bit(&s, bit, not_neg_one);
-    /* If we had negative one, flip == 1, s.d[0] == 0, bit == 1, so caller expects
-     * that we added two to it and flipped it. In fact for -1 these operations are
-     * identical. We only flipped, but since skewing is required (in the sense that
-     * the skew must be 1 or 2, never zero) and flipping is not, we need to change
-     * our flags to claim that we only skewed. */
-    global_sign = secp256k1_scalar_cond_negate(&s, flip);
-    global_sign *= not_neg_one * 2 - 1;
-    skew = 1 << bit;
-
-    /* 4 */
-    u_last = secp256k1_scalar_shr_int(&s, w);
-    while (word * w < WNAF_BITS) {
-        int sign;
-        int even;
-
-        /* 4.1 4.4 */
-        u = secp256k1_scalar_shr_int(&s, w);
-        /* 4.2 */
-        even = ((u & 1) == 0);
-        sign = 2 * (u_last > 0) - 1;
-        u += sign * even;
-        u_last -= sign * even * (1 << w);
-
-        /* 4.3, adapted for global sign change */
-        wnaf[word++] = u_last * global_sign;
-
-        u_last = u;
-    }
-    wnaf[word] = u * global_sign;
-
-    VERIFY_CHECK(secp256k1_scalar_is_zero(&s));
-    VERIFY_CHECK(word == WNAF_SIZE(w));
-    return skew;
+    secp256k1_ecmult_odd_multiples_table(ECMULT_CONST_TABLE_SIZE, pre, zr, globalz, a);
+    secp256k1_ge_table_set_globalz(ECMULT_CONST_TABLE_SIZE, pre, zr);
 }
 
+/* Given a table 'pre' with odd multiples of a point, put in r the signed-bit multiplication of n with that point.
+ *
+ * For example, if ECMULT_CONST_GROUP_SIZE is 4, then pre is expected to contain 8 entries:
+ * [1*P, 3*P, 5*P, 7*P, 9*P, 11*P, 13*P, 15*P]. n is then expected to be a 4-bit integer (range 0-15), and its
+ * bits are interpreted as signs of powers of two to look up.
+ *
+ * For example, if n=4, which is 0100 in binary, which is interpreted as [- + - -], so the looked up value is
+ * [ -(2^3) + (2^2) - (2^1) - (2^0) ]*P = -7*P. Every valid n translates to an odd number in range [-15,15],
+ * which means we just need to look up one of the precomputed values, and optionally negate it.
+ */
+#define ECMULT_CONST_TABLE_GET_GE(r,pre,n) do { \
+    unsigned int m = 0; \
+    /* If the top bit of n is 0, we want the negation. */ \
+    volatile unsigned int negative = ((n) >> (ECMULT_CONST_GROUP_SIZE - 1)) ^ 1; \
+    /* Let n[i] be the i-th bit of n, then the index is
+     *     sum(cnot(n[i]) * 2^i, i=0..l-2)
+     * where cnot(b) = b if n[l-1] = 1 and 1 - b otherwise.
+     * For example, if n = 4, in binary 0100, the index is 3, in binary 011.
+     *
+     * Proof:
+     *     Let
+     *         x = sum((2*n[i] - 1)*2^i, i=0..l-1)
+     *           = 2*sum(n[i] * 2^i, i=0..l-1) - 2^l + 1
+     *     be the value represented by n.
+     *     The index is (x - 1)/2 if x > 0 and -(x + 1)/2 otherwise.
+     *     Case x > 0:
+     *         n[l-1] = 1
+     *         index = sum(n[i] * 2^i, i=0..l-1) - 2^(l-1)
+     *               = sum(n[i] * 2^i, i=0..l-2)
+     *     Case x <= 0:
+     *         n[l-1] = 0
+     *          index = -(2*sum(n[i] * 2^i, i=0..l-1) - 2^l + 2)/2
+     *                = 2^(l-1) - 1 - sum(n[i] * 2^i, i=0..l-1)
+     *                = sum((1 - n[i]) * 2^i, i=0..l-2)
+     */ \
+    unsigned int index = ((unsigned int)(-negative) ^ n) & ((1U << (ECMULT_CONST_GROUP_SIZE - 1)) - 1U); \
+    secp256k1_fe neg_y; \
+    VERIFY_CHECK((n) < (1U << ECMULT_CONST_GROUP_SIZE)); \
+    VERIFY_CHECK(index < (1U << (ECMULT_CONST_GROUP_SIZE - 1))); \
+    /* Unconditionally set r->x = (pre)[m].x and r->y = (pre)[m].y because it's either the correct one
+     * or will get replaced in the later iterations, this is needed to make sure `r` is initialized. */ \
+    secp256k1_ge_set_xy((r), &(pre)[m].x, &(pre)[m].y); \
+    for (m = 1; m < ECMULT_CONST_TABLE_SIZE; m++) { \
+        /* This loop is used to avoid secret data in array indices. See
+         * the comment in ecmult_gen_impl.h for rationale. */ \
+        secp256k1_fe_cmov(&(r)->x, &(pre)[m].x, m == index); \
+        secp256k1_fe_cmov(&(r)->y, &(pre)[m].y, m == index); \
+    } \
+    secp256k1_fe_negate(&neg_y, &(r)->y, 1); \
+    secp256k1_fe_cmov(&(r)->y, &neg_y, negative); \
+} while(0)
 
-static void secp256k1_ecmult_const(secp256k1_gej *r, const secp256k1_ge *a, const secp256k1_scalar *scalar) {
-    secp256k1_ge pre_a[ECMULT_TABLE_SIZE(WINDOW_A)];
-    secp256k1_ge tmpa;
-    secp256k1_fe Z;
-
-    int skew_1;
-    int wnaf_1[1 + WNAF_SIZE(WINDOW_A - 1)];
-#ifdef USE_ENDOMORPHISM
-    secp256k1_ge pre_a_lam[ECMULT_TABLE_SIZE(WINDOW_A)];
-    int wnaf_lam[1 + WNAF_SIZE(WINDOW_A - 1)];
-    int skew_lam;
-    secp256k1_scalar q_1, q_lam;
-#endif
-
-    int i;
-    secp256k1_scalar sc = *scalar;
-
-    /* build wnaf representation for q. */
-#ifdef USE_ENDOMORPHISM
-    /* split q into q_1 and q_lam (where q = q_1 + q_lam*lambda, and q_1 and q_lam are ~128 bit) */
-    secp256k1_scalar_split_lambda(&q_1, &q_lam, &sc);
-    skew_1   = secp256k1_wnaf_const(wnaf_1,   q_1,   WINDOW_A - 1);
-    skew_lam = secp256k1_wnaf_const(wnaf_lam, q_lam, WINDOW_A - 1);
+/* For K as defined in the comment of secp256k1_ecmult_const, we have several precomputed
+ * formulas/constants.
+ * - in exhaustive test mode, we give an explicit expression to compute it at compile time: */
+#ifdef EXHAUSTIVE_TEST_ORDER
+static const secp256k1_scalar secp256k1_ecmult_const_K = ((SECP256K1_SCALAR_CONST(0, 0, 0, (1U << (ECMULT_CONST_BITS - 128)) - 2U, 0, 0, 0, 0) + EXHAUSTIVE_TEST_ORDER - 1U) * (1U + EXHAUSTIVE_TEST_LAMBDA)) % EXHAUSTIVE_TEST_ORDER;
+/* - for the real secp256k1 group we have constants for various ECMULT_CONST_BITS values. */
+#elif ECMULT_CONST_BITS == 129
+/* For GROUP_SIZE = 1,3. */
+static const secp256k1_scalar secp256k1_ecmult_const_K = SECP256K1_SCALAR_CONST(0xac9c52b3ul, 0x3fa3cf1ful, 0x5ad9e3fdul, 0x77ed9ba4ul, 0xa880b9fcul, 0x8ec739c2ul, 0xe0cfc810ul, 0xb51283ceul);
+#elif ECMULT_CONST_BITS == 130
+/* For GROUP_SIZE = 2,5. */
+static const secp256k1_scalar secp256k1_ecmult_const_K = SECP256K1_SCALAR_CONST(0xa4e88a7dul, 0xcb13034eul, 0xc2bdd6bful, 0x7c118d6bul, 0x589ae848ul, 0x26ba29e4ul, 0xb5c2c1dcul, 0xde9798d9ul);
+#elif ECMULT_CONST_BITS == 132
+/* For GROUP_SIZE = 4,6 */
+static const secp256k1_scalar secp256k1_ecmult_const_K = SECP256K1_SCALAR_CONST(0x76b1d93dul, 0x0fae3c6bul, 0x3215874bul, 0x94e93813ul, 0x7937fe0dul, 0xb66bcaaful, 0xb3749ca5ul, 0xd7b6171bul);
 #else
-    skew_1   = secp256k1_wnaf_const(wnaf_1, sc, WINDOW_A - 1);
+#  error "Unknown ECMULT_CONST_BITS"
 #endif
 
-    /* Calculate odd multiples of a.
+static void secp256k1_ecmult_const(secp256k1_gej *r, const secp256k1_ge *a, const secp256k1_scalar *q) {
+    /* The approach below combines the signed-digit logic from Mike Hamburg's
+     * "Fast and compact elliptic-curve cryptography" (https://eprint.iacr.org/2012/309)
+     * Section 3.3, with the GLV endomorphism.
+     *
+     * The idea there is to interpret the bits of a scalar as signs (1 = +, 0 = -), and compute a
+     * point multiplication in that fashion. Let v be an n-bit non-negative integer (0 <= v < 2^n),
+     * and v[i] its i'th bit (so v = sum(v[i] * 2^i, i=0..n-1)). Then define:
+     *
+     *   C_l(v, A) = sum((2*v[i] - 1) * 2^i*A, i=0..l-1)
+     *
+     * Then it holds that C_l(v, A) = sum((2*v[i] - 1) * 2^i*A, i=0..l-1)
+     *                              = (2*sum(v[i] * 2^i, i=0..l-1) + 1 - 2^l) * A
+     *                              = (2*v + 1 - 2^l) * A
+     *
+     * Thus, one can compute q*A as C_256((q + 2^256 - 1) / 2, A). This is the basis for the
+     * paper's signed-digit multi-comb algorithm for multiplication using a precomputed table.
+     *
+     * It is appealing to try to combine this with the GLV optimization: the idea that a scalar
+     * s can be written as s1 + lambda*s2, where lambda is a curve-specific constant such that
+     * lambda*A is easy to compute, and where s1 and s2 are small. In particular we have the
+     * secp256k1_scalar_split_lambda function which performs such a split with the resulting s1
+     * and s2 in range (-2^128, 2^128) mod n. This does work, but is uninteresting:
+     *
+     *   To compute q*A:
+     *   - Let s1, s2 = split_lambda(q)
+     *   - Let R1 = C_256((s1 + 2^256 - 1) / 2, A)
+     *   - Let R2 = C_256((s2 + 2^256 - 1) / 2, lambda*A)
+     *   - Return R1 + R2
+     *
+     * The issue is that while s1 and s2 are small-range numbers, (s1 + 2^256 - 1) / 2 (mod n)
+     * and (s2 + 2^256 - 1) / 2 (mod n) are not, undoing the benefit of the splitting.
+     *
+     * To make it work, we want to modify the input scalar q first, before splitting, and then only
+     * add a 2^128 offset of the split results (so that they end up in the single 129-bit range
+     * [0,2^129]). A slightly smaller offset would work due to the bounds on the split, but we pick
+     * 2^128 for simplicity. Let s be the scalar fed to split_lambda, and f(q) the function to
+     * compute it from q:
+     *
+     *   To compute q*A:
+     *   - Compute s = f(q)
+     *   - Let s1, s2 = split_lambda(s)
+     *   - Let v1 = s1 + 2^128 (mod n)
+     *   - Let v2 = s2 + 2^128 (mod n)
+     *   - Let R1 = C_l(v1, A)
+     *   - Let R2 = C_l(v2, lambda*A)
+     *   - Return R1 + R2
+     *
+     * l will thus need to be at least 129, but we may overshoot by a few bits (see
+     * further), so keep it as a variable.
+     *
+     * To solve for s, we reason:
+     *     q*A  = R1 + R2
+     * <=> q*A  = C_l(s1 + 2^128, A) + C_l(s2 + 2^128, lambda*A)
+     * <=> q*A  = (2*(s1 + 2^128) + 1 - 2^l) * A + (2*(s2 + 2^128) + 1 - 2^l) * lambda*A
+     * <=> q*A  = (2*(s1 + s2*lambda) + (2^129 + 1 - 2^l) * (1 + lambda)) * A
+     * <=> q    = 2*(s1 + s2*lambda) + (2^129 + 1 - 2^l) * (1 + lambda) (mod n)
+     * <=> q    = 2*s + (2^129 + 1 - 2^l) * (1 + lambda) (mod n)
+     * <=> s    = (q + (2^l - 2^129 - 1) * (1 + lambda)) / 2 (mod n)
+     * <=> f(q) = (q + K) / 2 (mod n)
+     *            where K = (2^l - 2^129 - 1)*(1 + lambda) (mod n)
+     *
+     * We will process the computation of C_l(v1, A) and C_l(v2, lambda*A) in groups of
+     * ECMULT_CONST_GROUP_SIZE, so we set l to the smallest multiple of ECMULT_CONST_GROUP_SIZE
+     * that is not less than 129; this equals ECMULT_CONST_BITS.
+     */
+
+    /* The offset to add to s1 and s2 to make them non-negative. Equal to 2^128. */
+    static const secp256k1_scalar S_OFFSET = SECP256K1_SCALAR_CONST(0, 0, 0, 1, 0, 0, 0, 0);
+    secp256k1_scalar s, v1, v2;
+    secp256k1_ge pre_a[ECMULT_CONST_TABLE_SIZE];
+    secp256k1_ge pre_a_lam[ECMULT_CONST_TABLE_SIZE];
+    secp256k1_fe global_z;
+    int group, i;
+
+    /* We're allowed to be non-constant time in the point, and the code below (in particular,
+     * secp256k1_ecmult_const_odd_multiples_table_globalz) cannot deal with infinity in a
+     * constant-time manner anyway. */
+    if (secp256k1_ge_is_infinity(a)) {
+        secp256k1_gej_set_infinity(r);
+        return;
+    }
+
+    /* Compute v1 and v2. */
+    secp256k1_scalar_add(&s, q, &secp256k1_ecmult_const_K);
+    secp256k1_scalar_half(&s, &s);
+    secp256k1_scalar_split_lambda(&v1, &v2, &s);
+    secp256k1_scalar_add(&v1, &v1, &S_OFFSET);
+    secp256k1_scalar_add(&v2, &v2, &S_OFFSET);
+
+#ifdef VERIFY
+    /* Verify that v1 and v2 are in range [0, 2^129-1]. */
+    for (i = 129; i < 256; ++i) {
+        VERIFY_CHECK(secp256k1_scalar_get_bits_limb32(&v1, i, 1) == 0);
+        VERIFY_CHECK(secp256k1_scalar_get_bits_limb32(&v2, i, 1) == 0);
+    }
+#endif
+
+    /* Calculate odd multiples of A and A*lambda.
      * All multiples are brought to the same Z 'denominator', which is stored
-     * in Z. Due to secp256k1' isomorphism we can do all operations pretending
+     * in global_z. Due to secp256k1' isomorphism we can do all operations pretending
      * that the Z coordinate was 1, use affine addition formulae, and correct
      * the Z coordinate of the result once at the end.
      */
     secp256k1_gej_set_ge(r, a);
-    secp256k1_ecmult_odd_multiples_table_globalz_windowa(pre_a, &Z, r);
-    for (i = 0; i < ECMULT_TABLE_SIZE(WINDOW_A); i++) {
-        secp256k1_fe_normalize_weak(&pre_a[i].y);
-    }
-#ifdef USE_ENDOMORPHISM
-    for (i = 0; i < ECMULT_TABLE_SIZE(WINDOW_A); i++) {
+    secp256k1_ecmult_const_odd_multiples_table_globalz(pre_a, &global_z, r);
+    for (i = 0; i < ECMULT_CONST_TABLE_SIZE; i++) {
         secp256k1_ge_mul_lambda(&pre_a_lam[i], &pre_a[i]);
     }
-#endif
 
-    /* first loop iteration (separated out so we can directly set r, rather
-     * than having it start at infinity, get doubled several times, then have
-     * its new value added to it) */
-    i = wnaf_1[WNAF_SIZE(WINDOW_A - 1)];
-    VERIFY_CHECK(i != 0);
-    ECMULT_CONST_TABLE_GET_GE(&tmpa, pre_a, i, WINDOW_A);
-    secp256k1_gej_set_ge(r, &tmpa);
-#ifdef USE_ENDOMORPHISM
-    i = wnaf_lam[WNAF_SIZE(WINDOW_A - 1)];
-    VERIFY_CHECK(i != 0);
-    ECMULT_CONST_TABLE_GET_GE(&tmpa, pre_a_lam, i, WINDOW_A);
-    secp256k1_gej_add_ge(r, r, &tmpa);
-#endif
-    /* remaining loop iterations */
-    for (i = WNAF_SIZE(WINDOW_A - 1) - 1; i >= 0; i--) {
-        int n;
+    /* Next, we compute r = C_l(v1, A) + C_l(v2, lambda*A).
+     *
+     * We proceed in groups of ECMULT_CONST_GROUP_SIZE bits, operating on that many bits
+     * at a time, from high in v1, v2 to low. Call these bits1 (from v1) and bits2 (from v2).
+     *
+     * Now note that ECMULT_CONST_TABLE_GET_GE(&t, pre_a, bits1) loads into t a point equal
+     * to C_{ECMULT_CONST_GROUP_SIZE}(bits1, A), and analogously for pre_lam_a / bits2.
+     * This means that all we need to do is add these looked up values together, multiplied
+     * by 2^(ECMULT_GROUP_SIZE * group).
+     */
+    for (group = ECMULT_CONST_GROUPS - 1; group >= 0; --group) {
+        /* Using the _var get_bits function is ok here, since it's only variable in offset and count, not in the scalar. */
+        unsigned int bits1 = secp256k1_scalar_get_bits_var(&v1, group * ECMULT_CONST_GROUP_SIZE, ECMULT_CONST_GROUP_SIZE);
+        unsigned int bits2 = secp256k1_scalar_get_bits_var(&v2, group * ECMULT_CONST_GROUP_SIZE, ECMULT_CONST_GROUP_SIZE);
+        secp256k1_ge t;
         int j;
-        for (j = 0; j < WINDOW_A - 1; ++j) {
-            secp256k1_gej_double_nonzero(r, r, NULL);
+
+        ECMULT_CONST_TABLE_GET_GE(&t, pre_a, bits1);
+        if (group == ECMULT_CONST_GROUPS - 1) {
+            /* Directly set r in the first iteration. */
+            secp256k1_gej_set_ge(r, &t);
+        } else {
+            /* Shift the result so far up. */
+            for (j = 0; j < ECMULT_CONST_GROUP_SIZE; ++j) {
+                secp256k1_gej_double(r, r);
+            }
+            secp256k1_gej_add_ge(r, r, &t);
         }
-
-        n = wnaf_1[i];
-        ECMULT_CONST_TABLE_GET_GE(&tmpa, pre_a, n, WINDOW_A);
-        VERIFY_CHECK(n != 0);
-        secp256k1_gej_add_ge(r, r, &tmpa);
-#ifdef USE_ENDOMORPHISM
-        n = wnaf_lam[i];
-        ECMULT_CONST_TABLE_GET_GE(&tmpa, pre_a_lam, n, WINDOW_A);
-        VERIFY_CHECK(n != 0);
-        secp256k1_gej_add_ge(r, r, &tmpa);
-#endif
+        ECMULT_CONST_TABLE_GET_GE(&t, pre_a_lam, bits2);
+        secp256k1_gej_add_ge(r, r, &t);
     }
 
-    secp256k1_fe_mul(&r->z, &r->z, &Z);
-
-    {
-        /* Correct for wNAF skew */
-        secp256k1_ge correction = *a;
-        secp256k1_ge_storage correction_1_stor;
-#ifdef USE_ENDOMORPHISM
-        secp256k1_ge_storage correction_lam_stor;
-#endif
-        secp256k1_ge_storage a2_stor;
-        secp256k1_gej tmpj;
-        secp256k1_gej_set_ge(&tmpj, &correction);
-        secp256k1_gej_double_var(&tmpj, &tmpj, NULL);
-        secp256k1_ge_set_gej(&correction, &tmpj);
-        secp256k1_ge_to_storage(&correction_1_stor, a);
-#ifdef USE_ENDOMORPHISM
-        secp256k1_ge_to_storage(&correction_lam_stor, a);
-#endif
-        secp256k1_ge_to_storage(&a2_stor, &correction);
-
-        /* For odd numbers this is 2a (so replace it), for even ones a (so no-op) */
-        secp256k1_ge_storage_cmov(&correction_1_stor, &a2_stor, skew_1 == 2);
-#ifdef USE_ENDOMORPHISM
-        secp256k1_ge_storage_cmov(&correction_lam_stor, &a2_stor, skew_lam == 2);
-#endif
-
-        /* Apply the correction */
-        secp256k1_ge_from_storage(&correction, &correction_1_stor);
-        secp256k1_ge_neg(&correction, &correction);
-        secp256k1_gej_add_ge(r, r, &correction);
-
-#ifdef USE_ENDOMORPHISM
-        secp256k1_ge_from_storage(&correction, &correction_lam_stor);
-        secp256k1_ge_neg(&correction, &correction);
-        secp256k1_ge_mul_lambda(&correction, &correction);
-        secp256k1_gej_add_ge(r, r, &correction);
-#endif
-    }
+    /* Map the result back to the secp256k1 curve from the isomorphic curve. */
+    secp256k1_fe_mul(&r->z, &r->z, &global_z);
 }
 
 static int secp256k1_ecmult_const_xonly(secp256k1_fe* r, const secp256k1_fe *n, const secp256k1_fe *d, const secp256k1_scalar *q, int known_on_curve) {
@@ -319,8 +347,8 @@ static int secp256k1_ecmult_const_xonly(secp256k1_fe* r, const secp256k1_fe *n, 
         secp256k1_fe b;
         VERIFY_CHECK(!secp256k1_fe_normalizes_to_zero(d));
         secp256k1_fe_sqr(&b, d);
-        VERIFY_CHECK(CURVE_B <= 8); /* magnitude of b will be <= 8 after the next call */
-        secp256k1_fe_mul_int(&b, CURVE_B);
+        VERIFY_CHECK(SECP256K1_B <= 8); /* magnitude of b will be <= 8 after the next call */
+        secp256k1_fe_mul_int(&b, SECP256K1_B);
         secp256k1_fe_mul(&b, &b, d);
         secp256k1_fe_add(&g, &b);
         if (!known_on_curve) {
@@ -336,18 +364,23 @@ static int secp256k1_ecmult_const_xonly(secp256k1_fe* r, const secp256k1_fe *n, 
             if (!secp256k1_fe_is_square_var(&c)) return 0;
         }
     } else {
-        secp256k1_fe_add_int(&g, CURVE_B);
+        secp256k1_fe_add_int(&g, SECP256K1_B);
         if (!known_on_curve) {
             /* g at this point equals x^3 + 7. Test if it is square. */
             if (!secp256k1_fe_is_square_var(&g)) return 0;
         }
     }
 
-    /* Compute base point P = (n*g, g^2), the effective affine version of (n*g, g^2, v), which has
-     * corresponding affine X coordinate n/d. */
-    secp256k1_fe_mul(&p.x, &g, n);
-    secp256k1_fe_sqr(&p.y, &g);
-    p.infinity = 0;
+    SECP256K1_FE_VERIFY_MAGNITUDE(&g, 2);
+
+    /* Compute base point P = (n*g, g^2), the effective affine version of
+     * (n*g, g^2, v), which has corresponding affine X coordinate n/d. */
+    {
+        secp256k1_fe x, y;
+        secp256k1_fe_mul(&x, &g, n);
+        secp256k1_fe_sqr(&y, &g);
+        secp256k1_ge_set_xy(&p, &x, &y);
+    }
 
     /* Perform x-only EC multiplication of P with q. */
     VERIFY_CHECK(!secp256k1_scalar_is_zero(q));

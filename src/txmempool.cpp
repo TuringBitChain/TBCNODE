@@ -17,11 +17,15 @@
 #include "utilmoneystr.h"
 #include "utiltime.h"
 #include "validation.h"
+#include "validationinterface.h"
 #include "version.h"
 #include <boost/range/adaptor/reversed.hpp>
 #include <config.h>
 
 using namespace mining;
+
+// Debug flag for mempool tree visualization - set to true to enable detailed logging
+bool CTxMemPool::gDebugMempoolTree = false;
 
 /**
  * class CTxPrioritizer
@@ -61,7 +65,8 @@ CTxMemPoolEntry::CTxMemPoolEntry(const CTransactionRef& _tx,
                                  LockPoints lp)
     : tx(_tx), nFee(_nFee), nTime(_nTime), entryPriority(_entryPriority),
       inChainInputValue(_inChainInputValue), sigOpCount(_sigOpsCount),
-      lockPoints(lp), entryHeight(_entryHeight), spendsCoinbase(_spendsCoinbase)
+      lockPoints(lp), entryHeight(_entryHeight), spendsCoinbase(_spendsCoinbase),
+      insertionIndex(0), ancestorsHeight(0)
 {
     nTxSize = tx->GetTotalSize();
     nModSize = tx->CalculateModifiedSize(GetTxSize());
@@ -270,13 +275,15 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
         // Get parents of this transaction that are in the mempool
         // GetMemPoolParentsNL() is only valid for entries in the mempool, so we
         // iterate mapTx to find parents.
+        size_t ancestorsHeight = 0;
         for (const CTxIn &in : tx.vin) {
             txiter piter = mapTx.find(in.prevout.GetTxId());
             if (piter == mapTx.end()) {
                 continue;
             }
             parentHashes.insert(piter);
-            if (parentHashes.size() + 1 > limitAncestorCount) {
+            ancestorsHeight = std::max(ancestorsHeight, piter->GetAncestorsHeight() + 1);
+            if (ancestorsHeight >= limitAncestorCount) {
                 errString =
                     strprintf("too many unconfirmed parents [limit: %u]",
                               limitAncestorCount);
@@ -299,34 +306,15 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
         parentHashes.erase(stageit);
         totalSizeWithAncestors += stageit->GetTxSize();
 
-        if (stageit->GetSizeWithDescendants() + entry.GetTxSize() >
-            limitDescendantSize) {
-            errString = strprintf(
-                "exceeds descendant size limit for tx %s [limit: %u]",
-                stageit->GetTx().GetId().ToString(), limitDescendantSize);
-            return false;
-        }
-
-        if (stageit->GetCountWithDescendants() + 1 > limitDescendantCount) {
-            errString = strprintf("too many descendants for tx %s [limit: %u]",
-                                  stageit->GetTx().GetId().ToString(),
-                                  limitDescendantCount);
-            return false;
-        }
-
-        if (totalSizeWithAncestors > limitAncestorSize) {
-            errString = strprintf("exceeds ancestor size limit [limit: %u]",
-                                  limitAncestorSize);
-            return false;
-        }
-
         const setEntries &setMemPoolParents = GetMemPoolParentsNL(stageit);
+        size_t ancestorsHeight = 0;
         for (const txiter &phash : setMemPoolParents) {
             // If this is a new ancestor, add it.
             if (setAncestors.count(phash) == 0) {
                 parentHashes.insert(phash);
             }
-            if (parentHashes.size() + setAncestors.size() + 1 >
+            ancestorsHeight = std::max(ancestorsHeight, phash->GetAncestorsHeight() + 1);
+            if (ancestorsHeight >=
                 limitAncestorCount) {
                 errString =
                     strprintf("too many unconfirmed ancestors [limit: %u]",
@@ -379,7 +367,10 @@ void CTxMemPool::updateChildrenForRemovalNL(txiter it) {
 }
 
 void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
-                                            bool updateDescendants) {
+                                            bool updateDescendants,
+                                            bool isBlockRemove) {
+    // Timing stats for block removal (Async RemoveForBlock thread)
+    int64_t nStartTime = isBlockRemove ? GetTimeMicros() : 0;
     // For each entry, walk back all ancestors and decrement size associated
     // with this transaction.
     const uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
@@ -443,6 +434,16 @@ void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
     // setMemPoolParents for each direct child of a transaction being removed).
     for (txiter removeIt : entriesToRemove) {
         updateChildrenForRemovalNL(removeIt);
+    }
+
+    // Log timing stats for block removal
+    if (isBlockRemove) {
+        int64_t nDuration = GetTimeMicros() - nStartTime;
+        LogPrint(BCLog::MEMPOOL, "MempoolUpdateForRemove-Block: entries=%zu, "
+                "updateDescendants=%s, time=%.3fms\n",
+                entriesToRemove.size(),
+                updateDescendants ? "true" : "false",
+                nDuration * 0.001);
     }
 }
 
@@ -532,6 +533,11 @@ void CTxMemPool::AddUncheckedNL(
     indexed_transaction_set::iterator newit = mapTx.insert(entry).first;
     mapLinks.insert(make_pair(newit, TxLinks()));
 
+    // Update the insertion order index for this entry (modify the copy in mapTx).
+    mapTx.modify(newit, [this](CTxMemPoolEntry &e) {
+        e.SetInsertionIndex(insertionIndex.GetNext());
+    });
+
     // Update transaction for any feeDelta created by PrioritiseTransaction
     // TODO: refactor so that the fee delta is calculated before inserting into
     // mapTx.
@@ -563,12 +569,19 @@ void CTxMemPool::AddUncheckedNL(
     // the mess we're leaving here.
 
     // Update ancestors with information about this tx
+    // and collect information about parent's ancestors count
+    size_t ancestorsHeight = 0;
     for (const uint256 &phash : setParentTransactions) {
         txiter pit = mapTx.find(phash);
         if (pit != mapTx.end()) {
+            ancestorsHeight = std::max(ancestorsHeight, pit->GetAncestorsHeight() + 1);
             updateParentNL(newit, pit, true);
         }
     }
+    mapTx.modify(newit, [ancestorsHeight](CTxMemPoolEntry& entry) {
+        entry.SetAncestorsHeight(ancestorsHeight);
+    });
+
     updateAncestorsOfNL(true, newit, setAncestors);
     updateEntryForAncestorsNL(newit, setAncestors);
 
@@ -624,7 +637,8 @@ void CTxMemPool::AddUncheckedNL(
 void CTxMemPool::removeUncheckedNL(
     txiter it,
     const CJournalChangeSetPtr& changeSet,
-    MemPoolRemovalReason reason) {
+    MemPoolRemovalReason reason,
+    const CTransaction* conflictedWith) {
 
     CTransactionRef txn { it->GetSharedTx() };
     NotifyEntryRemoved(txn, reason);
@@ -653,6 +667,16 @@ void CTxMemPool::removeUncheckedNL(
                         memusage::DynamicUsage(mapLinks[it].children);
     mapLinks.erase(it);
     mapTx.erase(it);
+
+    if (reason == MemPoolRemovalReason::BLOCK || reason == MemPoolRemovalReason::REORG)
+    {
+        GetMainSignals().TransactionRemovedFromMempoolBlock(txn->GetId(), reason);
+    }
+    else
+    {   
+        GetMainSignals().TransactionDiscardedFromMempool(txn->GetId(), reason, conflictedWith);
+    }
+
     nTransactionsUpdated++;
 }
 
@@ -709,7 +733,8 @@ void CTxMemPool::RemoveRecursive(
 void CTxMemPool::removeRecursiveNL(
     const CTransaction &origTx,
     const CJournalChangeSetPtr& changeSet,
-    MemPoolRemovalReason reason) {
+    MemPoolRemovalReason reason,
+    const CTransaction* conflictedWith) {
 
     setEntries txToRemove;
     txiter origit = mapTx.find(origTx.GetId());
@@ -737,7 +762,7 @@ void CTxMemPool::removeRecursiveNL(
         CalculateDescendantsNL(it, setAllRemoves);
     }
 
-    removeStagedNL(setAllRemoves, false, changeSet, reason);
+    removeStagedNL(setAllRemoves, false, changeSet, reason, true, conflictedWith);
 }
 
 void CTxMemPool::RemoveForReorg(
@@ -813,7 +838,8 @@ void CTxMemPool::RemoveForReorg(
 
 void CTxMemPool::removeConflictsNL(
     const CTransaction &tx,
-    const CJournalChangeSetPtr& changeSet) {
+    const CJournalChangeSetPtr& changeSet,
+    setEntriesTopoSorted& childrenOfToRemove) {
 
     // Remove transactions which depend on inputs of tx, recursively
     for (const CTxIn &txin : tx.vin) {
@@ -821,8 +847,18 @@ void CTxMemPool::removeConflictsNL(
         if (it != mapNextTx.end()) {
             const CTransaction &txConflict = *it->second;
             if (txConflict != tx) {
+                txiter conflictIt = mapTx.find(txConflict.GetId());
+                if (conflictIt != mapTx.end()) {
+                    // Remove conflict tx and all its descendants from childrenOfToRemove
+                    // because removeRecursiveNL will delete them entirely
+                    setEntries setDescendants;
+                    CalculateDescendantsNL(conflictIt, setDescendants);
+                    for (txiter descendantIt : setDescendants) {
+                        childrenOfToRemove.erase(descendantIt);
+                    }
+                }
                 clearPrioritisationNL(txConflict.GetId());
-                removeRecursiveNL(txConflict, changeSet, MemPoolRemovalReason::CONFLICT);
+                removeRecursiveNL(txConflict, changeSet, MemPoolRemovalReason::CONFLICT, &tx);
             }
         }
     }
@@ -833,22 +869,118 @@ void CTxMemPool::removeConflictsNL(
  */
 void CTxMemPool::RemoveForBlock(
     const std::vector<CTransactionRef> &vtx,
-    unsigned int nBlockHeight,
-    const CJournalChangeSetPtr& changeSet) {
+    const CJournalChangeSetPtr& changeSet,
+    std::vector<CTransactionRef>& txNew){
 
     std::unique_lock lock(smtx);
-    std::vector<const CTxMemPoolEntry *> entries;
+    int64_t nStartTime = GetTimeMicros();
+    size_t nTxCount = vtx.size();
     setEntries toBeRemoved;
-    for (const auto &tx : vtx) {
+    setEntriesTopoSorted childrenOfToRemove; // we must collect all transaction which parents we have removed to update its ancestorCount
+
+    // Debug: Print mempool tree before removal with markers for block transactions
+    if (gDebugMempoolTree) {
+        // Build set of block transactions for marking
+        setEntries blockTxs;
+        for (const auto& tx : vtx) {
+            auto it = mapTx.find(tx->GetId());
+            if (it != mapTx.end()) {
+                blockTxs.insert(it);
+            }
+        }
+        DebugPrintMempoolTreeNL("Mempool Tree BEFORE RemoveForBlock (marked with ^ will be removed)", &blockTxs);
+
+        // Print block transaction list
+        std::string blockList;
+        blockList += "\n--- Block Transactions List ---\n";
+        for (const auto& tx : vtx) {
+            auto it = mapTx.find(tx->GetId());
+            if (it != mapTx.end()) {
+                blockList += "  " + tx->GetId().ToString().substr(0, 16) + "... (in mempool, ancestorsHeight=" + std::to_string(it->GetAncestorsHeight()) + ")\n";
+            } else {
+                blockList += "  " + tx->GetId().ToString().substr(0, 16) + "... (NOT in mempool)\n";
+            }
+        }
+        blockList += "------------------------------\n\n";
+        LogPrintf("%s", blockList.c_str());
+    }
+
+    // Iterate block transactions in reverse order (child before parent)
+    // This ensures we handle children first when processing conflicts
+    size_t depth = 0;
+    for (auto vtxIter = vtx.rbegin(); vtxIter != vtx.rend(); ++vtxIter)
+    {
+        const auto& tx = *vtxIter;
         uint256 txid = tx->GetId();
 
         indexed_transaction_set::iterator i = mapTx.find(txid);
         if (i != mapTx.end()) {
-            entries.push_back(&*i);
+            depth = std::max(depth, i->GetAncestorsHeight());
             toBeRemoved.insert(i);
+            for (auto child : GetMemPoolChildrenNL(i))
+            {
+                // Only add children that are not also being removed
+                if (toBeRemoved.find(child) == toBeRemoved.end())
+                {
+                    childrenOfToRemove.insert(child);
+                }
+            }
+        }
+        else {
+            // Transaction not in mempool - check for conflicts (double-spends)
+            bool isConflict = false;
+            for (const CTxIn &txin : tx->vin)
+            {
+                auto it = mapNextTx.find(txin.prevout);
+                if (it != mapNextTx.end())
+                {
+                    // Found a conflict - a tx in mempool spending same input
+                    isConflict = true;
+                    const CTransaction &txConflict = *it->second;
+                    txiter conflictIt = mapTx.find(txConflict.GetId());
+                    if (conflictIt != mapTx.end()) {
+                        // Collect all descendants of the conflicting tx
+                        setEntries setDescendants;
+                        CalculateDescendantsNL(conflictIt, setDescendants);
+
+                        // Remove descendants from childrenOfToRemove since they will be removed
+                        for (txiter descendantIt : setDescendants)
+                        {
+                            childrenOfToRemove.erase(descendantIt);
+                        }
+
+                        // Remove the conflict and all its descendants
+                        removeStagedNL(setDescendants, false, changeSet, MemPoolRemovalReason::CONFLICT, true, tx.get());
+                    }
+                }
+            }
+            // Add tx to txNew only if it wasn't in mempool (regardless of conflict status)
+            txNew.push_back(tx);
         }
     }
-    
+
+    // Disconnect children from soon-to-be-removed parents before removal
+    // This ensures mapLinks stays consistent during removal
+    std::vector<txiter> tempEntries;
+    for (txiter child : childrenOfToRemove)
+    {
+        // Find parents that are being removed
+        for (txiter parent : GetMemPoolParentsNL(child))
+        {
+            if (toBeRemoved.find(parent) != toBeRemoved.end())
+            {
+                tempEntries.push_back(parent);
+            }
+        }
+
+        // Disconnect all parents that we found
+        for (txiter parentToRemove : tempEntries)
+        {
+            updateParentNL(child, parentToRemove, false);
+        }
+        tempEntries.clear();
+    }
+
     // returns true if tx is not in the journal nor it is added to changeset
     auto isTxOutsideJournal = [this, &changeSet](txiter entry)
     {
@@ -857,7 +989,7 @@ void CTxMemPool::RemoveForBlock(
         {
             return false;
         }
-                
+
         if (changeSet && changeSet->checkTxnAdded(txid))
         {
             return false;
@@ -867,26 +999,35 @@ void CTxMemPool::RemoveForBlock(
 
     setEntries affectedStillInMempool = getConnectedNL(toBeRemoved, isTxOutsideJournal);
 
-    // Before the txs in the new block have been removed from the mempool,
-    for (const auto &tx : vtx) {
-        txiter it = mapTx.find(tx->GetId());
-        if (it != mapTx.end()) {
-            setEntries stage;
-            stage.insert(it);
-            removeStagedNL(stage, true, changeSet, MemPoolRemovalReason::BLOCK, false);
-        }
+    // Remove block transactions from mempool
+    for (txiter entry : toBeRemoved)                                                                                     
+    {                                                                                                                    
+        removeUncheckedNL(entry, changeSet, MemPoolRemovalReason::BLOCK, nullptr);                                       
     }
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
 
+    // Clear prioritisation for all block transactions
     for (const auto &tx : vtx) {
-        removeConflictsNL(*tx, changeSet);
         clearPrioritisationNL(tx->GetId());
+    }
+
+    UpdateAncestorsHeightNL(childrenOfToRemove);
+
+    // Debug: Print mempool tree after removal
+    if (gDebugMempoolTree) {
+        DebugPrintMempoolTreeNL("Mempool Tree AFTER RemoveForBlock", nullptr);
     }
 
     lastRollingFeeUpdate = GetTime();
     blockSinceLastRollingFeeBump = true;
+
+    int64_t nDuration = GetTimeMicros() - nStartTime;
+    LogPrint(BCLog::MEMPOOL, "MempoolRemove-Block: txs_removed=%zu, max depth=%zu, "
+            "time=%.3fms, mempool_size_after=%zu\n",
+            nTxCount,depth,
+            nDuration * 0.001, mapTx.size());
 }
 
 void CTxMemPool::clearNL() {
@@ -957,6 +1098,7 @@ void CTxMemPool::CheckMempool(
         setEntries setParentCheck;
         int64_t parentSizes = 0;
         int64_t parentSigOpCount = 0;
+        size_t ancestorsHeight = 0;
         for (const CTxIn &txin : tx.vin) {
             // Check that every mempool transaction's inputs refer to available
             // coins, or other mempool tx's.
@@ -968,6 +1110,7 @@ void CTxMemPool::CheckMempool(
                        !tx2.vout[txin.prevout.GetN()].IsNull());
                 fDependsWait = true;
                 if (setParentCheck.insert(it2).second) {
+                    ancestorsHeight = std::max(ancestorsHeight, it2->GetAncestorsHeight() + 1);
                     parentSizes += it2->GetTxSize();
                     parentSigOpCount += it2->GetSigOpCount();
                 }
@@ -982,6 +1125,7 @@ void CTxMemPool::CheckMempool(
             i++;
         }
         assert(setParentCheck == GetMemPoolParentsNL(it));
+        assert(ancestorsHeight == it->GetAncestorsHeight());
         // Verify ancestor state is correct.
         setEntries setAncestors;
         uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
@@ -1004,7 +1148,6 @@ void CTxMemPool::CheckMempool(
             nSigOpCheck += ancestorIt->GetSigOpCount();
         }
 
-        assert(it->GetCountWithAncestors() == nCountCheck);
         assert(it->GetSizeWithAncestors() == nSizeCheck);
         assert(it->GetSigOpCountWithAncestors() == nSigOpCheck);
         assert(it->GetModFeesWithAncestors() == nFeesCheck);
@@ -1749,14 +1892,57 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
     }
 }
 
+void CTxMemPool::UpdateAncestorsHeightNL(CTxMemPool::setEntriesTopoSorted entries)
+{
+    while(!entries.empty())
+    {
+        txiter entry = *entries.begin();
+        entries.erase(entries.begin());
+
+        // Collect children before checking - they may still need updating even if parent is gone
+        setEntries childrenToProcess;
+        if(mapLinks.find(entry) != mapLinks.end())
+        {
+            childrenToProcess = GetMemPoolChildrenNL(entry);
+        }
+
+        // Skip further processing if entry has been removed from mempool
+        if(mapLinks.find(entry) == mapLinks.end())
+        {
+            // Still need to process children whose parent was removed
+            for(auto child: childrenToProcess)
+            {
+                entries.insert(child);
+            }
+            continue;
+        }
+
+        for(auto child: childrenToProcess)
+        {
+            entries.insert(child);
+        }
+        
+        size_t ancestorsHeight = 0;
+        for(auto parent: GetMemPoolParentsNL(entry))
+        {
+            ancestorsHeight = std::max(ancestorsHeight, parent->GetAncestorsHeight() + 1);
+        }
+        mapTx.modify(entry, [ancestorsHeight](CTxMemPoolEntry& entry) {
+                                entry.SetAncestorsHeight(ancestorsHeight);
+                             });
+    }
+}
+
 void CTxMemPool::removeStagedNL(
     setEntries &stage,
     bool updateDescendants,
     const CJournalChangeSetPtr& changeSet,
     MemPoolRemovalReason reason,
-    bool updateJournal) {
+    bool updateJournal,
+    const CTransaction* conflictedWith,
+    bool isBlockRemove) {
 
-    updateForRemoveFromMempoolNL(stage, updateDescendants);
+    updateForRemoveFromMempoolNL(stage, updateDescendants, isBlockRemove);
 
     if(updateJournal)
     {
@@ -1764,7 +1950,7 @@ void CTxMemPool::removeStagedNL(
         setEntries affectedStillInMempool = getConnectedNL(stage);
 
         for (const txiter &it : stage) {
-            removeUncheckedNL(it, changeSet, reason);
+            removeUncheckedNL(it, changeSet, reason, conflictedWith);
         }
     
         CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
@@ -1773,7 +1959,7 @@ void CTxMemPool::removeStagedNL(
     else
     {
         for (const txiter &it : stage) {
-            removeUncheckedNL(it, changeSet, reason);
+            removeUncheckedNL(it, changeSet, reason, conflictedWith);
         }
     }
 }
@@ -1974,8 +2160,11 @@ bool CTxMemPool::TransactionWithinChainLimit(const uint256 &txid,
                                              size_t chainLimit) const {
     std::shared_lock lock(smtx);
     auto it = mapTx.find(txid);
-    return it == mapTx.end() || (it->GetCountWithAncestors() < chainLimit &&
-                                 it->GetCountWithDescendants() < chainLimit);
+    if(it == mapTx.end())
+    {
+        return true;
+    }
+    return static_cast<int64_t>(it->GetAncestorsHeight()) < chainLimit;
 }
 
 unsigned long CTxMemPool::Size() {
@@ -2010,3 +2199,105 @@ bool CTxMemPool::ExistsNL(const COutPoint &outpoint) const {
 SaltedTxidHasher::SaltedTxidHasher()
     : k0(GetRand(std::numeric_limits<uint64_t>::max())),
       k1(GetRand(std::numeric_limits<uint64_t>::max())) {}
+
+// Helper to get transaction label with ancestors height and removal marker
+std::string CTxMemPool::GetTxLabelNL(txiter entry, const setEntries* txsToRemove) const {
+    std::string label = entry->GetTx().GetId().ToString().substr(0, 8);
+    label += " " + std::to_string(entry->GetAncestorsHeight());
+    if (txsToRemove && txsToRemove->count(entry)) {
+        label += "^";  // Mark as to be removed
+    }
+    return label;
+}
+
+// Recursive helper to print tree structure - builds string for LogPrintf
+void CTxMemPool::DebugPrintTxTreeRecursiveNL(txiter entry, std::set<txiter, CompareIteratorByHash>& visited,
+                                              int depth, const setEntries* txsToRemove,
+                                              std::string& output) const {
+    if (visited.count(entry)) {
+        return;
+    }
+    visited.insert(entry);
+
+    // Print indentation with tree branches
+    for (int i = 0; i < depth; i++) {
+        output += "    ";
+    }
+
+    // Add current node
+    output += GetTxLabelNL(entry, txsToRemove);
+    output += "\n";
+
+    // Get children and process them
+    auto it = mapLinks.find(entry);
+    if (it != mapLinks.end()) {
+        const auto& children = it->second.children;
+        size_t childIdx = 0;
+        for (txiter child : children) {
+            DebugPrintTxTreeRecursiveNL(child, visited, depth + 1, txsToRemove, output);
+        }
+    }
+}
+
+// Main debug print function for mempool tree visualization
+void CTxMemPool::DebugPrintMempoolTreeNL(const std::string& label, const setEntries* txsToRemove) const {
+    if (!gDebugMempoolTree) {
+        return;
+    }
+
+    std::string output;
+    output += "\n" + std::string(60, '=') + "\n";
+    output += label + "\n";
+    output += std::string(60, '=') + "\n";
+
+    if (mapTx.empty()) {
+        output += "[Empty mempool]\n";
+        LogPrintf("%s", output.c_str());
+        return;
+    }
+
+    // Find root transactions (those with no parents in mempool)
+    setEntries roots;
+    for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+        txiter entry = mapTx.project<0>(it);
+        auto linksIt = mapLinks.find(entry);
+        if (linksIt == mapLinks.end() || linksIt->second.parents.empty()) {
+            roots.insert(entry);
+        }
+    }
+
+    if (roots.empty()) {
+        // No clear roots, just print all transactions
+        output += "[No root transactions found - printing all]:\n";
+        for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+            txiter entry = mapTx.project<0>(it);
+            output += "  " + GetTxLabelNL(entry, txsToRemove) + "\n";
+        }
+        LogPrintf("%s", output.c_str());
+        return;
+    }
+
+    // Print tree starting from roots
+    std::set<txiter, CompareIteratorByHash> visited;
+    for (txiter root : roots) {
+        DebugPrintTxTreeRecursiveNL(root, visited, 0, txsToRemove, output);
+    }
+
+    // Print any unvisited transactions (orphaned subtrees)
+    bool hasUnvisited = false;
+    std::string unvisitedStr;
+    for (auto it = mapTx.begin(); it != mapTx.end(); ++it) {
+        txiter entry = mapTx.project<0>(it);
+        if (!visited.count(entry)) {
+            if (!hasUnvisited) {
+                unvisitedStr += "\n[Additional transactions not in main trees]:\n";
+                hasUnvisited = true;
+            }
+            unvisitedStr += "  " + GetTxLabelNL(entry, txsToRemove) + "\n";
+        }
+    }
+    output += unvisitedStr;
+
+    output += std::string(60, '=') + "\n\n";
+    LogPrintf("%s", output.c_str());
+}

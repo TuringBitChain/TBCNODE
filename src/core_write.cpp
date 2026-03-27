@@ -134,7 +134,7 @@ void ScriptToAsmStr(const CScript& script,
                     // won't decode correctly formatted public keys in Pubkey or
                     // Multisig scripts due to the restrictions on the pubkey
                     // formats (see IsCompressedOrUncompressedPubKey) being
-                    // incongruous with the checks in CheckSignatureEncoding.
+                    // incongruous with the checks in CheckTransactionSignatureEncoding.
                     uint32_t flags = SCRIPT_VERIFY_STRICTENC;
                     if (vch.back() & SIGHASH_FORKID)
                     {
@@ -143,7 +143,7 @@ void ScriptToAsmStr(const CScript& script,
                         // TODO: Remove after the Hard Fork.
                         flags |= SCRIPT_ENABLE_SIGHASH_FORKID;
                     }
-                    if (CheckSignatureEncoding(vch, flags, nullptr))
+                    if (CheckTransactionSignatureEncoding(vch, flags, nullptr))
                     {
                         const uint8_t chSigHashType = vch.back();
                         if (mapSigHashTypes.count(chSigHashType))

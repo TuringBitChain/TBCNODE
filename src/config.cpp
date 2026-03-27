@@ -65,6 +65,8 @@ void GlobalConfig::Reset()
     maxScriptNumLengthPolicy = DEFAULT_SCRIPT_NUM_LENGTH_POLICY_AFTER_GENESIS;
     genesisGracefulPeriod = DEFAULT_GENESIS_GRACEFULL_ACTIVATION_PERIOD;
 
+    mPTVTaskScheduleStrategy = DEFAULT_PTV_TASK_SCHEDULE_STRATEGY;
+
     mAcceptNonStandardOutput = true;
 
     mMaxCoinsViewCacheSize = 0;
@@ -677,6 +679,29 @@ bool GlobalConfig::SetMaxNonStdTxnValidationDuration(int ms, std::string* err)
 std::chrono::milliseconds GlobalConfig::GetMaxNonStdTxnValidationDuration() const
 {
     return mMaxNonStdTxnValidationDuration;
+}
+
+bool GlobalConfig::SetPTVTaskScheduleStrategy(PTVTaskScheduleStrategy strategy, std::string *err)
+{
+    if(strategy != PTVTaskScheduleStrategy::UNKNOWN)
+    {
+        mPTVTaskScheduleStrategy = strategy;
+    }
+    else
+    {
+        if (err)
+        {
+            *err = "Invalid value for PTV task scheduling strategy";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+PTVTaskScheduleStrategy GlobalConfig::GetPTVTaskScheduleStrategy() const
+{
+    return mPTVTaskScheduleStrategy;
 }
 
 /**

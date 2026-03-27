@@ -139,6 +139,8 @@ public:
         consensus.TBCFirstBlockHeight = 824190;
         consensus.TBCFirstBlockHash = uint256S(
             "0000000058968601042df9b0d57e41b092c76d6f91f333dc231cdd4cc4fd861d");
+        // Schnorr activation height is not yet determined
+        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -299,6 +301,9 @@ public:
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_STN;
 
+        // Schnorr activation height is not yet determined
+        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+
         /**
          * The message start string is designed to be unlikely to occur in
          * normal data. The characters are rarely used upper ASCII, not valid as
@@ -403,6 +408,8 @@ public:
         consensus.TBCFirstBlockHeight = 3000;
         consensus.TBCFirstBlockHash = uint256S(
             "00000000009847bd101ba647ad137f9246629ffc16b68d79bff87c68d282c77e");
+        // Schnorr activation height is not yet determined
+        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
 
         diskMagic[0] = 0x0c;
         diskMagic[1] = 0x12;
@@ -514,6 +521,9 @@ public:
 
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_REGTEST;
+
+        // Schnorr is always enabled on regtest.
+        consensus.schnorrMultisigHeight = 0;
 
         diskMagic[0] = 0xfa;
         diskMagic[1] = 0xbf;

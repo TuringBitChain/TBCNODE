@@ -83,7 +83,7 @@ static ScriptErrorDesc script_errors[] = {
     {SCRIPT_ERR_SIG_PUSHONLY, "SIG_PUSHONLY"},
     {SCRIPT_ERR_SIG_HIGH_S, "SIG_HIGH_S"},
     {SCRIPT_ERR_SIG_NULLDUMMY, "SIG_NULLDUMMY"},
-    {SCRIPT_ERR_PUBKEYTYPE, "PUBKEYTYPE"},
+    {SCRIPT_ERR_LEGACY_PUBKEY, "LEGACY_PUBKEY"},
     {SCRIPT_ERR_CLEANSTACK, "CLEANSTACK"},
     {SCRIPT_ERR_MINIMALIF, "MINIMALIF"},
     {SCRIPT_ERR_SIG_NULLFAIL, "NULLFAIL"},
@@ -899,7 +899,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
         TestBuilder(CScript() << ToByteVector(keys.pubkey0H) << OP_CHECKSIG,
                     "P2PK with hybrid pubkey", SCRIPT_VERIFY_STRICTENC)
             .PushSig(keys.key0, SigHashType())
-            .ScriptError(SCRIPT_ERR_PUBKEYTYPE));
+            .ScriptError(SCRIPT_ERR_LEGACY_PUBKEY));
     tests.push_back(TestBuilder(CScript() << ToByteVector(keys.pubkey0H)
                                           << OP_CHECKSIG << OP_NOT,
                                 "P2PK NOT with hybrid pubkey but no STRICTENC",
@@ -911,7 +911,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
                                 "P2PK NOT with hybrid pubkey",
                                 SCRIPT_VERIFY_STRICTENC)
                         .PushSig(keys.key0)
-                        .ScriptError(SCRIPT_ERR_PUBKEYTYPE));
+                        .ScriptError(SCRIPT_ERR_LEGACY_PUBKEY));
     tests.push_back(
         TestBuilder(CScript()
                         << ToByteVector(keys.pubkey0H) << OP_CHECKSIG << OP_NOT,
@@ -924,7 +924,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
                                 SCRIPT_VERIFY_STRICTENC)
                         .PushSig(keys.key0)
                         .DamagePush(10)
-                        .ScriptError(SCRIPT_ERR_PUBKEYTYPE));
+                        .ScriptError(SCRIPT_ERR_LEGACY_PUBKEY));
     tests.push_back(
         TestBuilder(CScript() << OP_1 << ToByteVector(keys.pubkey0H)
                               << ToByteVector(keys.pubkey1C) << OP_2
@@ -947,7 +947,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
                                 SCRIPT_VERIFY_STRICTENC)
                         .Num(0)
                         .PushSig(keys.key1)
-                        .ScriptError(SCRIPT_ERR_PUBKEYTYPE));
+                        .ScriptError(SCRIPT_ERR_LEGACY_PUBKEY));
 
     tests.push_back(
         TestBuilder(CScript() << ToByteVector(keys.pubkey1) << OP_CHECKSIG,

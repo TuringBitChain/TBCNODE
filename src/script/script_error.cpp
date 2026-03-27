@@ -21,6 +21,8 @@ const char *ScriptErrorString(const ScriptError serror) {
             return "Script failed an OP_CHECKMULTISIGVERIFY operation";
         case SCRIPT_ERR_CHECKSIGVERIFY:
             return "Script failed an OP_CHECKSIGVERIFY operation";
+        case SCRIPT_ERR_CHECKDATASIGVERIFY:
+            return "Script failed an OP_CHECKDATASIGVERIFY operation";
         case SCRIPT_ERR_NUMEQUALVERIFY:
             return "Script failed an OP_NUMEQUALVERIFY operation";
         case SCRIPT_ERR_SCRIPT_SIZE:
@@ -83,11 +85,31 @@ const char *ScriptErrorString(const ScriptError serror) {
         case SCRIPT_ERR_MINIMALIF:
             return "OP_IF/NOTIF argument must be minimal";
         case SCRIPT_ERR_SIG_NULLFAIL:
-            return "Signature must be zero for failed CHECK(MULTI)SIG "
+            return "Signature must be zero for failed CHECK(MULTI/DATA)SIG "
                    "operation";
+        case SCRIPT_ERR_CHECKDATASIG_FLAG:
+            return "Invalid CHECKDATASIG flag";
+        case SCRIPT_ERR_EMPTY_SIG_SIZE:
+            return "Empty signature size must be 0";
+        case SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_LEGACY:
+            return "Public key is neither x-only, compressed, nor uncompressed";
+        case SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_COMPRESSED:
+            return "Public key is neither x-only nor compressed";
+        case SCRIPT_ERR_ECDSA_SIG_SIZE:
+            return "ECDSA signature size must not be 64 bytes";
+        case SCRIPT_ERR_XONLY_PUBKEY_SIZE:
+            return "X-only public key size must be 32 bytes";
+        case SCRIPT_ERR_SCHNORR_SIG_SIZE:
+            return "Schnorr signature size must be 64 bytes";
+        case SCRIPT_ERR_BITFIELD_SIZE:
+            return "Bitfield has unexcepted size";
+        case SCRIPT_ERR_BITFIELD_RANGE:
+            return "Bitfield is out of expected range";
+        case SCRIPT_ERR_BIT_COUNT:
+            return "The number of bits set in the bitfield does not match the expected value";
         case SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS:
             return "NOPx reserved for soft-fork upgrades";
-        case SCRIPT_ERR_PUBKEYTYPE:
+        case SCRIPT_ERR_LEGACY_PUBKEY:
             return "Public key is neither compressed or uncompressed";
         case SCRIPT_ERR_CLEANSTACK:
             return "Script did not clean its stack";

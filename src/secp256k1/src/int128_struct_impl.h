@@ -3,7 +3,6 @@
 
 #include "int128.h"
 #include "util.h"
-#include "secp256k1.h"
 
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64)) /* MSVC */
 #    include <intrin.h>

@@ -104,3 +104,6 @@ contrib/devtools/split-debug.sh
 
 # JetBrains, Clion, PyCharm etc...
 .idea
+
+# Clangd
+.clangd

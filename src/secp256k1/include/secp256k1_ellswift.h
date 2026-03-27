@@ -35,7 +35,7 @@ extern "C" {
  *
  * If the Y coordinate is relevant, it is given the same parity as t.
  *
- * Changes w.r.t. the the paper:
+ * Changes w.r.t. the paper:
  * - The u=0, t=0, and u^3+t^2+7=0 conditions result in decoding to the point
  *   at infinity in the paper. Here they are remapped to finite points.
  * - The paper uses an additional encoding bit for the parity of y. Here the
@@ -72,7 +72,7 @@ typedef int (*secp256k1_ellswift_xdh_hash_function)(
 /** An implementation of an secp256k1_ellswift_xdh_hash_function which uses
  *  SHA256(prefix64 || ell_a64 || ell_b64 || x32), where prefix64 is the 64-byte
  *  array pointed to by data. */
-/*SECP256K1_API const secp256k1_ellswift_xdh_hash_function secp256k1_ellswift_xdh_hash_function_prefix;*/ /*    //TODO */
+SECP256K1_API const secp256k1_ellswift_xdh_hash_function secp256k1_ellswift_xdh_hash_function_prefix;
 
 /** An implementation of an secp256k1_ellswift_xdh_hash_function compatible with
  *  BIP324. It returns H_tag(ell_a64 || ell_b64 || x32), where H_tag is the
@@ -80,15 +80,14 @@ typedef int (*secp256k1_ellswift_xdh_hash_function)(
  *  to secp256k1_ellswift_xdh_hash_function_prefix with prefix64 set to
  *  SHA256("bip324_ellswift_xonly_ecdh")||SHA256("bip324_ellswift_xonly_ecdh").
  *  The data argument is ignored. */
-/*SECP256K1_API const secp256k1_ellswift_xdh_hash_function secp256k1_ellswift_xdh_hash_function_bip324;*/
-SECP256K1_API int ellswift_xdh_hash_function_bip324(unsigned char* output, const unsigned char *x32, const unsigned char *ell_a64, const unsigned char *ell_b64, void *data);
+SECP256K1_API const secp256k1_ellswift_xdh_hash_function secp256k1_ellswift_xdh_hash_function_bip324;
 
 /** Construct a 64-byte ElligatorSwift encoding of a given pubkey.
  *
  *  Returns: 1 always.
  *  Args:    ctx:        pointer to a context object
  *  Out:     ell64:      pointer to a 64-byte array to be filled
- *  In:      pubkey:     a pointer to a secp256k1_pubkey containing an
+ *  In:      pubkey:     pointer to a secp256k1_pubkey containing an
  *                       initialized public key
  *           rnd32:      pointer to 32 bytes of randomness
  *
@@ -131,7 +130,7 @@ SECP256K1_API int secp256k1_ellswift_decode(
  *
  *  Returns: 1: secret was valid, public key was stored.
  *           0: secret was invalid, try again.
- *  Args:    ctx:        pointer to a context object
+ *  Args:    ctx:        pointer to a context object (not secp256k1_context_static)
  *  Out:     ell64:      pointer to a 64-byte array to receive the ElligatorSwift
  *                       public key
  *  In:      seckey32:   pointer to a 32-byte secret key
@@ -170,7 +169,7 @@ SECP256K1_API SECP256K1_WARN_UNUSED_RESULT int secp256k1_ellswift_create(
  *                      (will not be NULL)
  *           ell_b64:   pointer to the 64-byte encoded public key of party B
  *                      (will not be NULL)
- *           seckey32:  a pointer to our 32-byte secret key
+ *           seckey32:  pointer to our 32-byte secret key
  *           party:     boolean indicating which party we are: zero if we are
  *                      party A, non-zero if we are party B. seckey32 must be
  *                      the private key corresponding to that party's ell_?64.

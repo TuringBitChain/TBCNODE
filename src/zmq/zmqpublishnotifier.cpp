@@ -4,7 +4,10 @@
 
 #include "zmqpublishnotifier.h"
 #include "config.h"
+#include "core_io.h"
 #include "rpc/server.h"
+#include "rpc/jsonwriter.h"
+#include "rpc/text_writer.h"
 #include "streams.h"
 #include "util.h"
 #include "validation.h"
@@ -18,6 +21,13 @@ static const char *MSG_HASHBLOCK = "hashblock";
 static const char *MSG_HASHTX = "hashtx";
 static const char *MSG_RAWBLOCK = "rawblock";
 static const char *MSG_RAWTX = "rawtx";
+
+static const char* const MSG_HASHBLOCKNEW = "hashblockincr";
+static const char* const MSG_RAWBLOCKNEW = "rawblockincr";
+static const char* const MSG_HASHTXINCR = "hashtxincr";
+static const char* const MSG_RAWTXINCR = "rawtxincr";
+static const char *MSG_DISCARDEDFROMMEMPOOL = "discardedfrommempool";
+static const char *MSG_REMOVEDFROMMEMPOOLBLOCK = "removedfrommempoolblock";
 
 // Internal function to send multipart message
 static int zmq_send_multipart(void *sock, const void *data, size_t size, ...) {
@@ -136,6 +146,47 @@ bool CZMQAbstractPublishNotifier::SendZMQMessage(const char *command,
     return true;
 }
 
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const uint256& hash) 
+{
+    LogPrint(BCLog::ZMQ, "zmq: Publish %s %s\n", command, hash.GetHex());
+    char data[32];
+    for (unsigned int i = 0; i < 32; i++) 
+    {
+        data[31 - i] = hash.begin()[i];
+    }
+    return SendZMQMessage(command, data, 32);
+}
+
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const CBlockIndex* pindex) 
+{
+    LogPrint(BCLog::ZMQ, "zmq: Publish  %s %s\n", command, pindex->GetBlockHash().GetHex());
+
+    const Config& config = GlobalConfig::GetConfig();
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    {
+        LOCK(cs_main);
+        CBlock block;
+        if (!ReadBlockFromDisk(block, pindex, config))
+        {
+            zmqError("Can't read block from disk");
+            return false;
+        }
+
+        ss << block;
+    }
+
+    return SendZMQMessage(command, &(*ss.begin()), ss.size());
+}
+
+bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const CTransaction& transaction) 
+{
+    uint256 txid = transaction.GetId();
+    LogPrint(BCLog::ZMQ, "zmq: Publish %s %s\n", command, txid.GetHex());
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    ss << transaction;
+    return SendZMQMessage(command, &(*ss.begin()), ss.size());
+}
+
 bool CZMQPublishHashBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
     uint256 hash = pindex->GetBlockHash();
     LogPrint(BCLog::ZMQ, "zmq: Publish hashblock %s\n", hash.GetHex());
@@ -155,31 +206,109 @@ bool CZMQPublishHashTransactionNotifier::NotifyTransaction(
     return SendZMQMessage(MSG_HASHTX, data, 32);
 }
 
-bool CZMQPublishRawBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
-    LogPrint(BCLog::ZMQ, "zmq: Publish rawblock %s\n",
-             pindex->GetBlockHash().GetHex());
+bool CZMQPublishRemovedFromMempoolNotifier::NotifyRemovedFromMempool(const uint256& txid,
+                                                                     MemPoolRemovalReason reason,
+                                                                     const CTransaction* conflictedWith)
+{
 
-    const Config &config = GlobalConfig::GetConfig();
-    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
+    CStringWriter tw;
+    CJSONWriter jw(tw, false);
+
+    jw.writeBeginObject();
+    jw.pushKV("txid", txid.GetHex(), true);
+
+    switch (reason)
     {
-        LOCK(cs_main);
-        CBlock block;
-        if (!ReadBlockFromDisk(block, pindex, config)) {
-            zmqError("Can't read block from disk");
-            return false;
-        }
-
-        ss << block;
+        case MemPoolRemovalReason::EXPIRY:
+            jw.pushKV("reason", "expired", false);
+            break;
+        case MemPoolRemovalReason::SIZELIMIT:
+            jw.pushKV("reason", "mempool-sizelimit-exceeded", false);
+            break;
+        case MemPoolRemovalReason::CONFLICT:
+            if (conflictedWith != nullptr)
+            {
+                jw.pushKV("reason", "collision-in-block-tx");
+                jw.writeBeginObject("collidedWith");
+                jw.pushKV("txid", conflictedWith->GetId().GetHex(), true);
+                jw.pushKV("size", int64_t(conflictedWith->GetTotalSize()), true);
+                jw.pushK("hex");
+                jw.pushQuote(true, false);
+                EncodeHexTx(*conflictedWith, jw.getWriter(), 0);
+                jw.pushQuote(true, false);
+                jw.writeEndObject(false);
+            }
+            else
+            {
+                jw.pushKV("reason", "collision-in-block-tx", false);
+            }
+            break;
+        default:
+            jw.pushKV("reason", "unknown-reason", false);
     }
 
-    return SendZMQMessage(MSG_RAWBLOCK, &(*ss.begin()), ss.size());
+    jw.writeEndObject(false);
+
+    std::string message = tw.MoveOutString();
+
+    return SendZMQMessage(MSG_DISCARDEDFROMMEMPOOL, message.data(), message.size());
+}
+
+bool CZMQPublishRemovedFromMempoolBlockNotifier::NotifyDiscardedFromMempoolBlock(const uint256& txid,
+                                                                               MemPoolRemovalReason reason)
+{
+
+    CStringWriter tw;
+    CJSONWriter jw(tw, false);
+
+    jw.writeBeginObject();
+
+    switch (reason)
+    {
+        case MemPoolRemovalReason::REORG:
+            jw.pushKV("reason", "reorg");
+            break;
+        case MemPoolRemovalReason::BLOCK:
+            jw.pushKV("reason", "included-in-block");
+            break;
+        default:
+            jw.pushKV("reason", "unknown-reason");
+    }
+    
+    jw.pushK("txid");
+    jw.pushV(txid.GetHex(), false);
+    jw.writeEndObject(false);
+
+    std::string message = tw.MoveOutString();
+
+    return SendZMQMessage(MSG_REMOVEDFROMMEMPOOLBLOCK, message.data(), message.size());
+}
+
+bool CZMQPublishRawBlockNotifier::NotifyBlock(const CBlockIndex *pindex) {
+    return SendZMQMessage(MSG_RAWBLOCK, pindex);
 }
 
 bool CZMQPublishRawTransactionNotifier::NotifyTransaction(
     const CTransaction &transaction) {
-    uint256 txid = transaction.GetId();
-    LogPrint(BCLog::ZMQ, "zmq: Publish rawtx %s\n", txid.GetHex());
-    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION | RPCSerializationFlags());
-    ss << transaction;
-    return SendZMQMessage(MSG_RAWTX, &(*ss.begin()), ss.size());
+    return SendZMQMessage(MSG_RAWTX, transaction);
+}
+
+bool CZMQPublishHashBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
+{
+    return SendZMQMessage(MSG_HASHBLOCKNEW, pindex->GetBlockHash());
+}
+
+bool CZMQPublishRawBlockNotifier2::NotifyBlock2(const CBlockIndex* pindex) 
+{
+    return SendZMQMessage(MSG_RAWBLOCKNEW, pindex);
+}
+
+bool CZMQPublishHashTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
+{
+    return SendZMQMessage(MSG_HASHTXINCR, transaction.GetId());
+}
+
+bool CZMQPublishRawTransactionNotifier2::NotifyTransaction2(const CTransaction& transaction) 
+{
+    return SendZMQMessage(MSG_RAWTXINCR, transaction);
 }

@@ -171,6 +171,9 @@ public:
                 const ChainCode &cc) const;
 };
 
+/**
+ * An encapsulated x-only public key (32 bytes) for Schnorr signatures.
+ */
 class XOnlyPubKey
 {
 private:

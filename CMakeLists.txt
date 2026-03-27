@@ -1,9 +1,9 @@
 # Copyright (c) 2017 The Bitcoin developers
 # Copyright (c) 2019 Bitcoin Association
-# Distributed under the Open BSV software license, see the accompanying file LICENSE.
+# Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 cmake_minimum_required(VERSION 3.5)
-project(BitcoinSV)
+project(TuringBitChain)
 #Reduce warnings on MSVC, to closer match GCC compiler settings
 if(POLICY CMP0092 AND MSVC)
    cmake_policy(SET CMP0092 NEW)

@@ -40,6 +40,7 @@
 #include "txmempool.h"
 #include "txn_validator.h"
 #include "ui_interface.h"
+#include "uint256.h"
 #include "undo.h"
 #include "util.h"
 #include "utilmoneystr.h"
@@ -49,6 +50,9 @@
 #include "warnings.h"
 #include "blockfileinfostore.h"
 #include "time_consuming.h"
+#include "script/script_num.h"
+#include "key.h"
+#include "pubkey.h"
 
 #include <algorithm>
 #include <atomic>
@@ -62,7 +66,8 @@
 #include <boost/math/distributions/poisson.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/thread.hpp>
-#include <boost/bind.hpp>
+#include <boost/bind/bind.hpp>
+
 #include "script/script_num.h"
 #include <key.h>
 #include <pubkey.h>
@@ -73,6 +78,12 @@
 #endif
 
 using namespace mining;
+using namespace boost::placeholders;
+
+#define TBC_FORK_BLOCK_HEIGHT 824190
+
+// Used for block production testing
+bool gBlockProductionTest = false;
 
 /**
  * Global state
@@ -644,6 +655,132 @@ uint64_t vectorLEtoU64(const vector<uint8_t>& bytes) {
     return res;
 }
 
+bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
+    if (tx.vin.empty() || tx.vout.empty()) { return false; }
+    // Script data.
+    const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
+    const CScript &chargeInputScript = tx.vin[0].scriptSig;
+    if (chargeInputScript.empty() || chargeOutputScript.empty()) { return false; }
+    uint64_t inputScriptIndex = 0;
+    uint64_t outputScriptIndex = 0;
+    std::vector<XOnlyPubKey> pubkeyManagerArr;
+    XOnlyPubKey pubkeyMiner;
+    std::vector<uint8_t> pubkeyMinerVec;
+    std::vector<uint8_t> sigManagerVec;
+    std::vector<uint8_t> sigMinerVec;
+    std::vector<uint8_t> isfixedChangeAddressVec;
+    bool isFixedChangeAddress = false;
+    std::vector<uint8_t> chargeAddressPubkeyHashVec;
+    std::vector<uint8_t> kycChargeRateVec;
+    std::vector<uint8_t> actualChargeRateVec;
+    uint64_t kycChargeRate;
+    std::vector<uint8_t> permissionHeightLengthVec;
+    std::vector<uint8_t> currentChainHeightLengthVec;
+    std::vector<uint8_t> kycPermissionHeightVec;
+    std::vector<uint8_t> currentChainHeightVec;
+    unsigned int permissionHeightLength;
+    unsigned int currentChainHeightLength;
+    unsigned int kycPermissionHeight;
+    unsigned int currentChainHeight;
+    std::vector<uint8_t> msgManager;
+    std::vector<uint8_t> msgMiner;
+    uint256 msgHashManager;
+    uint256 msgHashMiner;
+    std::vector<uint8_t> countryCodeVec;
+
+    // Get pukeyManagerArr from hard code
+    if (!gBlockProductionTest) {
+        pubkeyManagerArr.push_back(XOnlyPubKey(bsv::span<const unsigned char>(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49"))));
+        pubkeyManagerArr.push_back(XOnlyPubKey(bsv::span<const unsigned char>(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e"))));
+    }
+    else{
+        LogPrintf("=============== Block production test mode: using test manager public key ===============\n");
+        pubkeyManagerArr.push_back(XOnlyPubKey(bsv::span<const unsigned char>(ParseHex("b44895b362dac31d35cf8cda5385db2cc254ac31892e7cd9cac6447c039f0a18"))));
+    }
+
+    // Get date from Output Scirpt
+    outputScriptIndex += 28;    // Skip P2PKH + op_return + op_pushdata + dataLength(25 + 1 + 1 + 1)
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, isfixedChangeAddressVec)) { return false; }
+    if (isfixedChangeAddressVec[0] == 0x01) {
+        isFixedChangeAddress = true;
+    }
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 32, pubkeyMinerVec)) { return false; }
+    pubkeyMiner = XOnlyPubKey(bsv::span<const unsigned char>(pubkeyMinerVec));
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 64, sigManagerVec)) { return false; }
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, permissionHeightLengthVec)) { return false; }
+    permissionHeightLength = vectorLEtoU64(permissionHeightLengthVec);
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, permissionHeightLength, kycPermissionHeightVec)) { return false; }
+    kycPermissionHeight = vectorLEtoU64(kycPermissionHeightVec);
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, kycChargeRateVec)) { return false; }
+    kycChargeRate = vectorLEtoU64(kycChargeRateVec);
+    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 4, countryCodeVec)) { return false; }
+    
+    // Get data from Input Script
+    if (!safeReadScript(chargeInputScript, inputScriptIndex, 1, currentChainHeightLengthVec)) { return false; }
+    currentChainHeightLength = vectorLEtoU64(currentChainHeightLengthVec);
+    if (!safeReadScript(chargeInputScript, inputScriptIndex, currentChainHeightLength, currentChainHeightVec)) { return false; }
+    currentChainHeight = vectorLEtoU64(currentChainHeightVec);
+    if (!safeReadScript(chargeInputScript, inputScriptIndex, 64, sigMinerVec)) { return false; }
+
+    // Check kyc permission height
+    if (kycPermissionHeight < currentChainHeight) {
+        LogPrintf("KYC permission Height is less than current chain height !!! (%d < %d) \n", kycPermissionHeight, currentChainHeight);
+        return false;
+    }
+
+    // check kyc charge rate
+    uint64_t totalOutputValue = tx.GetValueOut().GetSatoshis();
+    if (totalOutputValue == 0) {
+        LogPrintf("Total output value is zero, cannot calculate charge rate\n");
+        return false;
+    }
+    uint64_t chargeValueLimit = totalOutputValue * kycChargeRate / 100;
+    uint64_t chargeValue = tx.vout[0].nValue.GetSatoshis();
+    if (chargeValue < chargeValueLimit) {
+        LogPrintf("Charge value is less than charge value limit !!! (%d < %d) \n", chargeValue, chargeValueLimit);
+        return false;
+    }
+
+    // Compute message hash
+    msgMiner.insert(msgMiner.end(), pubkeyMinerVec.begin(), pubkeyMinerVec.end());
+    msgMiner.insert(msgMiner.end(), currentChainHeightVec.begin(), currentChainHeightVec.end());
+    // Use uint256.GetHex() to get the big-endian block hash
+    std::vector<uint8_t> tipBlockHashVec = ParseHex(tipBlockHash.GetHex());
+    msgMiner.insert(msgMiner.end(), tipBlockHashVec.begin(), tipBlockHashVec.end());
+    msgHashMiner = Hash(msgMiner.begin(), msgMiner.end());
+    
+    msgManager.insert(msgManager.end(), pubkeyMinerVec.begin(), pubkeyMinerVec.end());
+    msgManager.insert(msgManager.end(), kycPermissionHeightVec.begin(), kycPermissionHeightVec.end());
+    msgManager.insert(msgManager.end(), kycChargeRateVec.begin(), kycChargeRateVec.end());
+    msgManager.insert(msgManager.end(), countryCodeVec.begin(), countryCodeVec.end());
+    if (isFixedChangeAddress == true) {
+        uint64_t chargeAddressIndex = 3;
+        if (!safeReadScript(chargeOutputScript, chargeAddressIndex, 20, chargeAddressPubkeyHashVec)) { return false; }
+        msgManager.insert(msgManager.end(), chargeAddressPubkeyHashVec.begin(), chargeAddressPubkeyHashVec.end());
+    }
+    msgHashManager = Hash(msgManager.begin(), msgManager.end());
+    
+    // Verify miner signature
+    if (!pubkeyMiner.VerifySchnorr(msgHashMiner, sigMinerVec)) {
+        LogPrintf("Miner signature verification failed !!! \n");
+        return false;
+    }
+    // Verify if fit one of the manager public key.
+    bool ret = false;
+    for (auto pubkeyManager : pubkeyManagerArr) {
+        if (pubkeyManager.VerifySchnorr(msgHashManager, sigManagerVec)) {
+            ret = true;
+            break;
+        }
+    }
+    if (!ret) {
+        LogPrintf("Manager signature verification failed !!! \n");
+        return false;
+    }
+
+    return ret;
+}
+
 bool FilledMinerBill(const CTransaction& tx)
 {
     const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
@@ -736,7 +873,7 @@ bool FilledMinerBill(const CTransaction& tx)
     uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
     uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
     if (coinbaseFee < lowestLimitCoinbaseFee) {
-        LogPrintf("Coinbase fees are not within the permitted range.\n");
+        LogPrintf("Coinbase fees are not within the permitted range.txid:%s, coinbaseFee=%ld, lowestLimitCoinbaseFee=%ld\n", tx.GetHash().ToString(), coinbaseFee, lowestLimitCoinbaseFee);
         return false;
     }
 
@@ -842,23 +979,50 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 }
 
-bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, int tbcActiveHeight)
+bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
+    int kycV1ActivationHeight = 824189;
+    int kycV2ActivationHeight = 927000;
+    if(gBlockProductionTest){
+        kycV2ActivationHeight = 824200;
+    }
+    int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
+    int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
+
+    // Use block height being validated when provided (>=0); otherwise fall back to chain tip (e.g. wallet/test).
+    // Using the block's height ensures the same block always gets the same checker (FilledMinerBill vs FilledMinerBillV2),
+    // avoiding non-determinism when chainActive.Height() differs across threads.
+    int checkBlockheight = (blockHeight >= 0) ? blockHeight : chainActive.Height();
+
     if (isGenesisEnabled) {
         uint64_t scriptSigHeight{0};
         HeightFormScript(tx,scriptSigHeight);
-
-        if ((chainActive.Height() >= tbcActiveHeight - 1) && (scriptSigHeight >= tbcActiveHeight - 1) && tx.nVersion != 10) {
+        if ((checkBlockheight >= kycV1ActivationTipHeight) && (scriptSigHeight >= (uint64_t)kycV1ActivationHeight) && tx.nVersion != 10) {
             std::stringstream error_message;
             error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
-                << " chainActive Height:" << chainActive.Height() << " scriptSigHeight:" << scriptSigHeight;
+                << " checkBlockheight:" << checkBlockheight << " scriptSigHeight:" << scriptSigHeight;
             return state.Invalid(false, 0, "", error_message.str());
         }
 
-        if ((chainActive.Height() >= tbcActiveHeight - 1) && (scriptSigHeight >= tbcActiveHeight - 1) && !FilledMinerBill(tx)) {
-            LogPrintf("chainHeight type:%s sigHeight:%s %d num type:%s\n",\
-                typeid(chainActive.Height()).name(),typeid(scriptSigHeight).name(),tbcActiveHeight - 1,typeid(tbcActiveHeight - 1).name());
-            return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
+        // Miner KYC veriry.
+        if (checkBlockheight >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
+            if (checkBlockheight >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
+                if (!FilledMinerBillV2(tx, prevBlockHash)) {
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
+                        kycV2ActivationHeight,
+                        checkBlockheight,
+                        scriptSigHeight);
+                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
+                }
+            } else {
+                if (!FilledMinerBill(tx)) {
+                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
+                        kycV1ActivationHeight,
+                        checkBlockheight,
+                        scriptSigHeight);
+                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
+                }
+            }
         }
     }
     
@@ -978,6 +1142,18 @@ bool IsGenesisEnabled(const Config &config, const CBlockIndex* pindexPrev) {
 
     // Genesis is enabled on the currently processed block, not on the current tip.
     return IsGenesisEnabled(config, pindexPrev->nHeight + 1);
+}
+
+bool IsSchnorrMultisigEnabled(const Config &config, int nHeight) {
+    return nHeight >= config.GetChainParams().GetConsensus().schnorrMultisigHeight;
+}
+
+bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex* pindexPrev) {
+    if (pindexPrev == nullptr) {
+        return false;
+    }
+
+    return IsSchnorrMultisigEnabled(config, pindexPrev->nHeight);
 }
 
 // Used to avoid mempool polluting consensus critical paths if CCoinsViewMempool
@@ -3773,6 +3949,10 @@ static uint32_t GetBlockScriptFlags(const Config &config,
         flags |= SCRIPT_VERIFY_SIGPUSHONLY;
     }
 
+    if (IsSchnorrMultisigEnabled(config, pChainTip)) {
+        flags |= SCRIPT_ENABLE_SCHNORR_MULTISIG;
+    }
+
     return flags;
 }
 
@@ -4548,6 +4728,7 @@ static int64_t nTimeConnectTotal = 0;
 static int64_t nTimeFlush = 0;
 static int64_t nTimeChainState = 0;
 static int64_t nTimePostConnect = 0;
+static int64_t nTimeRemoveFromMempool = 0;
 
 struct PerBlockConnectTrace {
     CBlockIndex *pindex = nullptr;
@@ -4732,6 +4913,22 @@ static bool ConnectTip(
         bool flushed = view.Flush();
         assert(flushed);
     }
+
+    std::vector<CTransactionRef> txNew;
+    auto asyncRemoveForBlock = std::async(std::launch::async, 
+        [&blockConnecting, &pindexNew, &changeSet, &txNew]()
+        {
+            RenameThread("Async RemoveForBlock");
+            int64_t nTimeRemoveForBlock = GetTimeMicros();
+            // Remove transactions from the mempool.;
+            mempool.RemoveForBlock(blockConnecting.vtx, changeSet, txNew);
+            nTimeRemoveForBlock = GetTimeMicros() - nTimeRemoveForBlock;
+            nTimeRemoveFromMempool += nTimeRemoveForBlock;
+            LogPrint(BCLog::BENCH, "    - Remove transactions from the mempool: %.2fms [%.2fs]\n",
+                    nTimeRemoveForBlock * 0.001, nTimeRemoveFromMempool * 0.000001);
+        }
+    );
+
     int64_t nTime4 = GetTimeMicros();
     nTimeFlush += nTime4 - nTime3;
     LogPrint(BCLog::BENCH, "  - Flush: %.2fms [%.2fs]\n",
@@ -4739,19 +4936,19 @@ static bool ConnectTip(
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(config.GetChainParams(), state,
                           FLUSH_STATE_IF_NEEDED)) {
+        asyncRemoveForBlock.wait();
         return false;
     }
     int64_t nTime5 = GetTimeMicros();
     nTimeChainState += nTime5 - nTime4;
     LogPrint(BCLog::BENCH, "  - Writing chainstate: %.2fms [%.2fs]\n",
              (nTime5 - nTime4) * 0.001, nTimeChainState * 0.000001);
-    // Remove conflicting transactions from the mempool.;
-    mempool.RemoveForBlock(blockConnecting.vtx, pindexNew->nHeight, changeSet);
     if(g_connman)
     {
         g_connman->DequeueTransactions(blockConnecting.vtx);
     }
     disconnectpool.removeForBlock(blockConnecting.vtx);
+    asyncRemoveForBlock.wait();
     // Update chainActive & related variables.
     UpdateTip(config, pindexNew);
 
@@ -4764,6 +4961,7 @@ static bool ConnectTip(
              (nTime6 - nTime1) * 0.001, nTimeTotal * 0.000001);
 
     connectTrace.BlockConnected(pindexNew, std::move(pthisBlock));
+    GetMainSignals().BlockConnected2(pindexNew, txNew);
 
     FinalizeGenesisCrossing(config, pindexNew->nHeight, changeSet);
 
@@ -5771,7 +5969,7 @@ bool CheckBlock(const Config &config, const CBlock &block,
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
 
     // And a valid coinbase.
-    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled,config.GetChainParams().GetConsensus().TBCFirstBlockHeight)) {
+    if (!CheckCoinbase(*block.vtx[0], state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled, block.hashPrevBlock, blockHeight)) {
         return state.Invalid(false, state.GetRejectCode(),
                              state.GetRejectReason(),
                              strprintf("Coinbase check failed (txid %s) %s",
@@ -6175,8 +6373,10 @@ static bool AcceptBlock(const Config& config,
     CBlockIndex*& pindex = ppindex ? *ppindex : pindexDummy;
 
     if (!AcceptBlockHeader(config, block, state, &pindex)) {
+        LogPrintf("Do not accept block header: %s\n", block.GetHash().ToString());
         return false;
     }
+    LogPrintf("Accept block header: %s\n", pindex->GetBlockHash().ToString());
 
     // Try to process all requested blocks that we don't have, but only
     // process an unrequested block if it's new and has enough work to
@@ -6256,6 +6456,7 @@ static bool AcceptBlock(const Config& config,
             pindex->nStatus = pindex->nStatus.withFailed();
             setDirtyBlockIndex.insert(pindex);
         }
+        LogPrintf("11 Do not accept block: %s\n", block.GetHash().ToString());
         return error("%s: %s (block %s)", __func__, FormatStateMessage(state),
             block.GetHash().ToString());
     }

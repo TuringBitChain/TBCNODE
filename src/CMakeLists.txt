@@ -3,7 +3,7 @@
 # Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 cmake_minimum_required(VERSION 3.5)
-project(BitcoinSV)
+project(TuringBitChain)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -90,6 +90,10 @@ add_subdirectory(config)
 # libraries
 add_subdirectory(crypto)
 add_subdirectory(leveldb)
+
+# Enable secp256k1 recovery module
+set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "Enable ECDSA pubkey recovery module." FORCE)
+
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
 
@@ -249,6 +253,8 @@ add_library(server
     net/net_message.cpp
 	net/net_processing.cpp
     net/stream.cpp
+  	net/validation_scheduler.cpp
+  	net/validation_scheduler.h
 	noui.cpp
 	orphan_txns.cpp
 	policy/fees.cpp

@@ -38,6 +38,7 @@ constexpr static size_t ECDH_SECRET_SIZE = CSHA256::OUTPUT_SIZE;
 
 // Used to represent ECDH shared secret (ECDH_SECRET_SIZE bytes)
 using ECDHSecret = std::array<std::byte, ECDH_SECRET_SIZE>;
+class KeyPair;
 
 /** An encapsulated private key. */
 class CKey {
@@ -120,6 +121,10 @@ public:
      */
     CPubKey GetPubKey() const;
 
+    XOnlyPubKey GetXOnlyPubKey() const;
+
+    KeyPair ComputeKeyPair() const;
+
     /**
      * Create a DER-serialized signature.
      * The test_case parameter tweaks the deterministic nonce.
@@ -151,6 +156,7 @@ public:
      * - Otherwise:                key + H_TapTweak(pubkey || *merkle_root)
      */
     bool SignSchnorr(const uint256& hash, bsv::span<unsigned char> sig, const uint256* merkle_root = nullptr, const uint256* aux = nullptr) const;
+    bool SignSchnorr(const uint256 &hash, std::vector<uint8_t> &vchSig, uint32_t test_case = 0) const;
 
     //! Derive BIP32 child key.
     bool Derive(CKey &keyChild, ChainCode &ccChild, unsigned int nChild,
@@ -248,6 +254,27 @@ struct CExtKey {
         s.read((char *)&code[0], len);
         Decode(code);
     }
+};
+
+class KeyPair
+{
+public:
+    KeyPair() noexcept = default;
+    KeyPair(KeyPair&&) noexcept = default;
+    KeyPair(const KeyPair& other) = default;
+    KeyPair& operator=(KeyPair&&) noexcept = default;
+    KeyPair& operator=(const KeyPair& other) = default;
+
+    friend KeyPair CKey::ComputeKeyPair() const;
+    [[nodiscard]] bool SignSchnorr(const uint256& hash, std::vector<uint8_t> &vchSig, uint32_t test_case = 0) const;
+
+    //! Check whether this keypair is valid.
+    bool IsValid() const { return keypair.size() == 96; }
+
+private:
+    KeyPair(const CKey& key);
+
+    std::vector<uint8_t, secure_allocator<uint8_t>> keypair;
 };
 
 /** Initialize the elliptic curve support. May not be called twice without

@@ -138,6 +138,8 @@ public:
     virtual bool SetMaxScriptNumLengthPolicy(int64_t maxScriptNumLengthIn, std::string* err = nullptr) = 0;
 
     virtual bool SetGenesisGracefulPeriod(int64_t genesisGracefulPeriodIn, std::string* err = nullptr) = 0;
+    virtual bool SetPTVTaskScheduleStrategy(PTVTaskScheduleStrategy strategy, std::string* err = nullptr) = 0;
+    virtual PTVTaskScheduleStrategy GetPTVTaskScheduleStrategy() const = 0;
     virtual uint64_t GetGenesisGracefulPeriod() const = 0;
 
     virtual void SetAcceptNonStandardOutput(bool accept) = 0;
@@ -282,6 +284,9 @@ public:
     bool SetMaxNonStdTxnValidationDuration(int ms, std::string* err = nullptr) override;
     std::chrono::milliseconds GetMaxNonStdTxnValidationDuration() const override;
 
+    bool SetPTVTaskScheduleStrategy(PTVTaskScheduleStrategy strategy, std::string* err = nullptr) override;
+    PTVTaskScheduleStrategy GetPTVTaskScheduleStrategy() const override;
+
     bool SetMaxStackMemoryUsage(int64_t maxStackMemoryUsageConsensusIn, int64_t maxStackMemoryUsagePolicyIn, std::string* err = nullptr) override;
     uint64_t GetMaxStackMemoryUsage(bool isGenesisEnabled, bool consensus) const override;
 
@@ -384,6 +389,8 @@ private:
 
     std::chrono::milliseconds mMaxStdTxnValidationDuration;
     std::chrono::milliseconds mMaxNonStdTxnValidationDuration;
+
+    PTVTaskScheduleStrategy mPTVTaskScheduleStrategy;
 
     uint64_t maxStackMemoryUsagePolicy;
     uint64_t maxStackMemoryUsageConsensus;
@@ -608,6 +615,9 @@ public:
     {
         return DEFAULT_MAX_NON_STD_TXN_VALIDATION_DURATION;
     }
+
+    bool SetPTVTaskScheduleStrategy(PTVTaskScheduleStrategy strategy, std::string* err = nullptr) override { return true; }
+    PTVTaskScheduleStrategy GetPTVTaskScheduleStrategy() const override { return DEFAULT_PTV_TASK_SCHEDULE_STRATEGY; }
 
     bool SetMaxScriptSizePolicy(int64_t maxScriptSizePolicyIn, std::string* err = nullptr) override 
     {
