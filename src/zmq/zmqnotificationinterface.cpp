@@ -39,17 +39,17 @@ CZMQNotificationInterface *CZMQNotificationInterface::Create() {
         CZMQAbstractNotifier::Create<CZMQPublishRawBlockNotifier>;
     factories["pubrawtx"] =
         CZMQAbstractNotifier::Create<CZMQPublishRawTransactionNotifier>;
-    factories["pubremovedfrommempool"] =
+    factories["pubdiscardedfrommempool"] =
         CZMQAbstractNotifier::Create<CZMQPublishRemovedFromMempoolNotifier>;
     factories["pubremovedfrommempoolblock"] =
         CZMQAbstractNotifier::Create<CZMQPublishRemovedFromMempoolBlockNotifier>;
-    factories["pubhashblock2"] =
+    factories["pubhashblockincr"] =
         CZMQAbstractNotifier::Create<CZMQPublishHashBlockNotifier2>;
-    factories["pubrawblock2"] =
+    factories["pubrawblockincr"] =
         CZMQAbstractNotifier::Create<CZMQPublishRawBlockNotifier2>;
-    factories["pubhashtx2"] =
+    factories["pubhashtxincr"] =
         CZMQAbstractNotifier::Create<CZMQPublishHashTransactionNotifier2>;
-    factories["pubrawtx2"] =
+    factories["pubrawtxincr"] =
         CZMQAbstractNotifier::Create<CZMQPublishRawTransactionNotifier2>;
 
     for (std::map<std::string, CZMQNotifierFactory>::const_iterator i =
