@@ -137,7 +137,7 @@ public:
         consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
 
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -299,7 +299,7 @@ public:
         consensus.genesisHeight = GENESIS_ACTIVATION_STN;
 
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -403,7 +403,7 @@ public:
         consensus.genesisHeight = GENESIS_ACTIVATION_TESTNET;
 
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         diskMagic[0] = 0x0b;
         diskMagic[1] = 0x11;
