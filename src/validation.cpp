@@ -1153,7 +1153,7 @@ bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex* pindexPre
         return false;
     }
 
-    return IsSchnorrMultisigEnabled(config, pindexPrev->nHeight);
+    return IsSchnorrMultisigEnabled(config, pindexPrev->nHeight + 1);
 }
 
 // Used to avoid mempool polluting consensus critical paths if CCoinsViewMempool

@@ -711,7 +711,7 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-zmqpubrawtx=<address>",
                        _("Enable publish raw transaction in <address>"));
-    strUsage += HelpMessageOpt("-zmqpubremovedfrommempool=<address>",
+    strUsage += HelpMessageOpt("-zmqpubdiscardedfrommempool=<address>",
                                _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
     strUsage += HelpMessageOpt("-zmqpubremovedfrommempoolblock=<address>",
                                _("Enable publish removal of transaction (txid and the reason in json format) in <address>"));
@@ -719,9 +719,9 @@ std::string HelpMessage(HelpMessageMode mode) {
                                 _("Enable publish hash transaction in <address>. "));
     strUsage += HelpMessageOpt("-zmqpubrawtxincr=<address>",
                                 _("Enable publish raw transaction in <address>. "));
-    strUsage += HelpMessageOpt("-zmqpubhashblocknew=<address>",
+    strUsage += HelpMessageOpt("-zmqpubhashblockincr=<address>",
                                 _("Enable publish hash block in <address>. "));
-    strUsage += HelpMessageOpt("-zmqpubrawblocknew=<address>",
+    strUsage += HelpMessageOpt("-zmqpubrawblockincr=<address>",
                                 _("Enable publish raw block in <address>. "));
 #endif
 
@@ -781,23 +781,6 @@ std::string HelpMessage(HelpMessageMode mode) {
             strprintf("Do not accept transactions if maximum height of in-mempool "
                       "ancestors chain is <n> or more (default: %u)",
                       DEFAULT_ANCESTOR_LIMIT));
-        strUsage +=
-            HelpMessageOpt("-limitancestorsize=<n>",
-                           strprintf("Do not accept transactions whose size "
-                                     "with all in-mempool ancestors exceeds "
-                                     "<n> kilobytes (default: %u). The value may be given in kilobytes or with unit (B, kB, MB, GB).",
-                                     DEFAULT_ANCESTOR_SIZE_LIMIT));
-        strUsage += HelpMessageOpt(
-            "-limitdescendantcount=<n>",
-            strprintf("Do not accept transactions if any ancestor would have "
-                      "<n> or more in-mempool descendants (default: %u)",
-                      DEFAULT_DESCENDANT_LIMIT));
-        strUsage += HelpMessageOpt(
-            "-limitdescendantsize=<n>",
-            strprintf("Do not accept transactions if any ancestor would have "
-                      "more than <n> kilobytes of in-mempool descendants "
-                      "(default: %u). The value may be given in kilobytes or with unit (B, kB, MB, GB).",
-                      DEFAULT_DESCENDANT_SIZE_LIMIT));
     }
     strUsage += HelpMessageOpt(
         "-debug=<category>",
@@ -1905,11 +1888,6 @@ bool AppInitParameterInteraction(Config &config) {
         config.SetDataCarrierSize(gArgs.GetArgAsBytes("-datacarriersize", DEFAULT_DATA_CARRIER_SIZE));
     }
 
-    // Configure descendant limit count.
-    if(gArgs.IsArgSet("-limitdescendantcount")) {
-        config.SetLimitDescendantCount(gArgs.GetArg("-limitdescendantcount", DEFAULT_DESCENDANT_LIMIT));
-    }
-
     // Configure ancestor limit count.
     if(gArgs.IsArgSet("-limitancestorcount")) {
         config.SetLimitAncestorCount(gArgs.GetArg("-limitancestorcount", DEFAULT_ANCESTOR_LIMIT));
@@ -1958,16 +1936,6 @@ bool AppInitParameterInteraction(Config &config) {
         if (std::string err; !config.SetAcceptNonStdConsolidationInput(param, &err)) {
             return InitError(err);
         }
-    }
-
-    // Configure descendant limit size.
-    if(gArgs.IsArgSet("-limitdescendantsize")) {
-        config.SetLimitDescendantSize(gArgs.GetArgAsBytes("-limitdescendantsize", DEFAULT_DESCENDANT_SIZE_LIMIT, ONE_KILOBYTE));
-    }
-
-    // Configure ancestor limit size.
-    if(gArgs.IsArgSet("-limitancestorsize")) {
-        config.SetLimitAncestorSize(gArgs.GetArgAsBytes("-limitancestorsize", DEFAULT_ANCESTOR_SIZE_LIMIT, ONE_KILOBYTE));
     }
 
     // Configure genesis activation height.
