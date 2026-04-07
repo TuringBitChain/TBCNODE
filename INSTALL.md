@@ -60,26 +60,11 @@ brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
 C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
 memory available when compiling. 
 
-### Firstly
-Init and update git submodule.
-```bash
-git submodule init
-git submodule update
-```
-
-### Secondly
-
 **For Memory > 1.5GB:**
 
 ```bash
-mkdir build && cd build
-cmake ..
-```
-
-### Finally
-
-```bash
-make -j$(nproc)  # Use all available CPU cores for faster compilation
+cmake -B build -S . -DENABLE_PROD_BUILD=ON
+cmake --build build -j$(nproc)
 ```
 
 ## How to Launch the TBCNODE software

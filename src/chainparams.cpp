@@ -140,7 +140,7 @@ public:
         consensus.TBCFirstBlockHash = uint256S(
             "0000000058968601042df9b0d57e41b092c76d6f91f333dc231cdd4cc4fd861d");
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -302,7 +302,7 @@ public:
         consensus.genesisHeight = GENESIS_ACTIVATION_STN;
 
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -409,7 +409,7 @@ public:
         consensus.TBCFirstBlockHash = uint256S(
             "00000000009847bd101ba647ad137f9246629ffc16b68d79bff87c68d282c77e");
         // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = std::numeric_limits<int>::max();
+        consensus.schnorrMultisigHeight = 941688;
 
         diskMagic[0] = 0x0c;
         diskMagic[1] = 0x12;
