@@ -689,6 +689,12 @@ std::unique_ptr<Sock> CreateSockTCP(const CService& address_family)
         LogPrint(BCLog::NET, "Unable to set TCP_NODELAY on a newly created socket, continuing anyway\n");
     }
 
+    // Set the reuse-address option on the socket.
+    const int reuse_on{1};
+    if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEADDR, &reuse_on, sizeof(reuse_on)) == SOCKET_ERROR) {
+        LogPrintf("Error setting SO_REUSEADDR on socket: %s, continuing anyway\n", NetworkErrorString(WSAGetLastError()));
+    }
+
     // Set the non-blocking option on the socket.
     if (!sock->SetNonBlocking()) {
         LogPrintf("Error setting socket to non-blocking: %s\n", NetworkErrorString(WSAGetLastError()));

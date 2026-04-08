@@ -59,6 +59,12 @@ struct Sv2Client
      */
     unsigned int m_coinbase_tx_outputs_size;
 
+    /**
+     * Whether we have sent initial work (NewTemplate/SetNewPrevHash) after the
+     * client became ready (i.e. after CoinbaseOutputDataSize)
+     */
+    bool m_initial_work_sent = false;
+
     explicit Sv2Client(size_t id, std::shared_ptr<Sock> sock, std::unique_ptr<Sv2Transport> transport) :
                        m_id{id}, m_sock{std::move(sock)}, m_transport{std::move(transport)} {};
 
@@ -142,6 +148,9 @@ private:
     XOnlyPubKey m_authority_pubkey;
 
     std::optional<Sv2SignatureNoiseMessage> m_certificate;
+
+    /** Next client id to assign, monotonically increasing */
+    size_t m_next_client_id{1};
 
     /**
      * A list of all connected stratum v2 clients.

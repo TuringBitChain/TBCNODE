@@ -127,7 +127,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                 Assume(m_certificate);
                 LOCKMt(m_clients_mutex);
                 std::unique_ptr transport = std::make_unique<Sv2Transport>(m_static_key, m_certificate.value());
-                size_t id{m_sv2_clients.size() + 1};
+                size_t id{m_next_client_id++};
                 auto client = std::make_unique<Sv2Client>(id, std::move(sock), std::move(transport));
                 //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "New client id=%zu connected\n", client->m_id);
                 LogPrintf("New client id=%zu connected\n", client->m_id);
@@ -286,7 +286,17 @@ Sock::EventsPerSock Sv2Connman::GenerateWaitSockets(const std::shared_ptr<Sock>&
 
     for (const auto& client : sv2_clients) {
         if (!client->m_disconnect_flag && client->m_sock) {
-            events_per_sock.emplace(client->m_sock, Sock::Events{Sock::RECV | Sock::ERR});
+            Sock::Events events{Sock::RECV | Sock::ERR};
+
+            // Only poll writability when the transport already has bytes buffered,
+            // or when a queued message can become sendable immediately.
+            const auto& [to_send, more] = client->m_transport->GetBytesToSendSv2(
+                /*have_next_message=*/!client->m_send_messages.empty());
+            if (!to_send.empty() || more) {
+                events.requested |= Sock::SEND;
+            }
+
+            events_per_sock.emplace(client->m_sock, events);
         }
     }
 
