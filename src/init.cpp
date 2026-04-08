@@ -696,6 +696,27 @@ std::string HelpMessage(HelpMessageMode mode) {
                     "MiB per 24h), 0 = no limit (default: %d). The value may be given in megabytes or with unit (KiB, MiB, GiB)."),
                   DEFAULT_MAX_UPLOAD_TARGET));
 
+    strUsage += HelpMessageGroup(_("Stratum v2 Options:"));
+    strUsage += HelpMessageOpt(
+        "-sv2",
+        _("Enable Stratum v2 Template Provider server"));
+    strUsage += HelpMessageOpt(
+        "-sv2port=<port>",
+        _("Listen for Stratum v2 connections on <port>"));
+    strUsage += HelpMessageOpt(
+        "-sv2bind=<addr>",
+        _("Bind Stratum v2 server to given address"));
+    strUsage += HelpMessageOpt(
+        "-sv2feedelta=<amt>",
+        strprintf(_("Minimum fee delta (satoshis) for sending updated template "
+                    "(default: %u)"),
+                  DEFAULT_SV2_FEE_DELTA));
+    strUsage += HelpMessageOpt(
+        "-sv2interval=<sec>",
+        strprintf(_("Template update interval in seconds "
+                    "(default: %u)"),
+                  DEFAULT_SV2_INTERVAL));
+
 #ifdef ENABLE_WALLET
     strUsage += CWallet::GetWalletHelpString(showDebug);
 #endif

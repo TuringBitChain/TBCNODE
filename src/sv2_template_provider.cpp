@@ -1,12 +1,6 @@
 #include "sv2_template_provider.h"
 
 #include <base58.h>
-//#include <stratumv2/args.h>
-#include <stratumv2/sv2_noise.h>
-#include <consensus/merkle.h>
-#include <txmempool.h>
-//#include <util/readwritefile.h>
-//#include <util/thread.h>
 #include <validation.h>
 #include <iostream>
 #include <thread>
@@ -99,70 +93,6 @@ Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemP
     Init({});
 }
 
-// Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemPool& mempool) 
-//     : m_config{config}, m_mining{mining}, m_mempool{mempool}
-// {
-//     // TODO: persist static key
-//     CKey static_key;
-//     try {
-//         AutoFile{fsbridge::fopen(GetStaticKeyFile(), "rb")} >> static_key;
-//         //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Reading cached static key from %s\n", fs::PathToString(GetStaticKeyFile()));
-//     } catch (const std::ios_base::failure&) {
-//         // File is not expected to exist the first time.
-//         // In the unlikely event that loading an existing key fails, create a new one.
-//     }
-//     if (!static_key.IsValid()) {
-//         static_key = GenerateRandomKey();
-//         try {
-//             AutoFile{fsbridge::fopen(GetStaticKeyFile(), "wb")} << static_key;
-//         } catch (const std::ios_base::failure&) {
-//             //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Error writing static key to %s\n", fs::PathToString(GetStaticKeyFile()));
-//             // Continue, because this is not a critical failure.
-//         }
-//         //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Generated static key, saved to %s\n", fs::PathToString(GetStaticKeyFile()));
-//     }
-//     //LogPrintLevel(BCLog::SV2, BCLog::Level::Info, "Static key: %s\n", HexStr(static_key.GetPubKey()));
-
-//    // Generate self signed certificate using (cached) authority key
-//     // TODO: skip loading authoritity key if -sv2cert is used
-
-//     // Load authority key if cached
-//     CKey authority_key;
-//     try {
-//         AutoFile{fsbridge::fopen(GetAuthorityKeyFile(), "rb")} >> authority_key;
-//     } catch (const std::ios_base::failure&) {
-//         // File is not expected to exist the first time.
-//         // In the unlikely event that loading an existing key fails, create a new one.
-//     }
-//     if (!authority_key.IsValid()) {
-//         authority_key = GenerateRandomKey();
-//         try {
-//             AutoFile{fsbridge::fopen(GetAuthorityKeyFile(), "wb")} << authority_key;
-//         } catch (const std::ios_base::failure&) {
-//             //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Error writing authority key to %s\n", fs::PathToString(GetAuthorityKeyFile()));
-//             // Continue, because this is not a critical failure.
-//         }
-//         //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Generated authority key, saved to %s\n", fs::PathToString(GetAuthorityKeyFile()));
-//     }
-//     // SRI uses base58 encoded x-only pubkeys in its configuration files
-//     std::array<unsigned char, 34> version_pubkey_bytes;
-//     version_pubkey_bytes[0] = 1;
-//     version_pubkey_bytes[1] = 0;
-//     m_authority_pubkey = XOnlyPubKey(authority_key.GetPubKey());
-//     std::copy(m_authority_pubkey.begin(), m_authority_pubkey.end(), version_pubkey_bytes.begin() + 2);
-//     //LogInfo("Template Provider authority key: %s\n", EncodeBase58Check(version_pubkey_bytes));
-//     //LogTrace(BCLog::SV2, "Authority key: %s\n", HexStr(m_authority_pubkey));
-
-//     // Generate and sign certificate
-//     auto now{GetTime<std::chrono::seconds>()};
-//     uint16_t version = 0;
-//     // Start validity a little bit in the past to account for clock difference
-//     uint32_t valid_from = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(now).count()) - 3600;
-//     uint32_t valid_to =  std::numeric_limits<unsigned int>::max(); // 2106
-//     Sv2SignatureNoiseMessage certificate = Sv2SignatureNoiseMessage(version, valid_from, valid_to, XOnlyPubKey(static_key.GetPubKey()), authority_key);
-
-//     m_connman = std::make_unique<Sv2Connman>(TP_SUBPROTOCOL, static_key, m_authority_pubkey, certificate);
-// }
 
 fs::path Sv2TemplateProvider::GetStaticKeyFile()
 {
@@ -176,28 +106,13 @@ fs::path Sv2TemplateProvider::GetAuthorityKeyFile()
 
 bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
 {
-    LogPrintf("Sv2TemplateProvider start\n");
+    LogPrint(BCLog::SV2, "Sv2TemplateProvider start\n");
     m_options = options;
     Init(options);
 
     if (!m_connman->Start(this, m_options.host, m_options.port)) {
         return false;
     }
-    // try {
-    //     auto sock = BindListenPort(options.port);
-    //     m_listening_socket = std::move(sock);
-    // } catch (const std::runtime_error& e) {
-    //     LogPrintf("Template Provider failed to bind to port %d: %s\n", options.port, e.what());
-    //     return false;
-    // }
-
-    m_thread_sv2_handler = std::thread(&TraceThread<std::function<void()>>
-        , "sv2"
-        , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2Handler, this)));
-
-    // m_thread_sv2_mempool_handler = std::thread(&TraceThread<std::function<void()>>
-    //     , "sv2mempool"
-    //     , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2MempoolHandler, this)));
 
     return true;
 }
@@ -338,7 +253,7 @@ void Sv2TemplateProvider::ThreadSv2Handler()
             if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
                 // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
                 //                 client.m_id);
-                LogPrintf("Disconnecting client id=%zu\n",
+                LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send initial work\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
             } else {
@@ -372,7 +287,7 @@ void Sv2TemplateProvider::ThreadSv2Handler()
             if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees)) {
                 // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
                 //                 client.m_id);
-                LogPrintf("Disconnecting client id=%zu\n",
+                LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send work on tip change\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
             }
@@ -459,7 +374,7 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
             if (!SendWork(client, /*send_new_prevhash=*/false, fees_before)) {
                 // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
                 //                 client.m_id);
-                LogPrintf("Disconnecting client id=%zu\n",
+                LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send work on fee update\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
             }
@@ -475,8 +390,6 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
 {
     AssertLockHeld(m_tp_mutex);
 
-    const auto time_start{std::chrono::steady_clock::now()};
-
     CBlockIndex *pindexPrev = nullptr;
     int64_t nStart = GetTime();
 
@@ -484,7 +397,7 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
     CScript scriptDummy = CScript() << OP_TRUE;
     std::unique_ptr<BlockTemplate> pblocktemplate = m_mining.createNewBlock(scriptDummy);
     if (!pblocktemplate) {
-        LogPrintf("Out of memory or no mining factory available");
+        LogPrint(BCLog::SV2, "Out of memory or no mining factory available");
         return false;
     }
 
@@ -496,10 +409,8 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
     UpdateTime(pblock, m_config, pindexPrev);
     pblock->nBits = GetNextWorkRequired(pindexPrev, pblock, m_config);
     pblock->nNonce = 0;
-    LogPrintf("new block time:%d\n",pblock->nTime);
+    LogPrint(BCLog::SV2, "new block time:%d\n", pblock->nTime);
 
-    //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Assemble template: %.2fms\n",
-        //Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
     Sv2NewTemplateMsg new_template{*pblocktemplate, m_template_id, future_template};
     Sv2SetNewPrevHashMsg set_new_prev_hash{*pblocktemplate, m_template_id};
 
@@ -519,7 +430,7 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
 
     auto predicate = [prev_hash](const auto& it){
         if (it.second->getBlockRef()->hashPrevBlock != prev_hash) {
-            LogPrintf("PruneBlockTemplateCache prevHash:%s\n",
+            LogPrint(BCLog::SV2, "PruneBlockTemplateCache prevHash:%s\n",
                 HexStr(bsv::span(it.second->getBlockRef()->hashPrevBlock)));
             return true;
         }
@@ -527,7 +438,7 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
     };
     for(auto it = m_block_template_cache.begin(); it != m_block_template_cache.end(); ) {
         if (predicate(*it)) {
-            LogPrintf("PruneBlockTemplateCache m_block_template_cache size:%d\n",m_block_template_cache.size());
+            LogPrint(BCLog::SV2, "PruneBlockTemplateCache m_block_template_cache size:%d\n", m_block_template_cache.size());
             it = m_block_template_cache.erase(it);
         } else {
             ++it;
@@ -568,12 +479,12 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     if (!send_new_prevhash && fees_before != Amount() && fees_before + Amount(m_minimum_fee_delta) > fees) return true;
 
     //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x71 NewTemplate id=%lu to client id=%zu\n", m_template_id, //client.m_id);
-    LogPrintf("Send 0x71 NewTemplate id=%lu to client id=%zu\n", m_template_id, client.m_id);
+    LogPrint(BCLog::SV2, "Send 0x71 NewTemplate id=%lu to client id=%zu\n", m_template_id, client.m_id);
     client.m_send_messages.emplace_back(new_work_set.new_template);
 
     if (send_new_prevhash) {
         //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x72 SetNewPrevHash to client id=%zu\n", //client.m_id);
-        LogPrintf("Send 0x72 SetNewPrevHash PrevHash:%s to client id=%zu\n", HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
+        LogPrint(BCLog::SV2, "Send 0x72 SetNewPrevHash PrevHash:%s to client id=%zu\n", HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
         client.m_send_messages.emplace_back(new_work_set.prev_hash);
     }
 
@@ -597,13 +508,13 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
         if (block->hashPrevBlock != m_best_prev_hash) {
             //LogTrace(BCLog::SV2, "Template id=%lu prevhash=%s, tip=%s\n", msg.m_template_id, HexStr(block.hashPrevBlock), HexStr(m_best_prev_hash));
-            LogPrintf("Template id=%lu prevhash=%s, tip=%s\n", msg.m_template_id, HexStr(bsv::span(block->hashPrevBlock)), HexStr(bsv::span(m_best_prev_hash)));
+            LogPrint(BCLog::SV2, "Template id=%lu prevhash=%s, tip=%s\n", msg.m_template_id, HexStr(bsv::span(block->hashPrevBlock)), HexStr(bsv::span(m_best_prev_hash)));
             node::Sv2RequestTransactionDataErrorMsg request_tx_data_error{msg.m_template_id, "stale-template-id"};
 
 
             // LogDebug(BCLog::SV2, "Send 0x75 RequestTransactionData.Error (stale-template-id) to client id=%zu\n",
             //         client.m_id);
-            LogPrintf("Send 0x75 RequestTransactionData.Error (stale-template-id) to client id=%zu\n",
+            LogPrint(BCLog::SV2, "Send 0x75 RequestTransactionData.Error (stale-template-id) to client id=%zu\n",
                     client.m_id);
             client.m_send_messages.emplace_back(request_tx_data_error);
             return;
@@ -623,7 +534,7 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
         // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x74 RequestTransactionData.Success to client id=%zu\n",
         //                 client.m_id);
-        LogPrintf("Send 0x74 RequestTransactionData.Success to client id=%zu\n",
+        LogPrint(BCLog::SV2, "Send 0x74 RequestTransactionData.Success to client id=%zu\n",
                         client.m_id);
         client.m_send_messages.emplace_back(request_tx_data_success);
     } else {
@@ -631,7 +542,7 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
         // LogDebug(BCLog::SV2, "Send 0x75 RequestTransactionData.Error (template-id-not-found: %zu) to client id=%zu\n",
         //         msg.m_template_id, client.m_id);
-        LogPrintf("Send 0x75 RequestTransactionData.Error (template-id-not-found: %zu) to client id=%zu\n",
+        LogPrint(BCLog::SV2, "Send 0x75 RequestTransactionData.Error (template-id-not-found: %zu) to client id=%zu\n",
                 msg.m_template_id, client.m_id);
         client.m_send_messages.emplace_back(request_tx_data_error);
     }
@@ -639,7 +550,7 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
 void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 {
-        LogPrintf("SubmitSolution version=%d, timestamp=%d, nonce=%d\n",
+        LogPrint(BCLog::SV2, "SubmitSolution version=%d, timestamp=%d, nonce=%d\n",
             solution.m_version,
             solution.m_header_timestamp,
             solution.m_header_nonce
@@ -655,7 +566,7 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             LOCKMt(m_tp_mutex);
             auto cached_block_template = m_block_template_cache.find(solution.m_template_id);
             if (cached_block_template == m_block_template_cache.end()) {
-                LogPrintf("Template with id=%lu is no longer in cache\n",
+                LogPrint(BCLog::SV2, "Template with id=%lu is no longer in cache\n",
                     solution.m_template_id);
                 return;
             }
@@ -663,7 +574,7 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         }
 
         if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
-            LogPrintf("ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
+            LogPrint(BCLog::SV2, "ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
         }
 }
 
@@ -675,7 +586,7 @@ void Sv2TemplateProvider::CoinbaseOutputDataSize(Sv2Client& client, node::Sv2Coi
     if (max_additional_size > MAX_BLOCK_WEIGHT) {
         //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received impossible CoinbaseOutputDataSize from client id=%zu: %d\n",
                         //client.m_id, max_additional_size);
-        LogPrintf("Received impossible CoinbaseOutputDataSize from client id=%zu: %d\n",
+        LogPrint(BCLog::SV2, "Received impossible CoinbaseOutputDataSize from client id=%zu: %d\n",
                         client.m_id, max_additional_size);
         client.m_disconnect_flag = true;
         return;
@@ -690,7 +601,7 @@ void Sv2TemplateProvider::CoinbaseOutputDataSize(Sv2Client& client, node::Sv2Coi
         LOCKMt(m_tp_mutex);
         Amount dummy_last_fees;
         if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
-            LogPrintf("Disconnecting client id=%zu\n", client.m_id);
+            LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: CoinbaseOutputDataSize exceeds limit\n", client.m_id);
             client.m_disconnect_flag = true;
         }
         client.m_initial_work_sent = true;
@@ -703,19 +614,19 @@ void Sv2TemplateProvider::SetupCpmmection(Sv2Client& client
         , const uint8_t subprotocol
         , const uint16_t optional_features)
 {
-    LogPrintf("start SetupCpmmection\n");
+    LogPrint(BCLog::SV2, "start SetupCpmmection\n");
     // Disconnect a client that connects on the wrong subprotocol.
     if (setup_conn.m_protocol != subprotocol) {
         node::Sv2SetupConnectionErrorMsg setup_conn_err{setup_conn.m_flags, std::string{"unsupported-protocol"}};
 
         // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x02 SetupConnectionError to client id=%zu\n",
         //               client.m_id);
-        LogPrintf("Send 0x02 SetupConnectionError to client id=%zu\n",
+        LogPrint(BCLog::SV2, "Send 0x02 SetupConnectionError to client id=%zu\n",
                         client.m_id);
         client.m_send_messages.emplace_back(setup_conn_err);
 
         client.m_disconnect_flag = true;
-        LogPrintf("end SetupCpmmection line:%d\n",__LINE__);
+        LogPrint(BCLog::SV2, "end SetupCpmmection line:%d\n", __LINE__);
         return;
     }
 
@@ -724,26 +635,26 @@ void Sv2TemplateProvider::SetupCpmmection(Sv2Client& client
         node::Sv2SetupConnectionErrorMsg setup_conn_err{setup_conn.m_flags, std::string{"protocol-version-mismatch"}};
         // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x02 SetupConnection.Error to client id=%zu\n",
         //               client.m_id);
-        LogPrintf("Send 0x02 SetupConnection.Error to client id=%zu\n",
+        LogPrint(BCLog::SV2, "Send 0x02 SetupConnection.Error to client id=%zu\n",
                         client.m_id);
         client.m_send_messages.emplace_back(setup_conn_err);
 
         // LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received a connection from client id=%zu with incompatible protocol_versions: min_version: %d, max_version: %d\n",
         //               client.m_id, setup_conn.m_min_version, setup_conn.m_max_version);
-        LogPrintf("Received a connection from client id=%zu with incompatible protocol_versions: min_version: %d, max_version: %d\n",
+        LogPrint(BCLog::SV2, "Received a connection from client id=%zu with incompatible protocol_versions: min_version: %d, max_version: %d\n",
                         client.m_id, setup_conn.m_min_version, setup_conn.m_max_version);
         client.m_disconnect_flag = true;
-        LogPrintf("end SetupCpmmection line:%d\n",__LINE__);
+        LogPrint(BCLog::SV2, "end SetupCpmmection line:%d\n",__LINE__);
         return;
     }
 
     // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Send 0x01 SetupConnection.Success to client id=%zu\n",
     //               client.m_id);
-    LogPrintf("Send 0x01 SetupConnection.Success to client id=%zu\n",
+    LogPrint(BCLog::SV2, "Send 0x01 SetupConnection.Success to client id=%zu\n",
                     client.m_id);
     node::Sv2SetupConnectionSuccessMsg setup_success{protocol_version, optional_features};
     client.m_send_messages.emplace_back(setup_success);
 
     client.m_setup_connection_confirmed = true;
-    LogPrintf("end SetupCpmmection m_setup_connection_confirmed:%d\n",client.m_setup_connection_confirmed);
+    LogPrint(BCLog::SV2, "end SetupCpmmection m_setup_connection_confirmed:%d\n",client.m_setup_connection_confirmed);
 }
