@@ -25,6 +25,7 @@
 #include "mining/journal_builder.h"
 #include "mining/journaling_block_assembler.h"
 #include "mining/legacy.h"
+#include "mining/mining.h"
 #include "net/net.h"
 #include "net/net_processing.h"
 #include "net/netbase.h"
@@ -2928,13 +2929,12 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
 
     if (gArgs.GetBoolArg("-sv2", false)) {
         assert(!NodeContext::GetInstance().sv2_template_provider);
-        //NodeContext::GetInstance().mining = nullopt;
-        //assert(NodeContext::GetInstance().mining);
+        NodeContext::GetInstance().mining = MakeMining(NodeContext::GetInstance(), config);
+        assert(NodeContext::GetInstance().mining);
 
         Sv2TemplateProviderOptions options{};
 
-        //NodeContext::GetInstance().sv2_template_provider = std::make_unique<Sv2TemplateProvider>(config, mempool);
-        NodeContext::GetInstance().sv2_template_provider = 
+        NodeContext::GetInstance().sv2_template_provider =
             std::make_unique<Sv2TemplateProvider>(config, *NodeContext::GetInstance().mining, mempool);
 
         const std::string sv2_port_arg = gArgs.GetArg("-sv2port", "");

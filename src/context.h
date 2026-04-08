@@ -10,9 +10,15 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
+#include "sv2_template_provider.h"
+#include "txmempool.h"
+
 class Mining;
+class Sv2TemplateProvider;
+class CTxMemPool;
 
 //! NodeContext struct containing references to chain state and connection
 //! state.

@@ -1,60 +1,121 @@
 #include "mining.h"
+#include "assembler.h"
 #include "context.h"
+#include "factory.h"
+#include "consensus/merkle.h"
+#include "consensus/validation.h"
 #include "validation.h"
 #include "util/check.h"
+
+class BlockTemplateImpl : public BlockTemplate
+{
+public:
+    explicit BlockTemplateImpl(std::unique_ptr<mining::CBlockTemplate> block_template, const Config& config)
+        : m_block_template(std::move(block_template)), m_config(config)
+    {
+        assert(m_block_template);
+    }
+
+    CBlockHeader getBlockHeader() override
+    {
+        return *m_block_template->GetBlockRef();
+    }
+
+    std::shared_ptr<CBlock> getBlockRef() override
+    {
+        return m_block_template->GetBlockRef();
+    }
+
+    CBlock getBlock() override
+    {
+        return *m_block_template->GetBlockRef();
+    }
+
+    std::vector<Amount> getTxFees() override
+    {
+        return m_block_template->vTxFees;
+    }
+
+    std::vector<int64_t> getTxSigops() override
+    {
+        return m_block_template->vTxSigOpsCount;
+    }
+
+    CTransactionRef getCoinbaseTx() override
+    {
+        return m_block_template->GetBlockRef()->vtx[0];
+    }
+
+    int getWitnessCommitmentIndex() override
+    {
+        return GetWitnessCommitmentIndex(m_block_template->GetBlockRef());
+    }
+
+    std::vector<uint256> getCoinbaseMerklePath() override
+    {
+        return BlockMerkleBranch(*m_block_template->GetBlockRef(), 0);
+    }
+
+    bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
+    {
+        auto block = m_block_template->GetBlockRef();
+        if (block->vtx.empty()) {
+            block->vtx.push_back(std::move(coinbase));
+        } else {
+            block->vtx[0] = std::move(coinbase);
+        }
+        block->nVersion = version;
+        block->nTime = timestamp;
+        block->nNonce = nonce;
+        block->hashMerkleRoot = BlockMerkleRoot(*block);
+        return ProcessNewBlock(m_config, block, true, nullptr);
+    }
+
+private:
+    const std::unique_ptr<mining::CBlockTemplate> m_block_template;
+    const Config& m_config;
+};
 
 class MinerImpl : public Mining
 {
 public:
-    explicit MinerImpl(NodeContext& node) : m_node(node) {}
+    explicit MinerImpl(NodeContext& node, const Config& config) : m_node(node), m_config(config) {}
 
-    // bool isTestChain() override
-    // {
-    //     return chainman().GetParams().IsTestChain();
-    // }
-
-    // bool isInitialBlockDownload() override
-    // {
-    //     return chainman().IsInitialBlockDownload();
-    // }
-
-    std::optional<uint256> getTipHash() override
+    std::optional<BlockRef> getTip() override
     {
         LOCK(::cs_main);
         CBlockIndex* tip{chainActive.Tip()};
-        if (!tip) return {};
-        return tip->GetBlockHash();
+        if (!tip) return std::nullopt;
+        return BlockRef{tip->GetBlockHash(), tip->nHeight};
     }
 
-    std::pair<uint256, int> waitTipChanged(MillisecondsDouble timeout) override
+    std::optional<BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout) override
     {
-        uint256 previous_hash{WITH_LOCK(::cs_main, return chainActive.Tip()->GetBlockHash();)};
-
         auto deadline = std::chrono::steady_clock::now() + timeout;
         {
             WAIT_LOCKMt(g_best_block_mutex, lock);
-            while (/*!chainman().m_interrupt &&*/ std::chrono::steady_clock::now() < deadline) {
+            while (std::chrono::steady_clock::now() < deadline) {
                 auto check_time = std::chrono::steady_clock::now() + std::min(timeout, MillisecondsDouble(1000));
                 g_best_block_cv.wait_until(lock, check_time);
-                if (g_best_block != previous_hash) break;
-                // Obtaining the height here using chainActive.Tip()->nHeight
-                // would result in a deadlock, because UpdateTip requires holding cs_main.
+                if (g_best_block != current_tip) break;
             }
         }
         LOCK(::cs_main);
-        return std::make_pair(chainActive.Tip()->GetBlockHash(), chainActive.Tip()->nHeight);
+        CBlockIndex* tip{chainActive.Tip()};
+        if (!tip) return std::nullopt;
+        return BlockRef{tip->GetBlockHash(), tip->nHeight};
     }
 
     bool waitFeesChanged(MillisecondsDouble timeout, uint256 tip, Amount fee_delta, Amount& fees_before, bool& tip_changed) override
     {
-        Assume(getTipHash());
+        Assume(getTip());
         unsigned int last_mempool_update{context()->mempool->GetTransactionsUpdated()};
 
         auto deadline = std::chrono::steady_clock::now() + timeout;
         {
-            while (/*!chainman().m_interrupt &&*/ std::chrono::steady_clock::now() < deadline) {
+            while (std::chrono::steady_clock::now() < deadline) {
                 std::this_thread::sleep_for(std::min(timeout, MillisecondsDouble(100)));
-                if (getTipHash().value() != tip) {
+                if (getTip()->hash != tip) {
                     tip_changed = true;
                     return false;
                 }
@@ -67,37 +128,41 @@ public:
         return false;
     }
 
-    // bool processNewBlock(const std::shared_ptr<const CBlock>& block, bool* new_block) override
-    // {
-    //     return chainman().ProcessNewBlock(block, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/new_block);
-    // }
+    std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key) override
+    {
+        if(!mining::g_miningFactory) {
+            return nullptr;
+        }
+        CBlockIndex* pindexPrev = nullptr;
+        auto pblocktemplate = mining::g_miningFactory->GetAssembler()->CreateNewBlock(script_pub_key, pindexPrev);
+        if (!pblocktemplate) {
+            return nullptr;
+        }
+        return std::make_unique<BlockTemplateImpl>(std::move(pblocktemplate), m_config);
+    }
 
-    // unsigned int getTransactionsUpdated() override
-    // {
-    //     return context()->mempool->GetTransactionsUpdated();
-    // }
-
-    // bool testBlockValidity(const CBlock& block, bool check_merkle_root, BlockValidationState& state) override
-    // {
-    //     LOCK(cs_main);
-    //     CBlockIndex* tip{chainActive.Tip()};
-    //     // Fail if the tip updated before the lock was taken
-    //     if (block.hashPrevBlock != tip->GetBlockHash()) {
-    //         state.Error("Block does not connect to current chain tip.");
-    //         return false;
-    //     }
-
-    //     return TestBlockValidity(state, chainman().GetParams(), chainman().ActiveChainstate(), block, tip, /*fCheckPOW=*/false, check_merkle_root);
-    // }
-
-    // std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key, const BlockCreateOptions& options) override
-    // {
-    //     BlockAssembler::Options assemble_options{options};
-    //     ApplyArgsManOptions(*Assert(m_node.args), assemble_options);
-    //     return std::make_unique<BlockTemplateImpl>(BlockAssembler{chainman().ActiveChainstate(), context()->mempool.get(), assemble_options}.CreateNewBlock(script_pub_key), m_node);
-    // }
+    bool checkBlock(const CBlock& block, const BlockCheckOptions& options, std::string& reason, std::string& debug) override
+    {
+        LOCK(::cs_main);
+        CBlockIndex* tip{chainActive.Tip()};
+        if (block.hashPrevBlock != tip->GetBlockHash()) {
+            reason = "bad-prevblk";
+            return false;
+        }
+        CValidationState state;
+        BlockValidationOptions validationOptions{options.check_pow, options.check_merkle_root};
+        bool res = TestBlockValidity(m_config, state, block, tip, validationOptions);
+        reason = state.GetRejectReason();
+        debug = state.GetDebugMessage();
+        return res;
+    }
 
     NodeContext* context() override { return &m_node; }
-    //ChainstateManager& chainman() { return *Assert(m_node.chainman); }
     NodeContext& m_node;
+    const Config& m_config;
 };
+
+std::unique_ptr<Mining> MakeMining(NodeContext& node, const Config& config)
+{
+    return std::make_unique<MinerImpl>(node, config);
+}

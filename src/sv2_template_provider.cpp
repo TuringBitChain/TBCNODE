@@ -31,9 +31,6 @@ using node::Sv2RequestTransactionDataMsg;
 using node::Sv2RequestTransactionDataSuccessMsg;
 using node::Sv2RequestTransactionDataErrorMsg;
 using node::Sv2SubmitSolutionMsg;
-using mining::CBlockTemplate;
-
-static std::atomic<bool> first_temp_msg_send_flag(false);
 
 Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemPool& mempool) 
     : m_config{config}, m_mining{mining}, m_mempool{mempool}
@@ -327,56 +324,40 @@ void Sv2TemplateProvider::DisconnectFlagged()
 
 void Sv2TemplateProvider::ThreadSv2Handler()
 {
-    auto waitTipChanged = [&](Mining::MillisecondsDouble timeout){
-        uint256 previous_hash{WITH_LOCK(::cs_main, return chainActive.Tip()->GetBlockHash();)};
-
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        {
-            WAIT_LOCKMt(g_best_block_mutex, lock);
-            while (/*!chainman().m_interrupt &&*/ std::chrono::steady_clock::now() < deadline) {
-                auto check_time = std::chrono::steady_clock::now() + std::min(timeout, Mining::MillisecondsDouble(1000));
-                g_best_block_cv.wait_until(lock, check_time);
-                if (uint256() != g_best_block && g_best_block != previous_hash) {
-                    break;
-                }
-                // Obtaining the height here using chainActive.Tip()->nHeight
-                // would result in a deadlock, because UpdateTip requires holding cs_main.
-            }
-        }
-        LOCK(::cs_main);
-        return std::make_pair(chainActive.Tip()->GetBlockHash(), chainActive.Tip()->nHeight);
-    };
-
     while (!m_flag_interrupt_sv2) {
-        if(!first_temp_msg_send_flag) {
-            m_connman->ForEachClient([this](Sv2Client& client) {
-                if (!client.m_coinbase_output_data_size_recv) {
-                    return;
-                }
+        m_connman->ForEachClient([this](Sv2Client& client) {
+            if (!client.m_coinbase_output_data_size_recv) {
+                return;
+            }
+            if (client.m_initial_work_sent) {
+                return;
+            }
 
-                LOCKMt(m_tp_mutex);
-                Amount dummy_last_fees;
-                if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
-                    // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
-                    //                 client.m_id);
-                    LogPrintf("Disconnecting client id=%zu\n",
-                                    client.m_id);
-                    client.m_disconnect_flag = true;
-                }
-                first_temp_msg_send_flag = true;
-            });
-        }
+            LOCKMt(m_tp_mutex);
+            Amount dummy_last_fees;
+            if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
+                // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
+                //                 client.m_id);
+                LogPrintf("Disconnecting client id=%zu\n",
+                                client.m_id);
+                client.m_disconnect_flag = true;
+            } else {
+                client.m_initial_work_sent = true;
+            }
+        });
 
-        if(!first_temp_msg_send_flag){
-            continue;
-        }
+        auto current_tip = m_mining.getTip();
+        if (!current_tip) break;
 
-        auto tip{waitTipChanged(std::chrono::duration_cast<std::chrono::milliseconds>(m_options.fee_check_interval))};
+        auto timeout = std::chrono::duration_cast<Mining::MillisecondsDouble>(
+            std::chrono::milliseconds(m_options.fee_check_interval));
+        auto tip = m_mining.waitTipChanged(current_tip->hash, timeout);
+        if (!tip) break;
 
-        bool best_block_changed{WITH_LOCK(m_tp_mutex, return m_best_prev_hash != tip.first;)};
+        bool best_block_changed{WITH_LOCK(m_tp_mutex, return m_best_prev_hash != tip->hash;)};
         {
             LOCKMt(m_tp_mutex);
-            m_best_prev_hash = tip.first;
+            m_best_prev_hash = tip->hash;
             m_last_block_time = GetTime<std::chrono::seconds>();
             m_template_last_update = GetTime<std::chrono::seconds>();
         }
@@ -496,29 +477,19 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
 
     const auto time_start{std::chrono::steady_clock::now()};
 
-    static CBlockIndex *pindexPrev;
-    static int64_t nStart;
-    static std::unique_ptr<CBlockTemplate> pblocktemplate{nullptr};
-
-    // Clear pindexPrev so future calls make a new block, despite any
-    // failures from here on
-    pindexPrev = nullptr;
-    nStart = GetTime();
+    CBlockIndex *pindexPrev = nullptr;
+    int64_t nStart = GetTime();
 
     // Create new block
-    if(!mining::g_miningFactory) {
-        LogPrintf("No mining factory available");
-        return false;
-    }
     CScript scriptDummy = CScript() << OP_TRUE;
-    pblocktemplate = mining::g_miningFactory->GetAssembler()->CreateNewBlock(scriptDummy, pindexPrev);
+    std::unique_ptr<BlockTemplate> pblocktemplate = m_mining.createNewBlock(scriptDummy);
     if (!pblocktemplate) {
-        LogPrintf("Out of memory");
+        LogPrintf("Out of memory or no mining factory available");
         return false;
     }
 
     // pointer for convenience
-    CBlockRef blockRef = pblocktemplate->GetBlockRef();
+    CBlockRef blockRef = pblocktemplate->getBlockRef();
     CBlock *pblock = blockRef.get();
 
     // Update nTime
@@ -529,8 +500,8 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
 
     //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Assemble template: %.2fms\n",
         //Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
-    Sv2NewTemplateMsg new_template{pblocktemplate->GetBlockRef(), m_template_id, future_template};
-    Sv2SetNewPrevHashMsg set_new_prev_hash{pblocktemplate->GetBlockRef(), m_template_id};
+    Sv2NewTemplateMsg new_template{*pblocktemplate, m_template_id, future_template};
+    Sv2SetNewPrevHashMsg set_new_prev_hash{*pblocktemplate, m_template_id};
 
     newWorkSet = { new_template, std::move(pblocktemplate), set_new_prev_hash};
     return true;
@@ -547,9 +518,9 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
     uint256 prev_hash = m_best_prev_hash;
 
     auto predicate = [prev_hash](const auto& it){
-        if (it.second->GetBlockRef()->hashPrevBlock != prev_hash) {
+        if (it.second->getBlockRef()->hashPrevBlock != prev_hash) {
             LogPrintf("PruneBlockTemplateCache prevHash:%s\n",
-                HexStr(bsv::span(it.second->GetBlockRef()->hashPrevBlock)));
+                HexStr(bsv::span(it.second->getBlockRef()->hashPrevBlock)));
             return true;
         }
         return false;
@@ -584,12 +555,12 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     if (m_best_prev_hash == uint256{}) {
         // g_best_block is set UpdateTip(), so will be 0 when the node starts
         // and no new blocks have arrived.
-        m_best_prev_hash = new_work_set.block_template->GetBlockRef()->hashPrevBlock;
+        m_best_prev_hash = new_work_set.block_template->getBlockRef()->hashPrevBlock;
     }
 
     // Do not submit new template if the fee increase is insufficient:
     Amount fees;
-    for (Amount fee : new_work_set.block_template->vTxFees) {
+    for (Amount fee : new_work_set.block_template->getTxFees()) {
         // Skip coinbase
         if (fee < Amount{}) continue;
         fees += fee;
@@ -606,7 +577,7 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         client.m_send_messages.emplace_back(new_work_set.prev_hash);
     }
 
-    auto block = (new_work_set.block_template)->GetBlockRef().get();
+    auto block = (new_work_set.block_template)->getBlockRef().get();
     bool fNegative;
     bool fOverflow;
     arith_uint256 bnTarget;
@@ -617,26 +588,12 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     return true;
 }
 
-Sock::EventsPerSock Sv2TemplateProvider::GenerateWaitSockets(const std::shared_ptr<Sock>& listen_socket, const Clients& sv2_clients) const
-{
-    Sock::EventsPerSock events_per_sock;
-    events_per_sock.emplace(listen_socket, Sock::Events(Sock::RECV));
-
-    for (const auto& client : sv2_clients) {
-        if (!client->m_disconnect_flag && client->m_sock) {
-            events_per_sock.emplace(client->m_sock, Sock::Events{Sock::RECV | Sock::ERR});
-        }
-    }
-
-    return events_per_sock;
-}
-
 void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2RequestTransactionDataMsg msg)
 {
     LOCKMt(m_tp_mutex);
     auto cached_block = m_block_template_cache.find(msg.m_template_id);
     if (cached_block != m_block_template_cache.end()) {
-        auto block = (*cached_block->second).GetBlockRef();
+        auto block = (*cached_block->second).getBlockRef();
 
         if (block->hashPrevBlock != m_best_prev_hash) {
             //LogTrace(BCLog::SV2, "Template id=%lu prevhash=%s, tip=%s\n", msg.m_template_id, HexStr(block.hashPrevBlock), HexStr(m_best_prev_hash));
@@ -682,18 +639,15 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
 void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 {
-        // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "version=%d, timestamp=%d, nonce=%d\n",
-        //     solution.m_version,
-        //     solution.m_header_timestamp,
-        //     solution.m_header_nonce
-        // );
         LogPrintf("SubmitSolution version=%d, timestamp=%d, nonce=%d\n",
             solution.m_version,
             solution.m_header_timestamp,
             solution.m_header_nonce
         );
-        
-        CBlockRef block_ptr;
+
+        auto cb = MakeTransactionRef(std::move(solution.m_coinbase_tx));
+
+        BlockTemplate* block_template{nullptr};
         {
             // We can't hold this lock until submitSolution() because it's
             // possible that the new block arrives via the p2p network at the
@@ -701,48 +655,15 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             LOCKMt(m_tp_mutex);
             auto cached_block_template = m_block_template_cache.find(solution.m_template_id);
             if (cached_block_template == m_block_template_cache.end()) {
-                // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Template with id=%lu is no longer in cache\n",
-                // solution.m_template_id);
                 LogPrintf("Template with id=%lu is no longer in cache\n",
                     solution.m_template_id);
                 return;
             }
-            /**
-             * It's important to not delete this template from the cache in case
-             * another solution is submitted for the same template later.
-             *
-             * This is very unlikely on mainnet, but not impossible. Many mining
-             * devices may be working on the default pool template at the same
-             * time and they may not update the new tip right away.
-             *
-             * The node will never broadcast the second block. It's marked
-             * valid-headers in getchaintips. However a node or pool operator
-             * may wish to manually inspect the block or keep it as a souvenir.
-             * Additionally, because in Stratum v2 the block solution is sent
-             * to both the pool node and the template provider node, it's
-             * possibly they arrive out of order and two competing blocks propagate
-             * on the network. In case of a reorg the node will be able to switch
-             * faster because it already has (but not fully validated) the block.
-             */
-            block_ptr = cached_block_template->second->GetBlockRef();
+            block_template = cached_block_template->second.get();
         }
 
-        auto cb = MakeTransactionRef(std::move(solution.m_coinbase_tx));
-
-        if (block_ptr->vtx.size() == 0) {
-            block_ptr->vtx.push_back(cb);
-        } else {
-            block_ptr->vtx[0] = cb;
-        }
-
-        block_ptr->nVersion = solution.m_version;
-        block_ptr->nTime    = solution.m_header_timestamp;
-        block_ptr->nNonce   = solution.m_header_nonce;
-
-        block_ptr->hashMerkleRoot = BlockMerkleRoot(*block_ptr.get());
-
-        if (!ProcessNewBlock(m_config, block_ptr, true, nullptr)) {
-            LogPrintf("ProcessNewBlock failed for block with prevHash:%s\n", HexStr(block_ptr->hashPrevBlock));
+        if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
+            LogPrintf("ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
         }
 }
 
@@ -761,6 +682,19 @@ void Sv2TemplateProvider::CoinbaseOutputDataSize(Sv2Client& client, node::Sv2Coi
     }
 
     client.m_coinbase_tx_outputs_size = coinbase_tx_outputs_size.m_coinbase_output_max_additional_size;
+
+    // Send initial work once the client is ready, Without this, a newly connected
+    // (or reconnected) client may have to wait for a new tip/interval tick before
+    // receiving its first template.
+    if(!client.m_initial_work_sent && !client.m_disconnect_flag) {
+        LOCKMt(m_tp_mutex);
+        Amount dummy_last_fees;
+        if (!SendWork(client, /*send_new_prevhash=*/true, dummy_last_fees)) {
+            LogPrintf("Disconnecting client id=%zu\n", client.m_id);
+            client.m_disconnect_flag = true;
+        }
+        client.m_initial_work_sent = true;
+    }
 }
 
 void Sv2TemplateProvider::SetupCpmmection(Sv2Client& client

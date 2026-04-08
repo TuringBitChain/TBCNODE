@@ -12,13 +12,61 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
-struct NodeContext;
+class Config;
+class NodeContext;
 
 class BlockValidationState;
 class CBlock;
 class CBlockHeader;
 class CScript;
+
+//! Reference to a block with hash and height
+struct BlockRef {
+    uint256 hash;
+    int height;
+};
+
+//! Options for checkBlock
+struct BlockCheckOptions {
+    bool check_merkle_root{true};
+    bool check_pow{true};
+};
+
+//! Block template interface
+class BlockTemplate
+{
+public:
+    virtual ~BlockTemplate() = default;
+
+    virtual CBlockHeader getBlockHeader() = 0;
+    virtual std::shared_ptr<CBlock> getBlockRef() = 0;
+    // Block contains a coinbase transaction
+    virtual CBlock getBlock() = 0;
+
+    // Fees per transaction, not including coinbase transaction.
+    virtual std::vector<Amount> getTxFees() = 0;
+    // Sigop cost per transaction, not including coinbase transaction.
+    virtual std::vector<int64_t> getTxSigops() = 0;
+
+    virtual CTransactionRef getCoinbaseTx() = 0;
+    virtual int getWitnessCommitmentIndex() = 0;
+
+    /**
+     * Compute merkle path to the coinbase transaction
+     *
+     * @return merkle path ordered from the deepest
+     */
+    virtual std::vector<uint256> getCoinbaseMerklePath() = 0;
+
+    /**
+     * Construct and broadcast the block.
+     *
+     * @returns if the block was processed, independent of block validity
+     */
+    virtual bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) = 0;
+};
 
 //! Interface giving clients (RPC, Stratum v2 Template Provider in the future)
 //! ability to create block templates.
@@ -29,31 +77,28 @@ public:
 
     virtual ~Mining() = default;
 
-    //! If this chain is exclusively used for testing
-    //virtual bool isTestChain() = 0;
-
-    //! Returns whether IBD is still in progress.
-    //virtual bool isInitialBlockDownload() = 0;
-
-    //! Returns the hash for the tip of this chain
-    virtual std::optional<uint256> getTipHash() = 0;
+    //! Returns the hash and height for the tip of this chain
+    virtual std::optional<BlockRef> getTip() = 0;
 
     /**
-     * Waits for the tip to change
+     * Waits for the connected tip to change.
      *
-     * @param[in] timeout how long to wait for a new tip
-     * @returns hash and height for the new tip or the previous tip if
-     *          interrupted or after the timeout
+     * @param[in] current_tip block hash of the current chain tip. Function waits
+     *                        for the chain tip to differ from this.
+     * @param[in] timeout     how long to wait for a new tip (default is forever)
+     *
+     * @retval BlockRef hash and height of the current chain tip after this call.
+     * @retval std::nullopt if the node is shut down.
      */
-    virtual std::pair<uint256, int> waitTipChanged(MillisecondsDouble timeout = MillisecondsDouble::max()) = 0;
+    virtual std::optional<BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout = MillisecondsDouble::max()) = 0;
 
     /**
      * Waits for fees in the next block to rise, a new tip or the timeout.
      *
-     * @param[in] timeout how long to wait for a fee increase
-     * @param[in] tip block hash that the most recent template builds on
-     * @param[in] fee_delta currently ignored: how much total fees in the next block should rise.
-     * @param[in,out] fees_before currently ignored: fees for the most recent template
+     * @param[in] timeout     how long to wait for a fee increase
+     * @param[in] tip         block hash that the most recent template builds on
+     * @param[in] fee_delta   how much total fees in the next block should rise.
+     * @param[in,out] fees_before fees for the most recent template
      * @param[out] tip_changed whether a new tip arrived during the wait
      *
      * @returns true if fees increased, false if a new tip arrives or the timeout occurs
@@ -64,35 +109,22 @@ public:
      * Construct a new block template
      *
      * @param[in] script_pub_key the coinbase output
-     * @param[in] options options for creating the block
      * @returns a block template
      */
-    //virtual std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key, const node::BlockCreateOptions& options={}) = 0;
+    virtual std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key) = 0;
 
     /**
-     * Processes new block. A valid new block is automatically relayed to peers.
+     * Checks if a given block is valid.
      *
-     * @param[in]   block The block we want to process.
-     * @param[out]  new_block A boolean which is set to indicate if the block was first received via this call
-     * @returns     If the block was processed, independently of block validity
+     * @param[in] block       the block to check
+     * @param[in] options     verification options: the proof-of-work check can be
+     *                        skipped in order to verify a template generated by
+     *                        external software.
+     * @param[out] reason     failure reason (BIP22)
+     * @param[out] debug      more detailed rejection reason
+     * @returns               whether the block is valid
      */
-    //virtual bool processNewBlock(const std::shared_ptr<const CBlock>& block, bool* new_block) = 0;
-
-    //! Return the number of transaction updates in the mempool,
-    //! used to decide whether to make a new block template.
-    //virtual unsigned int getTransactionsUpdated() = 0;
-
-    /**
-     * Check a block is completely valid from start to finish.
-     * Only works on top of our current best block.
-     * Does not check proof-of-work.
-     *
-     * @param[in] block the block to validate
-     * @param[in] check_merkle_root call CheckMerkleRoot()
-     * @param[out] state details of why a block failed to validate
-     * @returns false if it does not build on the current tip, or any of the checks fail
-     */
-    //virtual bool testBlockValidity(const CBlock& block, bool check_merkle_root, BlockValidationState& state) = 0;
+    virtual bool checkBlock(const CBlock& block, const BlockCheckOptions& options, std::string& reason, std::string& debug) = 0;
 
     //! Get internal node context. Useful for RPC and testing,
     //! but not accessible across processes.
@@ -100,6 +132,6 @@ public:
 };
 
 //! Return implementation of Mining interface.
-std::unique_ptr<Mining> MakeMining(NodeContext& node);
+std::unique_ptr<Mining> MakeMining(NodeContext& node, const Config& config);
 
 #endif // BITCOIN_INTERFACES_MINING_H

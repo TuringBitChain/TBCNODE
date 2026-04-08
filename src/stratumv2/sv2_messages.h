@@ -19,6 +19,7 @@
 
 #include "net/net_message.h"
 
+class BlockTemplate;
 class CBlock;
 struct CMutableTransaction;
 class CTxOut;
@@ -302,7 +303,7 @@ struct Sv2NewTemplateMsg
     std::vector<uint256> m_merkle_path;
 
     Sv2NewTemplateMsg() = default;
-    explicit Sv2NewTemplateMsg(std::shared_ptr<CBlock> block, uint64_t template_id, bool future_template);
+    explicit Sv2NewTemplateMsg(BlockTemplate& block_template, uint64_t template_id, bool future_template);
 
     template <typename Stream>
     void Serialize(Stream& s) const
@@ -376,7 +377,7 @@ struct Sv2SetNewPrevHashMsg
     uint256 m_target;
 
     Sv2SetNewPrevHashMsg() = default;
-    explicit Sv2SetNewPrevHashMsg(std::shared_ptr<CBlock>  block, uint64_t template_id);
+    explicit Sv2SetNewPrevHashMsg(BlockTemplate& block_template, uint64_t template_id);
 
     template <typename Stream>
     void Serialize(Stream& s) const

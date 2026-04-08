@@ -268,6 +268,7 @@ libbitcoin_server_a_SOURCES = \
   mining/journal_change_set.cpp \
   mining/journaling_block_assembler.cpp \
   mining/legacy.cpp \
+  mining/minerimpl.cpp \
   net/association.cpp \
   net/net.cpp \
   net/net_message.cpp \

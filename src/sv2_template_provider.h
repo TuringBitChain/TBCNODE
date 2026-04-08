@@ -132,7 +132,7 @@ private:
     /**
      * A cache that maps ids used in NewTemplate messages and its associated block template.
      */
-    using BlockTemplateCache = std::map<uint64_t, std::unique_ptr<mining::CBlockTemplate>>;
+    using BlockTemplateCache = std::map<uint64_t, std::unique_ptr<BlockTemplate>>;
     BlockTemplateCache m_block_template_cache GUARDED_BY(m_tp_mutex);
 
     /**
@@ -265,7 +265,7 @@ private:
     struct NewWorkSet
     {
         node::Sv2NewTemplateMsg new_template;
-        std::unique_ptr<mining::CBlockTemplate> block_template;
+        std::unique_ptr<BlockTemplate> block_template;
         node::Sv2SetNewPrevHashMsg prev_hash;
     };
 
@@ -281,11 +281,6 @@ private:
      * Sends the best NewTemplate and SetNewPrevHash to a client.
      */
     [[nodiscard]] bool SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
-
-    /**
-     * Generates the socket events for each Sv2Client socket and the main listening socket.
-     */
-    [[nodiscard]] Sock::EventsPerSock GenerateWaitSockets(const std::shared_ptr<Sock>& listen_socket, const Clients& sv2_clients) const;
 
     /**
      * Encrypt the header and message payload and send it.

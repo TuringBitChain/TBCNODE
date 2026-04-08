@@ -9,6 +9,7 @@
 #include <deque>
 #include <iostream>
 #include <consensus/merkle.h>
+#include "mining/mining.h"
 
 using namespace node;
 
@@ -63,42 +64,40 @@ std::vector<uint256> GetMerklePathForCoinbase(std::shared_ptr<CBlock>  block) {
     }
 }
 
-Sv2NewTemplateMsg::Sv2NewTemplateMsg(std::shared_ptr<CBlock>  block, uint64_t template_id, bool future_template)
+Sv2NewTemplateMsg::Sv2NewTemplateMsg(BlockTemplate& block_template, uint64_t template_id, bool future_template)
     : m_template_id{template_id}, m_future_template{future_template}
 {
+    auto block = block_template.getBlockRef();
     m_version = block->GetBlockHeader().nVersion;
 
-    const CTransactionRef coinbase_tx = block->vtx[0];
+    const CTransactionRef coinbase_tx = block_template.getCoinbaseTx();
     m_coinbase_tx_version = coinbase_tx->CURRENT_VERSION;
     m_coinbase_prefix = coinbase_tx->vin[0].scriptSig;
     m_coinbase_tx_input_sequence = coinbase_tx->vin[0].nSequence;
 
     // The coinbase nValue already contains the nFee + the Block Subsidy when built using CreateBlock().
-    m_coinbase_tx_value_remaining = static_cast<uint64_t>(block->vtx[0]->vout[0].nValue.GetSatoshis());
+    m_coinbase_tx_value_remaining = static_cast<uint64_t>(coinbase_tx->vout[0].nValue.GetSatoshis());
 
     m_coinbase_tx_outputs_count = 0;
-    int commitpos = GetWitnessCommitmentIndex(block);
+    int commitpos = block_template.getWitnessCommitmentIndex();
     if (commitpos != NO_WITNESS_COMMITMENT) {
         m_coinbase_tx_outputs_count = 1;
 
-        std::vector<CTxOut> coinbase_tx_outputs{block->vtx[0]->vout[commitpos]};
+        std::vector<CTxOut> coinbase_tx_outputs{coinbase_tx->vout[commitpos]};
         m_coinbase_tx_outputs = coinbase_tx_outputs;
     }
 
     m_coinbase_tx_locktime = coinbase_tx->nLockTime;
 
-    std::vector<uint256> merklepath = BlockMerkleBranch(*block.get(),0);;
-
-    for (const auto& hash : merklepath) {
-        m_merkle_path.push_back(hash);
-    }
-
+    m_merkle_path = block_template.getCoinbaseMerklePath();
 }
 
-Sv2SetNewPrevHashMsg::Sv2SetNewPrevHashMsg(std::shared_ptr<CBlock>  block, uint64_t template_id) : m_template_id{template_id}
+Sv2SetNewPrevHashMsg::Sv2SetNewPrevHashMsg(BlockTemplate& block_template, uint64_t template_id)
+    : m_template_id{template_id}
 {
-    m_prev_hash = block->hashPrevBlock;
-    m_header_timestamp = block->nTime;
-    m_nBits = block->nBits;
-    m_target = ArithToUint256(arith_uint256().SetCompact(block->nBits));
+    auto header = block_template.getBlockHeader();
+    m_prev_hash = header.hashPrevBlock;
+    m_header_timestamp = header.nTime;
+    m_nBits = header.nBits;
+    m_target = ArithToUint256(arith_uint256().SetCompact(header.nBits));
 }
