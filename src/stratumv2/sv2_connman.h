@@ -57,7 +57,7 @@ struct Sv2Client
     /**
      * Specific additional coinbase tx output size required for the client.
      */
-    unsigned int m_coinbase_tx_outputs_size;
+    unsigned int m_coinbase_tx_outputs_size{0};
 
     /**
      * Whether we have sent initial work (NewTemplate/SetNewPrevHash) after the

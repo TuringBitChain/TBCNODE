@@ -75,6 +75,12 @@ private:
      */
     static constexpr uint8_t TP_SUBPROTOCOL{0x02};
 
+    /**
+     * Maximum number of block templates retained in the cache.
+     * Each entry holds a full block (txs in memory). Prune oldest on overflow.
+     */
+    static constexpr size_t MAX_BLOCK_TEMPLATE_CACHE_SIZE{96};
+
     CKey m_static_key;
 
     std::optional<Sv2SignatureNoiseMessage> m_certificate;
@@ -84,11 +90,6 @@ private:
 
     /** Get name of file to store authority key */
     fs::path GetAuthorityKeyFile();
-
-    /**
-     * The main listening socket for new stratum v2 connections.
-     */
-    std::shared_ptr<Sock> m_listening_socket;
 
     /**
     * Minimum fee delta required before submitting an updated template.
@@ -132,7 +133,7 @@ private:
     /**
      * A cache that maps ids used in NewTemplate messages and its associated block template.
      */
-    using BlockTemplateCache = std::map<uint64_t, std::unique_ptr<BlockTemplate>>;
+    using BlockTemplateCache = std::map<uint64_t, std::shared_ptr<BlockTemplate>>;
     BlockTemplateCache m_block_template_cache GUARDED_BY(m_tp_mutex);
 
     /**
@@ -239,12 +240,6 @@ public:
 private:
     void Init(const Sv2TemplateProviderOptions& options);
 
-    /**
-     * Creates a socket and binds the port for new stratum v2 connections.
-     * @throws std::runtime_error if port is unable to bind.
-     */
-    [[nodiscard]] std::shared_ptr<Sock> BindListenPort(uint16_t port) const;
-
     void DisconnectFlagged() EXCLUSIVE_LOCKS_REQUIRED(m_clients_mutex);
 
     /**
@@ -265,7 +260,7 @@ private:
     struct NewWorkSet
     {
         node::Sv2NewTemplateMsg new_template;
-        std::unique_ptr<BlockTemplate> block_template;
+        std::shared_ptr<BlockTemplate> block_template;
         node::Sv2SetNewPrevHashMsg prev_hash;
     };
 

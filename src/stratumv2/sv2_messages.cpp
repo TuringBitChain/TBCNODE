@@ -6,63 +6,11 @@
 #include <primitives/transaction.h>
 #include <hash.h>
 #include <streams.h>
-#include <deque>
-#include <iostream>
 #include <consensus/merkle.h>
 #include "mining/mining.h"
 
 using namespace node;
 
-uint256 HashTwoTxIDs(const uint256& txid1, const uint256& txid2) {
-    HashWriter hasher{};
-    hasher << txid1 << txid2;
-    return hasher.GetHash();
-}
-std::vector<uint256> GetMerklePathForCoinbase(std::shared_ptr<CBlock>  block) {
-    auto size = block->vtx.size();
-    // If we have only the coinbase tx, we don't have a merkle path
-    if (size == 1) {
-        return {};
-    // If we have coinbase tx and another tx the path is the second node id
-    } else if (size == 2) {
-        std::vector<uint256> path;
-        path.push_back(block->vtx[1]->GetHash());
-        return path;
-    // Otherwise we calculate the merkle path
-    } else {
-        std::deque<uint256> id_list;
-        for (const auto& tx : block->vtx) {
-            id_list.push_back(tx->GetHash());
-        }
-        // Last id must be duplicated when txs are odds
-        if (size % 2 == 1) {
-            id_list.push_back(block->vtx[size - 1]->GetHash());
-        }
-
-        // Remove coinbase
-        id_list.pop_front();
-
-        std::vector<uint256> path;
-
-        // First path element is always the second tx
-        path.push_back(id_list.front());
-        id_list.pop_front();
-
-        while (!id_list.empty()) {
-            for (size_t i = 0; i < id_list.size() / 2; ++i) {
-                id_list[i] = HashTwoTxIDs(id_list[i * 2], id_list[i * 2 + 1]);
-            }
-            id_list.resize(id_list.size()/2);
-            path.push_back(id_list.front());
-            id_list.pop_front();
-            if (id_list.size() % 2 == 1) {
-                id_list.push_back(id_list[id_list.size() - 1]);
-            }
-        }
-
-        return path;
-    }
-}
 
 Sv2NewTemplateMsg::Sv2NewTemplateMsg(BlockTemplate& block_template, uint64_t template_id, bool future_template)
     : m_template_id{template_id}, m_future_template{future_template}
@@ -78,14 +26,9 @@ Sv2NewTemplateMsg::Sv2NewTemplateMsg(BlockTemplate& block_template, uint64_t tem
     // The coinbase nValue already contains the nFee + the Block Subsidy when built using CreateBlock().
     m_coinbase_tx_value_remaining = static_cast<uint64_t>(coinbase_tx->vout[0].nValue.GetSatoshis());
 
+    // TBCNODE has no SegWit: coinbase never carries a witness commitment output.
+    // The pool adds its own payout outputs to cover m_coinbase_tx_value_remaining.
     m_coinbase_tx_outputs_count = 0;
-    int commitpos = block_template.getWitnessCommitmentIndex();
-    if (commitpos != NO_WITNESS_COMMITMENT) {
-        m_coinbase_tx_outputs_count = 1;
-
-        std::vector<CTxOut> coinbase_tx_outputs{coinbase_tx->vout[commitpos]};
-        m_coinbase_tx_outputs = coinbase_tx_outputs;
-    }
 
     m_coinbase_tx_locktime = coinbase_tx->nLockTime;
 

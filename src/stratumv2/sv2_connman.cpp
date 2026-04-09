@@ -387,9 +387,10 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         break;
     }
     case Sv2MsgType::SUBMIT_SOLUTION: {
-        if (!client.m_setup_connection_confirmed && !client.m_coinbase_output_data_size_recv) {
+        if (!client.m_setup_connection_confirmed || !client.m_coinbase_output_data_size_recv) {
             client.m_disconnect_flag = true;
-            LogPrintf("m_coinbase_output_data_size_recv \n");
+            LogPrintf("SubmitSolution rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
+                client.m_setup_connection_confirmed, client.m_coinbase_output_data_size_recv);
             return;
         }
 
@@ -414,6 +415,13 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
     }
     case Sv2MsgType::REQUEST_TRANSACTION_DATA:
     {
+        if (!client.m_setup_connection_confirmed || !client.m_coinbase_output_data_size_recv) {
+            client.m_disconnect_flag = true;
+            LogPrintf("RequestTransactionData rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
+                client.m_setup_connection_confirmed, client.m_coinbase_output_data_size_recv);
+            return;
+        }
+
         node::Sv2RequestTransactionDataMsg request_tx_data;
 
         try {
