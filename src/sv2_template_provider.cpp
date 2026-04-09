@@ -40,11 +40,9 @@ Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemP
             LogPrint(BCLog::SV2,  "Error writing static key to %s\n", bitcoinfs::PathToString(GetStaticKeyFile()));
             // Continue, because this is not a critical failure.
         }
-        //LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Generated static key, saved to %s\n", bitcoinfs::PathToString(GetStaticKeyFile()));
     }
-    //LogPrintLevel(BCLog::SV2, BCLog::Level::Info, "Static key: %s\n", HexStr(m_static_key.GetPubKey()));
 
-   // Generate self signed certificate using (cached) authority key
+    // Generate self signed certificate using (cached) authority key
     // TODO: skip loading authoritity key if -sv2cert is used
 
     // Load authority key if cached
@@ -71,8 +69,6 @@ Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemP
     version_pubkey_bytes[1] = 0;
     XOnlyPubKey authority_pub_key = XOnlyPubKey(authority_key.GetPubKey());
     std::copy(authority_pub_key.begin(), authority_pub_key.end(), version_pubkey_bytes.begin() + 2);
-    //LogInfo("Template Provider authority key: %s\n", EncodeBase58Check(version_pubkey_bytes));
-    //LogTrace(BCLog::SV2, "Authority key: %s\n", HexStr(authority_pub_key));
 
     // Generate and sign certificate
     auto now{GetTime<std::chrono::seconds>()};
