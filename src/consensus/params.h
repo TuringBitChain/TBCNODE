@@ -11,7 +11,7 @@
 /** Default for -sv2interval **/
 static constexpr unsigned int DEFAULT_SV2_INTERVAL{1};
 /** Default for -sv2feedelta */
-static constexpr unsigned int DEFAULT_SV2_FEE_DELTA{0};
+static constexpr unsigned int DEFAULT_SV2_FEE_DELTA{1000};
 
 namespace Consensus {
 
