@@ -39,8 +39,7 @@ bool Sv2Connman::Start(Sv2EventsInterface* msgproc, std::string host, uint16_t p
         auto sock = BindListenPort(host, port);
         m_listening_socket = std::move(sock);
     } catch (const std::runtime_error& e) {
-        //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Template Provider failed to bind to port %d: %s\n", port, e.what());
-        LogPrintf("Template Provider failed to bind to port %d: %s\n", port, e.what());
+        LogPrintf("SV2 Template Provider failed to bind to port %d: %s\n", port, e.what());
         return false;
     }
 
@@ -81,7 +80,7 @@ std::shared_ptr<Sock> Sv2Connman::BindListenPort(std::string host, uint16_t port
     }
 
     //LogPrintLevel(BCLog::SV2, BCLog::Level::Info, "%s listening on %s:%d\n", SV2_PROTOCOL_NAMES.at(m_subprotocol), host, port);
-    LogPrintf("%s listening on %s:%d\n", SV2_PROTOCOL_NAMES.at(m_subprotocol), host, port);
+    LogPrint(BCLog::SV2, "%s listening on %s:%d\n", SV2_PROTOCOL_NAMES.at(m_subprotocol), host, port);
 
     return sock;
 }
@@ -130,7 +129,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                 size_t id{m_next_client_id++};
                 auto client = std::make_unique<Sv2Client>(id, std::move(sock), std::move(transport));
                 //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "New client id=%zu connected\n", client->m_id);
-                LogPrintf("New client id=%zu connected\n", client->m_id);
+                LogPrint(BCLog::SV2, "New client id=%zu connected\n", client->m_id);
                 m_sv2_clients.emplace_back(std::move(client));
             }
         }
@@ -151,7 +150,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                 //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Socket receive error, disconnecting client id=%zu\n",
                 // client->m_id);
                 // client->m_disconnect_flag = true;
-                LogPrintf("Socket receive error, disconnecting client id=%zu\n",
+                LogPrint(BCLog::SV2, "Socket receive error, disconnecting client id=%zu\n",
                     client->m_id);
                     client->m_disconnect_flag = true;
                 continue;
@@ -193,7 +192,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
 #endif
                     // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Send %d bytes to client id=%zu\n",
                     //               data.size() - total_sent, client->m_id);
-                    LogPrintf("new Send %d bytes to client id=%zu data size:%d message size:%d\n",
+                    LogPrint(BCLog::SV2, "new Send %d bytes to client id=%zu data size:%d message size:%d\n",
                                   data.size() - total_sent, client->m_id, data.size(),client->m_send_messages.size());
                     sent = client->m_sock->Send(data.data() + total_sent, data.size() - total_sent, flags);
                 }
@@ -211,7 +210,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                         if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS) {
                             // LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Socket send error for  client id=%zu: %s\n",
                             //               client->m_id, NetworkErrorString(nErr));
-                            LogPrintf("Socket send error for  client id=%zu: %s\n",
+                            LogPrint(BCLog::SV2, "Socket send error for  client id=%zu: %s\n",
                                           client->m_id, NetworkErrorString(nErr));
                             client->m_disconnect_flag = true;
                         }
@@ -231,13 +230,13 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                 const auto num_bytes_received = client->m_sock->Recv(bytes_received_buf, sizeof(bytes_received_buf), MSG_DONTWAIT);
                 // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Num bytes received from client id=%zu: %d\n",
                 //               client->m_id, num_bytes_received);
-                LogPrintf("Num bytes received from client id=%zu: %d\n",
+                LogPrint(BCLog::SV2, "Num bytes received from client id=%zu: %d\n",
                               client->m_id, num_bytes_received);
 
                 if (num_bytes_received <= 0) {
                     // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
                     //               client->m_id);
-                    LogPrintf("Disconnecting client id=%zu\n",
+                    LogPrint(BCLog::SV2, "Disconnecting client id=%zu\n",
                                   client->m_id);
                     client->m_disconnect_flag = true;
                     break;
@@ -253,7 +252,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                             // Serious transport problem
                             // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Transport problem, disconnecting client id=%zu\n",
                             //               client->m_id);
-                            LogPrintf("Transport problem, disconnecting client id=%zu\n",
+                            LogPrint(BCLog::SV2, "Transport problem, disconnecting client id=%zu\n",
                                           client->m_id);
                             client->m_disconnect_flag = true;
                             break;
@@ -271,7 +270,7 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                     }
                 } catch (const std::exception& e) {
                     //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received error when processing client id=%zu message: %s\n", client->m_id, e.what());
-                    LogPrintf("Received error when processing client id=%zu message: %s\n", client->m_id, e.what());
+                    LogPrint(BCLog::SV2, "Received error when processing client id=%zu message: %s\n", client->m_id, e.what());
                     client->m_disconnect_flag = true;
                 }
             }
@@ -323,12 +322,12 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
     //                std::format("{:x}", uint8_t(sv2_net_msg.m_msg_type)),
     //                HexStr(msg_type),
     //                node::SV2_MSG_NAMES.at(sv2_net_msg.m_msg_type), client.m_id);
-    LogPrintf("Received 0x%s %s from client id=%zu\n",
+    LogPrint(BCLog::SV2, "Received 0x%s %s from client id=%zu\n",
                 HexStr(bsv::span(msg_type)),
                 node::SV2_MSG_NAMES.at(sv2_net_msg.m_sv2_header.m_msg_type), 
                 client.m_id);
 
-    LogPrintf("m_msg:%s\n",HexStr(bsv::span(sv2_net_msg.m_msg)));
+    LogPrint(BCLog::SV2, "m_msg:%s\n",HexStr(bsv::span(sv2_net_msg.m_msg)));
     CDataStream ss(sv2_net_msg.m_msg, SER_NETWORK, PROTOCOL_VERSION);
 
     switch (sv2_net_msg.m_sv2_header.m_msg_type)
@@ -338,19 +337,19 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         if (client.m_setup_connection_confirmed) {
             // LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Client client id=%zu connection has already been confirmed\n",
             //               client.m_id);
-            LogPrintf("Client client id=%zu connection has already been confirmed\n",
+            LogPrint(BCLog::SV2, "Client client id=%zu connection has already been confirmed\n",
                           client.m_id);
             return;
         }
 
         node::Sv2SetupConnectionMsg setup_conn;
-        LogPrintf("DataStream ss size:%s\n",ss.size());
+        LogPrint(BCLog::SV2, "DataStream ss size:%s\n",ss.size());
         try {
             ss >> setup_conn;
         } catch (const std::exception& e) {
             // LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received invalid SetupConnection message from client id=%zu: %s\n",
             //               client.m_id, e.what());
-            LogPrintf("Received invalid SetupConnection message from client id=%zu: %s\n",
+            LogPrint(BCLog::SV2, "Received invalid SetupConnection message from client id=%zu: %s\n",
                           client.m_id, e.what());
             client.m_disconnect_flag = true;
             return;
@@ -362,7 +361,7 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
     }
     case Sv2MsgType::COINBASE_OUTPUT_DATA_SIZE:
     {
-        LogPrintf("COINBASE_OUTPUT_DATA_SIZE m_setup_connection_confirmed:%d\n",client.m_setup_connection_confirmed);
+        LogPrint(BCLog::SV2, "COINBASE_OUTPUT_DATA_SIZE m_setup_connection_confirmed:%d\n",client.m_setup_connection_confirmed);
         if (!client.m_setup_connection_confirmed) {
             client.m_disconnect_flag = true;
             return;
@@ -372,11 +371,11 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         try {
             ss >> coinbase_output_data_size;
             client.m_coinbase_output_data_size_recv = true;
-            LogPrintf("set m_coinbase_output_data_size_recv true\n");
+            LogPrint(BCLog::SV2, "set m_coinbase_output_data_size_recv true\n");
         } catch (const std::exception& e) {
             // LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received invalid CoinbaseOutputDataSize message from client id=%zu: %s\n",
             //               client.m_id, e.what());
-            LogPrintf("Received invalid CoinbaseOutputDataSize message from client id=%zu: %s\n",
+            LogPrint(BCLog::SV2, "Received invalid CoinbaseOutputDataSize message from client id=%zu: %s\n",
                           client.m_id, e.what());
             client.m_disconnect_flag = true;
             return;
@@ -389,27 +388,23 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
     case Sv2MsgType::SUBMIT_SOLUTION: {
         if (!client.m_setup_connection_confirmed || !client.m_coinbase_output_data_size_recv) {
             client.m_disconnect_flag = true;
-            LogPrintf("SubmitSolution rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
+            LogPrint(BCLog::SV2, "SubmitSolution rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
                 client.m_setup_connection_confirmed, client.m_coinbase_output_data_size_recv);
             return;
         }
 
         node::Sv2SubmitSolutionMsg submit_solution;
-        LogPrintf("SUBMIT_SOLUTION ss size:%d data:%s\n", ss.size(), HexStr(bsv::span(ss.data(),ss.size())));
+        LogPrint(BCLog::SV2, "SUBMIT_SOLUTION ss size:%d data:%s\n", ss.size(), HexStr(bsv::span(ss.data(),ss.size())));
         try {
             ss >> submit_solution;
         } catch (const std::exception& e) {
-            // LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received invalid SubmitSolution message from client id=%zu: %e\n",
-            //               client.m_id, e.what());
-            LogPrint(BCLog::SV2,  "Received invalid SubmitSolution message from client id=%zu: %e\n",
-                          client.m_id, e.what());
-            LogPrintf("Received invalid SubmitSolution message from client id=%zu: %e\n",
+            LogPrint(BCLog::SV2, "Received invalid SubmitSolution message from client id=%zu: %s\n",
                           client.m_id, e.what());
             return;
         }
 
         m_msgproc->SubmitSolution(submit_solution);
-        LogPrintf("debug call code\n");
+        LogPrint(BCLog::SV2, "call SubmitSolution over\n");
 
         break;
     }
@@ -417,7 +412,7 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
     {
         if (!client.m_setup_connection_confirmed || !client.m_coinbase_output_data_size_recv) {
             client.m_disconnect_flag = true;
-            LogPrintf("RequestTransactionData rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
+            LogPrint(BCLog::SV2, "RequestTransactionData rejected: connection not fully established (setup=%d, coinbase_size=%d)\n",
                 client.m_setup_connection_confirmed, client.m_coinbase_output_data_size_recv);
             return;
         }
@@ -429,7 +424,7 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         } catch (const std::exception& e) {
             //LogPrintLevel(BCLog::SV2, BCLog::Level::Error, "Received invalid RequestTransactionData message from client id=%zu: %e\n",
                           //client.m_id, e.what());
-            LogPrintf("Received invalid RequestTransactionData message from client id=%zu: %e\n",
+            LogPrint(BCLog::SV2, "Received invalid RequestTransactionData message from client id=%zu: %e\n",
                           client.m_id, e.what());
             return;
         }
@@ -442,7 +437,7 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
         uint8_t msg_type[1]{uint8_t(sv2_net_msg.m_sv2_header.m_msg_type)};
         //LogPrintLevel(BCLog::SV2, BCLog::Level::Warning, "Received unknown message type 0x%s from client id=%zu\n",
                       //HexStr(msg_type), client.m_id);
-        LogPrintf("Received unknown message type 0x%s from client id=%zu\n",
+        LogPrint(BCLog::SV2, "Received unknown message type 0x%s from client id=%zu\n",
                       HexStr(bsv::span(msg_type)), client.m_id);
         break;
     }

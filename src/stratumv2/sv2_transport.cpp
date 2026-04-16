@@ -166,7 +166,7 @@ void Sv2Transport::MarkBytesSent(size_t bytes_sent) noexcept
 
 bool Sv2Transport::SetMessageToSend(SerializedNetMsg& msg) noexcept
 {
-    LogPrintf("call deprecated Code\n");
+    LogPrint(BCLog::SV2, "call deprecated SetMessageToSend (SerializedNetMsg)\n");
     // AssertLockNotHeld(m_send_mutex);
     // LOCKMt(m_send_mutex);
 
@@ -450,12 +450,12 @@ bool Sv2Transport::ProcessReceivedPacketBytes() noexcept
         // Header received, decrypt it.
         std::array<std::byte, SV2_HEADER_PLAIN_SIZE> header_plain;
         if  (!m_cipher.DecryptMessage(bsv::MakeWritableByteSpan(m_recv_buffer), header_plain)) {
-            ////LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Failed to decrypt header\n");
+            LogPrint(BCLog::SV2, "Failed to decrypt header\n");
             return false;
         }
 
         ////LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Header: %s\n", HexStr(header_plain));
-        LogPrintf("Header: %s\n", HexStr(bsv::span<const std::byte>(header_plain)));
+        LogPrint(BCLog::SV2, "Header: %s\n", HexStr(bsv::span<const std::byte>(header_plain)));
 
         // Decode header
         DataStream ss_header{header_plain};
@@ -473,17 +473,17 @@ bool Sv2Transport::ProcessReceivedPacketBytes() noexcept
 
         // TODO: 16 MB is pretty large, maybe set lower limits for most or all message types?
         if (m_header.m_msg_len > MAX_CONTENTS_LEN) {
-            //LogTrace(BCLog::SV2, "Packet too large (%u bytes)\n", m_header.m_msg_len);
+            LogPrint(BCLog::SV2, "Packet too large (%u bytes), disconnecting\n", m_header.m_msg_len);
             return false;
         }
 
         // Disconnect for empty messages (TODO: check the spec)
         if (m_header.m_msg_len == 0) {
-            //LogTrace(BCLog::SV2, "Empty message\n");
+            LogPrint(BCLog::SV2, "Empty message, disconnecting\n");
             return false;
         }
         //LogTrace(BCLog::SV2, "Expecting %d bytes payload (plain)\n", m_header.m_msg_len);
-        LogPrintf("Expecting %d bytes payload (plain)\n", m_header.m_msg_len);
+        LogPrint(BCLog::SV2, "Expecting %d bytes payload (plain)\n", m_header.m_msg_len);
     } else if (m_recv_buffer.size() > SV2_HEADER_ENCRYPTED_SIZE &&
                m_recv_buffer.size() == SV2_HEADER_ENCRYPTED_SIZE + Sv2Cipher::EncryptedMessageSize(m_header.m_msg_len)) {
         /** Ciphertext received: decrypt into decode_buffer and deserialize into m_message.
@@ -496,7 +496,7 @@ bool Sv2Transport::ProcessReceivedPacketBytes() noexcept
 
         bsv::span<std::byte> recv_span{bsv::MakeWritableByteSpan(m_recv_buffer).subspan(SV2_HEADER_ENCRYPTED_SIZE)};
         if (!m_cipher.DecryptMessage(recv_span, bsv::MakeWritableByteSpan(payload))) {
-            ////LogPrintLevel(BCLog::SV2, BCLog::Level::Debug, "Failed to decrypt message payload\n");
+            LogPrint(BCLog::SV2, "Failed to decrypt message payload\n");
             return false;
         }
         ////LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Payload: %s\n", HexStr(payload));

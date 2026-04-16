@@ -502,14 +502,14 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             LOCKMt(m_tp_mutex);
             auto cached_block_template = m_block_template_cache.find(solution.m_template_id);
             if (cached_block_template == m_block_template_cache.end()) {
-                LogPrint(BCLog::SV2, "SubmitSolution: template id=%lu not in cache, dropping\n", solution.m_template_id);
+                LogPrintf("SV2 SubmitSolution: template id=%lu not in cache, solution dropped\n", solution.m_template_id);
                 return;
             }
             block_template = cached_block_template->second; // shared ownership — safe after lock release
         }
 
         if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
-            LogPrint(BCLog::SV2, "SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
+            LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
         }
 }
 
