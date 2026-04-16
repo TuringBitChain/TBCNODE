@@ -4,6 +4,7 @@
 #include <iostream>
 #include <thread>
 #include <sstream>
+#include "util.h"
 
 #include "net/netbase.h"
 #include "util/check.h"
@@ -102,6 +103,10 @@ bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
     if (!m_connman->Start(this, m_options.host, m_options.port)) {
         return false;
     }
+
+    m_thread_sv2_handler = std::thread(&TraceThread<std::function<void()>>
+        , "sv2"
+        , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2Handler, this)));
 
     return true;
 }
