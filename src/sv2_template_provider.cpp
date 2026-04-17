@@ -513,6 +513,9 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             block_template = cached_block_template->second; // shared ownership — safe after lock release
         }
 
+        LogPrint(BCLog::SV2, "SubmitSolution: template_id=%lu prevhash=%s\n",
+            solution.m_template_id, block_template->getBlock().hashPrevBlock.ToString());
+
         if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
             LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
         }
