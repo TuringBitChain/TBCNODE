@@ -215,6 +215,13 @@ void Shutdown() {
     UnregisterValidationInterface(peerLogic.get());
     peerLogic.reset();
 
+    auto& sv2 = NodeContext::GetInstance().sv2_template_provider;
+    if (sv2) {
+        sv2->Interrupt();
+        sv2->StopThreads();
+        sv2.reset();
+    }
+    NodeContext::GetInstance().mining.reset();
     mining::g_miningFactory.reset();
 
     ShutdownScriptCheckQueues();
