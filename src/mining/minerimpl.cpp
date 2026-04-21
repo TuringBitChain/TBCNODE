@@ -97,7 +97,9 @@ public:
             while (std::chrono::steady_clock::now() < deadline) {
                 auto check_time = std::chrono::steady_clock::now() + std::min(timeout, MillisecondsDouble(1000));
                 g_best_block_cv.wait_until(lock, check_time);
-                if (g_best_block != current_tip) break;
+                if (uint256() != g_best_block && g_best_block != current_tip) {
+                    break;
+                }
             }
         }
         LOCK(::cs_main);

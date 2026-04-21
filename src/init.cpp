@@ -2987,12 +2987,11 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
 
         options.fee_delta = gArgs.GetArg("-sv2feedelta", DEFAULT_SV2_FEE_DELTA);
 
-        if (gArgs.IsArgSet("-sv2interval")) {
-            if (gArgs.GetArg("-sv2interval", DEFAULT_SV2_INTERVAL) < 1) {
-                return InitError(_("-sv2interval must be at least one second"));
-            }
-            options.fee_check_interval = std::chrono::seconds(gArgs.GetArg("-sv2interval", 0));
-        }
+        int64_t sv2interval = gArgs.GetArg("-sv2interval", DEFAULT_SV2_INTERVAL);
+        if (sv2interval < 1) {                                                   
+            return InitError(_("-sv2interval must be at least one second"));
+        }                                                                   
+        options.fee_check_interval = std::chrono::seconds(sv2interval);
 
         if (!NodeContext::GetInstance().sv2_template_provider->Start(options)) {
             return InitError(_("Unable to start Stratum v2 Template Provider"));

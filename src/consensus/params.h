@@ -9,7 +9,7 @@
 #include "uint256.h"
 
 /** Default for -sv2interval **/
-static constexpr unsigned int DEFAULT_SV2_INTERVAL{1};
+static constexpr unsigned int DEFAULT_SV2_INTERVAL{30};
 /** Default for -sv2feedelta */
 static constexpr unsigned int DEFAULT_SV2_FEE_DELTA{1000};
 
