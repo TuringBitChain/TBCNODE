@@ -10,7 +10,9 @@ option(CRYPTO_USE_ASM "Use assembly version of crypto primitives" ON)
 add_library(crypto
 	aes.cpp
 	chacha20.cpp
+	chacha20poly1305.cpp
 	hmac_sha256.cpp
+	poly1305.cpp
 	hmac_sha512.cpp
 	ripemd160.cpp
 	sha1.cpp

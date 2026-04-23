@@ -191,11 +191,14 @@ add_library(common
 	net/netaddress.cpp
 	net/netbase.cpp
 	primitives/block.cpp
+	streams.cpp
 	protocol.cpp
 	rpc/jsonwriter.cpp
 	scheduler.cpp
 	script/sign.cpp
 	script/standard.cpp
+	util/sock.cpp
+	util/syserror.cpp
 	warnings.cpp
 )
 
@@ -248,6 +251,7 @@ add_library(server
 	mining/journal_change_set.cpp
 	mining/journaling_block_assembler.cpp
     mining/legacy.cpp
+    mining/minerimpl.cpp
     net/association.cpp
 	net/net.cpp
     net/net_message.cpp
@@ -287,6 +291,11 @@ add_library(server
 	validation.cpp
 	validationinterface.cpp
     vmtouch.cpp
+    stratumv2/sv2_connman.cpp
+    stratumv2/sv2_messages.cpp
+    stratumv2/sv2_noise.cpp
+    stratumv2/sv2_transport.cpp
+    sv2_template_provider.cpp
 )
 
 # This require libevent
