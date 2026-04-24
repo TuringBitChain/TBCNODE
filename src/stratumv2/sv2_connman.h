@@ -9,6 +9,7 @@
 #include "stratumv2/sv2_transport.h"
 #include "pubkey.h"
 #include "util/sock.h"
+#include <optional>
 
 namespace {
     /*
@@ -72,7 +73,11 @@ struct Sv2Client
      * Fees in sat paid by the last submitted template
      */
     Amount m_latest_submitted_template_fees;    //todo tmp
-    
+
+    /** Pending 0x72 (SetNewPrevHash) held by the dispatch-rate limiter ("capacitor").
+     *  Set when a new block arrives while the capacitor is active; cleared on dispatch. */
+    std::optional<node::Sv2SetNewPrevHashMsg> m_pending_prev_hash;
+
     bool IsFullyConnected()
     {
         return !m_disconnect_flag && m_setup_connection_confirmed;

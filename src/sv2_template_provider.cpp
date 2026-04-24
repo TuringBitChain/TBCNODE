@@ -22,6 +22,21 @@ using node::Sv2RequestTransactionDataSuccessMsg;
 using node::Sv2RequestTransactionDataErrorMsg;
 using node::Sv2SubmitSolutionMsg;
 
+// ── SV2 Dispatch Rate Limiter ("Capacitor") ──────────────────────────────────
+// Initial block-dispatch delay injected after each new block on fast chains.
+// Set SV2_CAP_INITIAL_INTERVAL to 0 to disable entirely (normal behaviour).
+//   S  = SV2_CAP_INITIAL_INTERVAL  (seconds)
+//   t  = SV2_CAP_CONVERGENCE_SECS  (seconds)
+//   delta = S² / t  (per-release decrement; releases_to_converge = t / S)
+// Example: S=10, t=300 → delta≈0.333s, converges in ~30 releases.
+static constexpr double SV2_CAP_INITIAL_INTERVAL = 0.0;   // ← set S here
+static constexpr double SV2_CAP_CONVERGENCE_SECS  = 0.0; // ← set t here
+static constexpr double SV2_CAP_DELTA =
+    (SV2_CAP_INITIAL_INTERVAL > 0.0 && SV2_CAP_CONVERGENCE_SECS > 0.0)
+    ? (SV2_CAP_INITIAL_INTERVAL * SV2_CAP_INITIAL_INTERVAL) / SV2_CAP_CONVERGENCE_SECS
+    : 0.0;
+// ─────────────────────────────────────────────────────────────────────────────
+
 Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemPool& mempool) 
     : m_config{config}, m_mining{mining}, m_mempool{mempool}
 {
@@ -108,6 +123,12 @@ bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
         , "sv2"
         , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2Handler, this)));
 
+    if (SV2_CAP_INITIAL_INTERVAL > 0.0) {
+        m_thread_sv2_capacitor = std::thread(&TraceThread<std::function<void()>>
+            , "sv2cap"
+            , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2CapacitorHandler, this)));
+    }
+
     return true;
 }
 
@@ -119,6 +140,11 @@ void Sv2TemplateProvider::Init(const Sv2TemplateProviderOptions& options)
     m_optional_features = options.optional_features;
     m_default_coinbase_tx_additional_output_size = options.default_coinbase_tx_additional_output_size;
     m_default_future_templates = options.default_future_templates;
+    m_cap_current_interval = SV2_CAP_INITIAL_INTERVAL;
+    if (SV2_CAP_INITIAL_INTERVAL > 0.0) {
+        LogPrint(BCLog::SV2, "Capacitor enabled: initial_interval=%.3fs convergence_secs=%.1f delta=%.6fs\n",
+            SV2_CAP_INITIAL_INTERVAL, SV2_CAP_CONVERGENCE_SECS, SV2_CAP_DELTA);
+    }
 }
 
 Sv2TemplateProvider::~Sv2TemplateProvider()
@@ -146,6 +172,7 @@ void Sv2TemplateProvider::Interrupt()
 {
     LogPrint(BCLog::SV2, "Sv2TemplateProvider interrupted\n");
     m_flag_interrupt_sv2 = true;
+    m_cap_cv.notify_all();  // wake capacitor thread so it exits cleanly
 }
 
 void Sv2TemplateProvider::StopThreads()
@@ -155,6 +182,9 @@ void Sv2TemplateProvider::StopThreads()
     }
     if (m_thread_sv2_mempool_handler.joinable()) {
         m_thread_sv2_mempool_handler.join();
+    }
+    if (m_thread_sv2_capacitor.joinable()) {
+        m_thread_sv2_capacitor.join();
     }
 }
 
@@ -218,29 +248,48 @@ void Sv2TemplateProvider::ThreadSv2Handler()
         auto tip = m_mining.waitTipChanged(current_tip->hash, timeout);
         if (!tip) break; // Node shutting down
 
-        bool best_block_changed{WITH_LOCK(m_tp_mutex, return m_best_prev_hash != tip->hash;)};
+        bool best_block_changed = false;
+        bool delay_0x72 = false;
+        bool signal_cap = false;
         {
             LOCKMt(m_tp_mutex);
-            m_best_prev_hash = tip->hash;
-            m_last_block_time = GetTime<std::chrono::seconds>();
-            m_template_last_update = GetTime<std::chrono::seconds>();
+            best_block_changed = (m_best_prev_hash != tip->hash);
+            if (best_block_changed) {
+                m_best_prev_hash = tip->hash;
+                m_last_block_time = GetTime<std::chrono::seconds>();
+                m_template_last_update = GetTime<std::chrono::seconds>();
+                if (m_cap_current_interval > 0.0) {
+                    delay_0x72 = true;
+                    if (!m_cap_pending) {
+                        m_cap_pending = true;
+                        signal_cap = true;  // first arm: need to wake capacitor thread
+                    }
+                }
+            }
         }
 
-        m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
+        m_connman->ForEachClient([this, best_block_changed, delay_0x72](Sv2Client& client) {
             if (!client.m_coinbase_output_data_size_recv) {
                 return;
             }
 
             LOCKMt(this->m_tp_mutex);
             Amount dummy_last_fees;
-            if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees)) {
-                // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
-                //                 client.m_id);
+            if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees, /*delay_0x72=*/delay_0x72)) {
                 LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send work on tip change\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
             }
         });
+
+        // Signal capacitor thread only after pending_prev_hash is populated by SendWork
+        if (signal_cap) {
+            {
+                std::lock_guard<std::mutex> lk(m_cap_mutex);
+                m_cap_signaled = true;
+            }
+            m_cap_cv.notify_one();
+        }
 
         LOCKMt(m_tp_mutex);
         PruneBlockTemplateCache();
@@ -384,7 +433,7 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
     }
 }
 
-bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before)
+bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before, bool delay_0x72)
 {
     AssertLockHeld(m_tp_mutex);
 
@@ -442,9 +491,15 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     client.m_send_messages.emplace_back(new_work_set.new_template);
 
     if (send_new_prevhash) {
-        LogPrint(BCLog::SV2, "Send 0x72 SetNewPrevHash prevhash=%s to client id=%zu\n",
-            HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
-        client.m_send_messages.emplace_back(new_work_set.prev_hash);
+        if (delay_0x72) {
+            LogPrint(BCLog::SV2, "Capacitor: hold 0x72 template_id=%lu for client id=%zu (interval=%.3fs)\n",
+                new_work_set.prev_hash.m_template_id, client.m_id, m_cap_current_interval);
+            client.m_pending_prev_hash = new_work_set.prev_hash;
+        } else {
+            LogPrint(BCLog::SV2, "Send 0x72 SetNewPrevHash prevhash=%s to client id=%zu\n",
+                HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
+            client.m_send_messages.emplace_back(new_work_set.prev_hash);
+        }
     }
 
     // Evict oldest entry when cache is full to prevent unbounded memory growth
@@ -455,6 +510,64 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     m_block_template_cache.insert({m_template_id, std::move(new_work_set.block_template)});
 
     return true;
+}
+
+void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
+{
+    while (!m_flag_interrupt_sv2) {
+        // Wait until the capacitor is armed by a new block (first arm only)
+        {
+            std::unique_lock<std::mutex> lock(m_cap_mutex);
+            m_cap_cv.wait(lock, [this]{ return m_cap_signaled || m_flag_interrupt_sv2.load(); });
+            if (m_flag_interrupt_sv2) break;
+            m_cap_signaled = false;
+        }
+
+        // Read the current interval (m_cap_mutex released above, safe to acquire m_tp_mutex)
+        double interval;
+        {
+            LOCKMt(m_tp_mutex);
+            interval = m_cap_current_interval;
+        }
+        if (interval <= 0.0) continue;
+
+        // Sleep for the interval; wake early only on interrupt
+        {
+            std::unique_lock<std::mutex> lock(m_cap_mutex);
+            m_cap_cv.wait_for(lock,
+                std::chrono::duration<double>(interval),
+                [this]{ return m_flag_interrupt_sv2.load(); });
+        }
+        if (m_flag_interrupt_sv2) break;
+
+        // Dispatch all pending 0x72 messages
+        LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs elapsed, dispatching pending 0x72\n", interval);
+        m_connman->ForEachClient([this](Sv2Client& client) {
+            if (!client.m_coinbase_output_data_size_recv) return;
+            LOCKMt(this->m_tp_mutex);
+            if (client.m_pending_prev_hash.has_value()) {
+                LogPrint(BCLog::SV2, "Capacitor: send delayed 0x72 template_id=%lu to client id=%zu\n",
+                    client.m_pending_prev_hash->m_template_id, client.m_id);
+                client.m_send_messages.emplace_back(*client.m_pending_prev_hash);
+                client.m_pending_prev_hash = std::nullopt;
+            }
+        });
+
+        // Advance convergence: reduce interval by delta, then clear pending flag
+        bool converged = false;
+        {
+            LOCKMt(m_tp_mutex);
+            m_cap_current_interval -= SV2_CAP_DELTA;
+            if (m_cap_current_interval < 0.0) m_cap_current_interval = 0.0;
+            m_cap_pending = false;
+            converged = (m_cap_current_interval == 0.0);
+            LogPrint(BCLog::SV2, "Capacitor: discharged, next_interval=%.3fs\n", m_cap_current_interval);
+        }
+        if (converged) {
+            LogPrint(BCLog::SV2, "Capacitor: fully converged, thread exiting\n");
+            break;
+        }
+    }
 }
 
 void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2RequestTransactionDataMsg msg)

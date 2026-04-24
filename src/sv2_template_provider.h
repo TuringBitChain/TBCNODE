@@ -2,6 +2,8 @@
 #define BITCOIN_NODE_SV2_TEMPLATE_PROVIDER_H
 
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <stratumv2/sv2_noise.h>
 #include <stratumv2/sv2_messages.h>
 #include <stratumv2/sv2_transport.h>
@@ -273,9 +275,15 @@ private:
     void PruneBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
 
     /**
-     * Sends the best NewTemplate and SetNewPrevHash to a client.
+     * Sends the best NewTemplate and (optionally) SetNewPrevHash to a client.
+     * When delay_0x72 is true, the SetNewPrevHash is stored in client.m_pending_prev_hash
+     * instead of being enqueued for immediate transmission.
      */
-    [[nodiscard]] bool SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    [[nodiscard]] bool SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before, bool delay_0x72 = false) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+
+    /** Dedicated thread: waits for the capacitor to be armed, sleeps for the
+     *  current interval, then dispatches all pending 0x72 messages. */
+    void ThreadSv2CapacitorHandler() EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex, !m_clients_mutex);
 
     /**
      * Encrypt the header and message payload and send it.
@@ -315,6 +323,19 @@ private:
      * Last time we created a new template
      */
     std::chrono::milliseconds m_template_last_update{0};
+
+    // ── Dispatch Rate Limiter ("Capacitor") ───────────────────────────────
+    /** Current remaining dispatch delay (seconds). Starts at S, converges to 0. */
+    double m_cap_current_interval GUARDED_BY(m_tp_mutex){0.0};
+    /** True while a new-block 0x72 is being held pending dispatch. */
+    bool m_cap_pending GUARDED_BY(m_tp_mutex){false};
+    /** Synchronisation for the capacitor thread (separate from m_tp_mutex). */
+    std::mutex m_cap_mutex;
+    std::condition_variable m_cap_cv;
+    bool m_cap_signaled{false};   // guarded by m_cap_mutex
+    /** Dedicated thread that counts down and dispatches delayed 0x72 messages. */
+    std::thread m_thread_sv2_capacitor;
+    // ─────────────────────────────────────────────────────────────────────
 
 };
 
