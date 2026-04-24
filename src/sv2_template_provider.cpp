@@ -500,6 +500,12 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
                 HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
             client.m_send_messages.emplace_back(new_work_set.prev_hash);
         }
+    } else if (m_cap_pending) {
+        // Fee update during capacitor delay: refresh pending 0x72 to the latest template
+        // so the capacitor fires with the freshest fee selection, not the stale block-discovery template.
+        LogPrint(BCLog::SV2, "Capacitor: refresh pending 0x72 to template_id=%lu for client id=%zu\n",
+            new_work_set.prev_hash.m_template_id, client.m_id);
+        client.m_pending_prev_hash = new_work_set.prev_hash;
     }
 
     // Evict oldest entry when cache is full to prevent unbounded memory growth
