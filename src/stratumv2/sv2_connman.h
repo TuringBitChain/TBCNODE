@@ -74,9 +74,9 @@ struct Sv2Client
      */
     Amount m_latest_submitted_template_fees;    //todo tmp
 
-    /** Pending 0x72 (SetNewPrevHash) held by the dispatch-rate limiter ("capacitor").
-     *  Set when a new block arrives while the capacitor is active; cleared on dispatch. */
-    std::optional<node::Sv2SetNewPrevHashMsg> m_pending_prev_hash;
+    /** True if this client needs a discharge when the capacitor interval elapses.
+     *  Set for new-block events while the capacitor is pending; cleared on discharge. */
+    bool m_cap_needs_discharge = false;
 
     bool IsFullyConnected()
     {

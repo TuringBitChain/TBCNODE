@@ -276,10 +276,10 @@ private:
 
     /**
      * Sends the best NewTemplate and (optionally) SetNewPrevHash to a client.
-     * When delay_0x72 is true, the SetNewPrevHash is stored in client.m_pending_prev_hash
-     * instead of being enqueued for immediate transmission.
+     * When the capacitor is pending, new-block events mark the client for discharge
+     * instead of enqueuing messages; fee updates are dropped entirely.
      */
-    [[nodiscard]] bool SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before, bool delay_0x72 = false) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    [[nodiscard]] bool SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
 
     /** Dedicated thread: waits for the capacitor to be armed, sleeps for the
      *  current interval, then dispatches all pending 0x72 messages. */

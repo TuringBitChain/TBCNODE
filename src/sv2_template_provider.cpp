@@ -249,7 +249,6 @@ void Sv2TemplateProvider::ThreadSv2Handler()
         if (!tip) break; // Node shutting down
 
         bool best_block_changed = false;
-        bool delay_0x72 = false;
         bool signal_cap = false;
         {
             LOCKMt(m_tp_mutex);
@@ -258,31 +257,35 @@ void Sv2TemplateProvider::ThreadSv2Handler()
                 m_best_prev_hash = tip->hash;
                 m_last_block_time = GetTime<std::chrono::seconds>();
                 m_template_last_update = GetTime<std::chrono::seconds>();
-                if (m_cap_current_interval > 0.0) {
-                    delay_0x72 = true;
-                    if (!m_cap_pending) {
-                        m_cap_pending = true;
-                        signal_cap = true;  // first arm: need to wake capacitor thread
-                    }
+                if (m_cap_current_interval > 0.0 && !m_cap_pending) {
+                    m_cap_pending = true;
+                    signal_cap = true;  // first arm: need to wake capacitor thread
                 }
             }
         }
 
-        m_connman->ForEachClient([this, best_block_changed, delay_0x72](Sv2Client& client) {
+        m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
             if (!client.m_coinbase_output_data_size_recv) {
                 return;
             }
 
             LOCKMt(this->m_tp_mutex);
+            if (m_cap_pending) {
+                if (best_block_changed) {
+                    LogPrint(BCLog::SV2, "Capacitor: mark client id=%zu for discharge\n", client.m_id);
+                    client.m_cap_needs_discharge = true;
+                }
+                return;
+            }
             Amount dummy_last_fees;
-            if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees, /*delay_0x72=*/delay_0x72)) {
+            if (!SendWork(client, /*send_new_prevhash=*/best_block_changed, dummy_last_fees)) {
                 LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send work on tip change\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
             }
         });
 
-        // Signal capacitor thread only after pending_prev_hash is populated by SendWork
+        // Signal capacitor thread after clients have been marked for discharge
         if (signal_cap) {
             {
                 std::lock_guard<std::mutex> lk(m_cap_mutex);
@@ -364,13 +367,15 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
             }
 
             LOCKMt(this->m_tp_mutex);
+            if (m_cap_pending) {
+                LogPrint(BCLog::SV2, "Capacitor: discard fee-update for client id=%zu\n", client.m_id);
+                return;
+            }
             // fees_previous_interval is only updated if the fee increase was sufficient,
             // since waitFeesChanged doesn't actually check this yet.
 
             Amount fees_before = last_fees;
             if (!SendWork(client, /*send_new_prevhash=*/false, fees_before)) {
-                // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Disconnecting client id=%zu\n",
-                //                 client.m_id);
                 LogPrint(BCLog::SV2, "Disconnecting client id=%zu, reason: failed to send work on fee update\n",
                                 client.m_id);
                 client.m_disconnect_flag = true;
@@ -433,7 +438,7 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
     }
 }
 
-bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before, bool delay_0x72)
+bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before)
 {
     AssertLockHeld(m_tp_mutex);
 
@@ -491,21 +496,9 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     client.m_send_messages.emplace_back(new_work_set.new_template);
 
     if (send_new_prevhash) {
-        if (delay_0x72) {
-            LogPrint(BCLog::SV2, "Capacitor: hold 0x72 template_id=%lu for client id=%zu (interval=%.3fs)\n",
-                new_work_set.prev_hash.m_template_id, client.m_id, m_cap_current_interval);
-            client.m_pending_prev_hash = new_work_set.prev_hash;
-        } else {
-            LogPrint(BCLog::SV2, "Send 0x72 SetNewPrevHash prevhash=%s to client id=%zu\n",
-                HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
-            client.m_send_messages.emplace_back(new_work_set.prev_hash);
-        }
-    } else if (m_cap_pending) {
-        // Fee update during capacitor delay: refresh pending 0x72 to the latest template
-        // so the capacitor fires with the freshest fee selection, not the stale block-discovery template.
-        LogPrint(BCLog::SV2, "Capacitor: refresh pending 0x72 to template_id=%lu for client id=%zu\n",
-            new_work_set.prev_hash.m_template_id, client.m_id);
-        client.m_pending_prev_hash = new_work_set.prev_hash;
+        LogPrint(BCLog::SV2, "Send 0x72 SetNewPrevHash prevhash=%s to client id=%zu\n",
+            HexStr(bsv::span(new_work_set.prev_hash.m_prev_hash)), client.m_id);
+        client.m_send_messages.emplace_back(new_work_set.prev_hash);
     }
 
     // Evict oldest entry when cache is full to prevent unbounded memory growth
@@ -546,17 +539,37 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
         }
         if (m_flag_interrupt_sv2) break;
 
-        // Dispatch all pending 0x72 messages
-        LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs elapsed, dispatching pending 0x72\n", interval);
+        // Discharge: build a fresh template so it captures all mempool changes
+        // that accumulated during the delay window.
+        LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs elapsed, discharging fresh template + 0x72\n", interval);
         m_connman->ForEachClient([this](Sv2Client& client) {
             if (!client.m_coinbase_output_data_size_recv) return;
             LOCKMt(this->m_tp_mutex);
-            if (client.m_pending_prev_hash.has_value()) {
-                LogPrint(BCLog::SV2, "Capacitor: send delayed 0x72 template_id=%lu to client id=%zu\n",
-                    client.m_pending_prev_hash->m_template_id, client.m_id);
-                client.m_send_messages.emplace_back(*client.m_pending_prev_hash);
-                client.m_pending_prev_hash = std::nullopt;
+
+            if (!client.m_cap_needs_discharge) return;
+            client.m_cap_needs_discharge = false;
+
+            ++m_template_id;
+            NewWorkSet new_work_set;
+            if (!BuildNewWorkSet(/*future_template=*/true, client.m_coinbase_tx_outputs_size, new_work_set)) {
+                LogPrint(BCLog::SV2, "Capacitor: failed to build fresh template for client id=%zu, skip discharge\n",
+                    client.m_id);
+                client.m_disconnect_flag = true;
+                return;
             }
+
+            if (m_block_template_cache.size() >= MAX_BLOCK_TEMPLATE_CACHE_SIZE) {
+                m_block_template_cache.erase(m_block_template_cache.begin());
+            }
+            m_block_template_cache.insert({m_template_id, std::move(new_work_set.block_template)});
+
+            LogPrint(BCLog::SV2, "Capacitor: discharge fresh 0x71 template_id=%lu to client id=%zu\n",
+                m_template_id, client.m_id);
+            client.m_send_messages.emplace_back(new_work_set.new_template);
+
+            LogPrint(BCLog::SV2, "Capacitor: discharge 0x72 template_id=%lu to client id=%zu\n",
+                new_work_set.prev_hash.m_template_id, client.m_id);
+            client.m_send_messages.emplace_back(new_work_set.prev_hash);
         });
 
         // Advance convergence: reduce interval by delta, then clear pending flag
