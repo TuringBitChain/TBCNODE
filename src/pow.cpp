@@ -56,11 +56,13 @@ static const CBlockIndex *GetSuitableBlock(const CBlockIndex *pindex, const int3
     return it->second;
 }
 
-static uint64_t GetPromisedBlocks(const CBlockIndex *pindexPrev, 
+static uint64_t GetPromisedBlocks(const CBlockIndex *pindexPrev,
             const int backNum, const Consensus::Params &params ){
     const uint32_t      nHeight         = pindexPrev->nHeight;
+    if (backNum <= 0 || (uint32_t)backNum >= nHeight) return 0;
     uint32_t            nHeightFirst    = nHeight - backNum;
     const CBlockIndex * pindexFirst     = pindexPrev->GetAncestor(nHeightFirst);
+    if (!pindexFirst) return 0;
 
     uint64_t time   = pindexPrev->nTime - pindexFirst->nTime;
     uint64_t nBlocks = time / params.nPowTargetSpacing;

@@ -25,7 +25,7 @@ struct Params {
     int BIP34Height;
     uint256 BIP34Hash;
     /** The number of blocks to review */
-    uint64_t backNum;
+    uint64_t backNum = 8064;
     /** The height and hash value of the first block of the TBC fork. */
     int TBCFirstBlockHeight;
     uint256 TBCFirstBlockHash;
