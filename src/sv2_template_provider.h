@@ -337,6 +337,10 @@ private:
     std::thread m_thread_sv2_capacitor;
     // ─────────────────────────────────────────────────────────────────────
 
+    /** Serializes SubmitSolution processing to prevent stale submissions from
+     *  racing through ProcessNewBlock and becoming side-chain blocks. */
+    mutable Mutex m_submit_mutex;
+
 };
 
 #endif // BITCOIN_NODE_SV2_TEMPLATE_PROVIDER_H

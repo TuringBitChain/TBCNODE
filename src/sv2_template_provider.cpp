@@ -643,6 +643,25 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                 return;
             }
             block_template = cached_block_template->second; // shared ownership — safe after lock release
+
+            if (block_template->getBlockRef()->hashPrevBlock != m_best_prev_hash) {
+                LogPrintf("SV2 SubmitSolution: stale template id=%lu prevhash=%s sv2_tip=%s, solution dropped\n",
+                    solution.m_template_id,
+                    block_template->getBlockRef()->hashPrevBlock.ToString(),
+                    m_best_prev_hash.ToString());
+                return;
+            }
+        }
+
+        LOCKMt(m_submit_mutex);
+
+        auto current_tip = m_mining.getTip();
+        if (!current_tip || block_template->getBlockRef()->hashPrevBlock != current_tip->hash) {
+            LogPrintf("SV2 SubmitSolution: stale template id=%lu prevhash=%s chain_tip=%s, solution dropped\n",
+                solution.m_template_id,
+                block_template->getBlockRef()->hashPrevBlock.ToString(),
+                current_tip ? current_tip->hash.ToString() : "none");
+            return;
         }
 
         LogPrint(BCLog::SV2, "SubmitSolution: template_id=%lu prevhash=%s\n",
