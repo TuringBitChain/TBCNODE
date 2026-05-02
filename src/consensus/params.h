@@ -40,6 +40,14 @@ struct Params {
     /** Block height at which Schnorr Multisig becomes active */
     int schnorrMultisigHeight;
     /**
+     * Number of confirmations required before a coinbase output can be spent.
+     *
+     * v2.6.1：BSV 上游全局 const COINBASE_MATURITY=100，TBC 改 1。改 chainparam
+     * 化：regtest 保持 100 维持 200+ wallet/functional 测试 BSV 100-block-mature
+     * 假设不破坏；mainnet/testnet/STN 保持 1 不改共识。
+     */
+    int coinbaseMaturity;
+    /**
      * Minimum blocks including miner confirmation of the total of 2016 blocks
      * in a retargeting period, (nPowTargetTimespan / nPowTargetSpacing) which
      * is also used for BIP9 deployments.

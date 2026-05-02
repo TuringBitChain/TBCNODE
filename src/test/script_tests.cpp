@@ -93,6 +93,20 @@ static ScriptErrorDesc script_errors[] = {
     {SCRIPT_ERR_MUST_USE_FORKID, "MISSING_FORKID"},
     {SCRIPT_ERR_DIV_BY_ZERO, "DIV_BY_ZERO"},
     {SCRIPT_ERR_MOD_BY_ZERO, "MOD_BY_ZERO"},
+    // TBC additions: codes introduced after the BSV fork.
+    {SCRIPT_ERR_IMPOSSIBLE_ENCODING, "IMPOSSIBLE_ENCODING"},
+    {SCRIPT_ERR_CHECKDATASIGVERIFY, "CHECKDATASIGVERIFY"},
+    {SCRIPT_ERR_CHECKDATASIG_FLAG, "CHECKDATASIG_FLAG"},
+    {SCRIPT_ERR_EMPTY_SIG_SIZE, "EMPTY_SIG_SIZE"},
+    {SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_LEGACY, "PUBKEY_NOT_XONLY_OR_LEGACY"},
+    {SCRIPT_ERR_PUBKEY_NOT_XONLY_OR_COMPRESSED, "PUBKEY_NOT_XONLY_OR_COMPRESSED"},
+    {SCRIPT_ERR_ECDSA_SIG_SIZE, "ECDSA_SIG_SIZE"},
+    {SCRIPT_ERR_XONLY_PUBKEY_SIZE, "XONLY_PUBKEY_SIZE"},
+    {SCRIPT_ERR_SCHNORR_SIG_SIZE, "SCHNORR_SIG_SIZE"},
+    {SCRIPT_ERR_BITFIELD_SIZE, "BITFIELD_SIZE"},
+    {SCRIPT_ERR_BITFIELD_RANGE, "BITFIELD_RANGE"},
+    {SCRIPT_ERR_BIT_COUNT, "BIT_COUNT"},
+    {SCRIPT_ERR_BIG_INT, "BIG_INT"},
 };
 
 const char *FormatScriptError(ScriptError_t err) {
@@ -738,26 +752,30 @@ BOOST_AUTO_TEST_CASE(script_build) {
                                 SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_NULLFAIL)
                         .Push("300602010102010101")
                         .ScriptError(SCRIPT_ERR_SIG_NULLFAIL));
+    // TBC: a 1-byte signature is rejected by the ECDSA size check before the
+    // DER encoding check runs, so the legacy EVAL_FALSE / SIG_DER outcomes are
+    // replaced by SCRIPT_ERR_ECDSA_SIG_SIZE.
     tests.push_back(
         TestBuilder(CScript() << ToByteVector(keys.pubkey1C) << OP_CHECKSIG,
                     "BIP66 example 5, without DERSIG", 0)
             .Num(1)
-            .ScriptError(SCRIPT_ERR_EVAL_FALSE));
+            .ScriptError(SCRIPT_ERR_ECDSA_SIG_SIZE));
     tests.push_back(
         TestBuilder(CScript() << ToByteVector(keys.pubkey1C) << OP_CHECKSIG,
                     "BIP66 example 5, with DERSIG", SCRIPT_VERIFY_DERSIG)
             .Num(1)
-            .ScriptError(SCRIPT_ERR_SIG_DER));
+            .ScriptError(SCRIPT_ERR_ECDSA_SIG_SIZE));
     tests.push_back(TestBuilder(CScript() << ToByteVector(keys.pubkey1C)
                                           << OP_CHECKSIG << OP_NOT,
                                 "BIP66 example 6, without DERSIG", 0)
-                        .Num(1));
+                        .Num(1)
+                        .ScriptError(SCRIPT_ERR_ECDSA_SIG_SIZE));
     tests.push_back(TestBuilder(CScript() << ToByteVector(keys.pubkey1C)
                                           << OP_CHECKSIG << OP_NOT,
                                 "BIP66 example 6, with DERSIG",
                                 SCRIPT_VERIFY_DERSIG)
                         .Num(1)
-                        .ScriptError(SCRIPT_ERR_SIG_DER));
+                        .ScriptError(SCRIPT_ERR_ECDSA_SIG_SIZE));
     tests.push_back(TestBuilder(CScript() << OP_2 << ToByteVector(keys.pubkey1C)
                                           << ToByteVector(keys.pubkey2C) << OP_2
                                           << OP_CHECKMULTISIG,
@@ -804,6 +822,11 @@ BOOST_AUTO_TEST_CASE(script_build) {
                         .PushSig(keys.key2, SigHashType(), 33, 32)
                         .EditPush(1, "45022100", "440220")
                         .ScriptError(SCRIPT_ERR_EVAL_FALSE));
+    // TBC: when the multisig stack contains an empty signature, the new
+    // interpreter short-circuits to a failed multisig (or a NULLFAIL error if
+    // SCRIPT_VERIFY_NULLFAIL is set) before applying the DER encoding check.
+    // BIP66 example 9 with DERSIG therefore reports EVAL_FALSE rather than
+    // SIG_DER, and example 10 (the same script wrapped in NOT) succeeds.
     tests.push_back(TestBuilder(CScript() << OP_2 << ToByteVector(keys.pubkey1C)
                                           << ToByteVector(keys.pubkey2C) << OP_2
                                           << OP_CHECKMULTISIG,
@@ -813,7 +836,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
                         .Num(0)
                         .PushSig(keys.key2, SigHashType(), 33, 32)
                         .EditPush(1, "45022100", "440220")
-                        .ScriptError(SCRIPT_ERR_SIG_DER));
+                        .ScriptError(SCRIPT_ERR_EVAL_FALSE));
     tests.push_back(TestBuilder(CScript() << OP_2 << ToByteVector(keys.pubkey1C)
                                           << ToByteVector(keys.pubkey2C) << OP_2
                                           << OP_CHECKMULTISIG << OP_NOT,
@@ -830,8 +853,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
                         .Num(0)
                         .Num(0)
                         .PushSig(keys.key2, SigHashType(), 33, 32)
-                        .EditPush(1, "45022100", "440220")
-                        .ScriptError(SCRIPT_ERR_SIG_DER));
+                        .EditPush(1, "45022100", "440220"));
     tests.push_back(TestBuilder(CScript() << OP_2 << ToByteVector(keys.pubkey1C)
                                           << ToByteVector(keys.pubkey2C) << OP_2
                                           << OP_CHECKMULTISIG,
@@ -2287,11 +2309,21 @@ BOOST_AUTO_TEST_CASE(txout_IsDust) {
 
     CScript opReturn = CScript() << OP_RETURN << data;
 
+    // TBC has simplified the dust threshold to a flat constant (Amount(10) — see
+    // CTxOut::GetDustThreshold in src/primitives/transaction.h). The original
+    // BSV-era test exercised a per-script-type dust floor that depended on
+    // CScript::IsUnspendable; that branch is now stubbed out, so any output
+    // strictly below the constant is dust regardless of script shape.
     BOOST_CHECK(!CTxOut(Amount(10), opFalseOpReturn).IsDust(feerate, false));
     BOOST_CHECK(!CTxOut(Amount(10), opReturn).IsDust(feerate, false));
 
     BOOST_CHECK(!CTxOut(Amount(10), opFalseOpReturn).IsDust(feerate, true));
-    BOOST_CHECK(CTxOut(Amount(10), opReturn).IsDust(feerate, true)); // single "OP_RETURN" is not considered data after Genesis upgrade, so it is considered dust
+    BOOST_CHECK(!CTxOut(Amount(10), opReturn).IsDust(feerate, true));
+
+    // A value strictly below the flat threshold is still dust regardless of
+    // whether the script is OP_FALSE OP_RETURN or bare OP_RETURN.
+    BOOST_CHECK(CTxOut(Amount(9), opFalseOpReturn).IsDust(feerate, true));
+    BOOST_CHECK(CTxOut(Amount(9), opReturn).IsDust(feerate, true));
 }
 
 namespace {

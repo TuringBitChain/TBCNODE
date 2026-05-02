@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <cstdint>
 #include <exception>
 #include <functional>
@@ -520,6 +521,11 @@ void InitScriptCheckQueues(const Config& config, boost::thread_group& threadGrou
 //! Shutdown script checking pool.
 void ShutdownScriptCheckQueues();
 
+// v2.6.1: 启动末尾用 chainActive.Tip() 把 g_chainstate seqlock 刷一次，
+//         避免重启后 ConnectBlock 来之前 worker.Capture() 拿到默认 0 值。
+//         调用方需持 cs_main（内部 AssertLockHeld）。
+void SeedChainstateAtStartup(const Config& config);
+
 /**
  * Check whether we are doing an initial block download (synchronizing from disk
  * or network)
@@ -543,6 +549,24 @@ std::string GetWarnings(const std::string &strFor);
  */
 bool GetTransaction(const Config &config, const TxId &txid, CTransactionRef &tx,
     bool fAllowSlow, uint256 &hashBlock, bool& isGenesisEnabled);
+
+/**
+ * Retrieve only the raw bytes of a transaction (mempool or txindex).
+ *
+ * Unlike GetTransaction(), this fast path:
+ *   - never takes cs_main
+ *   - does not compute hashBlock / isGenesisEnabled
+ *   - skips the fAllowSlow path that walks the UTXO set
+ *
+ * Lookups proceed:
+ *   1) mempool.Get  (uses mempool.smtx only)
+ *   2) pblocktree->ReadTxIndex + read from blkXXXXX.dat  (LevelDB and the
+ *      append-only block files are themselves thread-safe, no cs_main needed)
+ *
+ * Returns true on success and assigns txOut. Returns false if the transaction
+ * is not in mempool, not indexed, or the on-disk read fails.
+ */
+bool GetTransactionRaw(const TxId &txid, CTransactionRef &txOut);
 
 /**
  * Find the best known block, and make it the active tip of the block chain.
@@ -645,6 +669,27 @@ int GetGenesisActivationHeight(const Config& config);
 bool IsSchnorrMultisigEnabled(const Config &config, int nHeight);
 /** Check if Schnorr Multisig has activated. */
 bool IsSchnorrMultisigEnabled(const Config &config, const CBlockIndex *pindexPrev);
+
+// ============================================================================
+// v2.6.1 P1.3: Snapshot 重载（worker hot path 用，不持 cs_main）
+//   语义：从 Chainstate::Snapshot 直接读 isGenesisEnabled / genesisActivationHeight
+//   等价性：跟老签名 IsGenesisEnabled(config, height) 在同一 epoch 上保证一致
+//   测试：P3.1 H-D perInputScriptFlags 等价性矩阵覆盖
+// ============================================================================
+
+#include "validation/chainstate.h"
+
+inline bool IsGenesisEnabled(const tbc::validation::Chainstate::Snapshot& snap) noexcept {
+    return snap.isGenesisEnabled;
+}
+
+inline int32_t GetGenesisActivationHeight(const tbc::validation::Chainstate::Snapshot& snap) noexcept {
+    return snap.genesisActivationHeight;
+}
+
+inline uint32_t GetBlockScriptFlags(const tbc::validation::Chainstate::Snapshot& snap) noexcept {
+    return snap.script_flags;
+}
 
 /**
  * A function used to produce a default value for a number of Low priority threads
@@ -882,7 +927,8 @@ namespace Consensus {
  * sigs. Preconditions: tx.IsCoinBase() is false.
  */
 bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
-                   const CCoinsViewCache &inputs, int nSpendHeight);
+                   const CCoinsViewCache &inputs, int nSpendHeight,
+                   int coinbaseMaturity);
 
 } // namespace Consensus
 
@@ -924,7 +970,8 @@ bool CheckSequenceLocks(
     const Config& config,
     int flags,
     LockPoints *lp = nullptr,
-    bool useExistingLockPoints = false);
+    bool useExistingLockPoints = false,
+    const CBlockIndex* snap_tip = nullptr);   // v2.6.1 P3.3 修补 CRITICAL-1
 
 /**
  * Closure representing one script verification.
@@ -1072,8 +1119,17 @@ bool ResetBlockFailureFlags(CBlockIndex *pindex);
 extern CChain chainActive;
 
 /** Global variable that points to the active CCoinsView (protected by cs_main)
+ *
+ * v2.6.1 P0.4a (F3): 改 std::shared_ptr 让 worker 在 hot path 持局部副本，
+ *                    避免 Shutdown 中 reset 后 raw `pcoinsTip->` 悬空。
+ *                    所有 raw 调用点（401 处）用 .get() 显式转 raw*；
+ *                    worker hot path 后续接入时改持 `auto local = pcoinsTip;`。
  */
-extern CCoinsViewCache *pcoinsTip;
+extern std::shared_ptr<CCoinsViewCache> pcoinsTip;
+
+// v2.6.1 P1.1: Chainstate seqlock 全局实例 g_chainstate
+//   声明跟定义都在 src/validation/chainstate.h（namespace tbc::validation 内）
+//   通过本 header 顶部 #include "validation/chainstate.h"（P1.3 helper 那段）传递引入
 
 /** Global variable that points to the active block tree (protected by cs_main)
  */

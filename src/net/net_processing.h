@@ -7,6 +7,7 @@
 #define BITCOIN_NET_PROCESSING_H
 
 #include "net.h"
+#include "validation/async_subscriber.h"   // v2.6.1 P4 §5.3
 #include "validationinterface.h"
 
 class Config;
@@ -28,8 +29,15 @@ class PeerLogicValidation final : public CValidationInterface {
 private:
     CConnman *connman;
 
+    // v2.6.1 P4 §5.3：BlockConnected callback 在 ConnectTip 三锁帧内被
+    // 同步调用，body 实际持 cs_main 做 orphan 池清理。改成 push 到 worker，
+    // 让 ConnectTip 帧立刻返回。worker 线程拿 cs_main 时已脱离主验证链栈，
+    // 不构成反向锁。
+    tbc::validation::AsyncSubscriber m_async_worker{"peer-logic", 16'384};
+
 public:
     PeerLogicValidation(CConnman *connmanIn);
+    ~PeerLogicValidation();
 
     void
     BlockConnected(const std::shared_ptr<const CBlock> &pblock,

@@ -587,7 +587,7 @@ static bool rest_getutxos(Config &config, HTTPRequest *req,
         LOCK(cs_main);
         std::shared_lock lock(mempool.smtx);
 
-        CCoinsView viewDummy;
+        CCoinsViewEmpty viewDummy;   // C-6: stub backing view
         CCoinsViewCache view(&viewDummy);
 
         CCoinsViewCache &viewChain = *pcoinsTip;

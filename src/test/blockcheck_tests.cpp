@@ -46,6 +46,13 @@ BOOST_AUTO_TEST_CASE(blockfail) {
     testConfig.SetDefaultBlockSizeParams(Params().GetDefaultBlockSizeParams());
     testConfig.SetMaxBlockSize(128*ONE_MEGABYTE);
     auto nDefaultMaxBlockSize = testConfig.GetMaxBlockSize();
+    // TBC: GlobalConfig::genesisActivationHeight defaults to 0, which would
+    // cause CheckCoinbase -> HeightFormScript to be invoked for the
+    // synthetic block at height 0 in this test and throw on a zero-length
+    // scriptSig before the "bad-cb-length" path is reached. Push genesis
+    // activation past the synthetic block height (0) so the test's
+    // expected error reasons are produced.
+    testConfig.SetGenesisActivationHeight(500);
 
     CBlock block;
     RunCheckOnBlock(testConfig, block, "bad-cb-missing");

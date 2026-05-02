@@ -29,6 +29,7 @@
 #include "util.h"
 #include "utilstrencodings.h"
 #include "validation.h"
+#include "validation/metrics.h"
 #include "init.h"
 
 #include <boost/algorithm/string/case_conv.hpp> // for boost::to_upper
@@ -333,7 +334,14 @@ void entryToJSONNL(UniValue &info, const CTxMemPoolEntry &e) {
 
 UniValue mempoolToJSON(bool fVerbose = false) {
     if (fVerbose) {
-        std::shared_lock lock(mempool.smtx);
+        // v2.6.1 P4.1 V-4 修补：try_lock_for 防 Phase 3 unique(mempool.smtx) 帧 hang RPC
+        //   超时 2s 退化为 503-语义 RPC 错误（REJECT_NONSTANDARD 0x40，0x45 自加常量已删）
+        std::shared_lock<std::shared_timed_mutex> lock(mempool.smtx, std::defer_lock);
+        if (!lock.try_lock_for(std::chrono::seconds(2))) {
+            throw JSONRPCError(RPC_VERIFY_REJECTED,
+                strprintf("%i: server-busy: mempool busy, retry shortly",
+                          REJECT_NONSTANDARD));
+        }
         UniValue o(UniValue::VOBJ);
         for (const CTxMemPoolEntry &e : mempool.mapTx) {
             const uint256 &txid = e.GetTx().GetId();
@@ -450,7 +458,13 @@ UniValue getmempoolancestors(const Config &config,
 
     uint256 hash = ParseHashV(request.params[0], "parameter 1");
 
-    std::shared_lock lock(mempool.smtx);
+    // v2.6.1 P4.1 V-4 修补：try_lock_for(2s) 防 Phase 3 unique frame hang
+    std::shared_lock<std::shared_timed_mutex> lock(mempool.smtx, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(2))) {
+        throw JSONRPCError(RPC_VERIFY_REJECTED,
+            strprintf("%i: server-busy: mempool busy, retry shortly",
+                      REJECT_NONSTANDARD));
+    }
 
     CTxMemPool::txiter txIter = mempool.mapTx.find(hash);
     if (txIter == mempool.mapTx.end()) {
@@ -515,7 +529,13 @@ UniValue getmempooldescendants(const Config &config,
 
     uint256 hash = ParseHashV(request.params[0], "parameter 1");
 
-    std::shared_lock lock(mempool.smtx);
+    // v2.6.1 P4.1 V-4 修补：try_lock_for(2s) 防 Phase 3 unique frame hang
+    std::shared_lock<std::shared_timed_mutex> lock(mempool.smtx, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(2))) {
+        throw JSONRPCError(RPC_VERIFY_REJECTED,
+            strprintf("%i: server-busy: mempool busy, retry shortly",
+                      REJECT_NONSTANDARD));
+    }
 
     // Check if tx is present in the mempool
     CTxMemPool::txiter txIter = mempool.mapTx.find(hash);
@@ -566,7 +586,13 @@ UniValue getmempoolentry(const Config &config, const JSONRPCRequest &request) {
 
     uint256 hash = ParseHashV(request.params[0], "parameter 1");
 
-    std::shared_lock lock(mempool.smtx);
+    // v2.6.1 P4.1 V-4 修补：try_lock_for(2s) 防 Phase 3 unique frame hang
+    std::shared_lock<std::shared_timed_mutex> lock(mempool.smtx, std::defer_lock);
+    if (!lock.try_lock_for(std::chrono::seconds(2))) {
+        throw JSONRPCError(RPC_VERIFY_REJECTED,
+            strprintf("%i: server-busy: mempool busy, retry shortly",
+                      REJECT_NONSTANDARD));
+    }
 
     CTxMemPool::txiter txIter = mempool.mapTx.find(hash);
     if (txIter == mempool.mapTx.end()) {
@@ -1379,7 +1405,7 @@ UniValue gettxoutsetinfo(const Config &config, const JSONRPCRequest &request) {
 
     CCoinsStats stats;
     FlushStateToDisk();
-    if (GetUTXOStats(pcoinsTip, stats)) {
+    if (GetUTXOStats(pcoinsTip.get(), stats)) {   // v2.6.1 P0.4a
         ret.push_back(Pair("height", int64_t(stats.nHeight)));
         ret.push_back(Pair("bestblock", stats.hashBlock.GetHex()));
         ret.push_back(Pair("transactions", int64_t(stats.nTransactions)));
@@ -1456,7 +1482,7 @@ UniValue gettxout(const Config &config, const JSONRPCRequest &request) {
     Coin coin;
     if (fMempool) {
         std::shared_lock lock(mempool.smtx);
-        CCoinsViewMemPool view(pcoinsTip, mempool);
+        CCoinsViewMemPool view(pcoinsTip.get(), mempool);   // v2.6.1 P0.4a
         if (!view.GetCoin(out, coin) || mempool.IsSpentNL(out)) {
             // TODO: this should be done by the CCoinsViewMemPool
             return NullUniValue;
@@ -1519,7 +1545,7 @@ UniValue verifychain(const Config &config, const JSONRPCRequest &request) {
         nCheckDepth = request.params[1].get_int();
     }
 
-    return CVerifyDB().VerifyDB(config, pcoinsTip, nCheckLevel, nCheckDepth, task::CCancellationSource::Make()->GetToken());
+    return CVerifyDB().VerifyDB(config, pcoinsTip.get(), nCheckLevel, nCheckDepth, task::CCancellationSource::Make()->GetToken());   // v2.6.1 P0.4a
 }
 
 /** Implementation of IsSuperMajority with better feedback */

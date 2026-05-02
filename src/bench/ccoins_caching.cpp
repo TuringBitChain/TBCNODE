@@ -60,7 +60,7 @@ SetupDummyInputs(CBasicKeyStore &keystoreRet, CCoinsViewCache &coinsRet) {
 // (https://github.com/bitcoin/bitcoin/issues/7883#issuecomment-224807484)
 static void CCoinsCaching(benchmark::State &state) {
     CBasicKeyStore keystore;
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // C-6: stub backing view
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions =
         SetupDummyInputs(keystore, coins);

@@ -7,6 +7,7 @@
 #define BITCOIN_SYNC_H
 
 #include "threadsafety.h"
+#include "validation/lock_hierarchy.h"   // v2.6.1 P0.0a.3: LEVEL_* 常量
 
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/locks.hpp>
@@ -65,8 +66,13 @@ public:
 };
 
 #ifdef DEBUG_LOCKORDER
+// v2.6.1 P0.0a.4 H-G 非破坏性增量：
+//   - 加 level 参数（默认 LEVEL_DEFAULT），现有 401 处调用零修改通过
+//   - 401 callsite 之间互相持锁（都 LEVEL_DEFAULT）行为完全跟改造前等价
+//   - 新增标 level 的 mutex 之间严格 level 单调；从 LEVEL_DEFAULT 跨到低 level 也会报错
 void EnterCritical(const char *pszName, const char *pszFile, int nLine,
-                   void *cs, bool fTry = false);
+                   void *cs, bool fTry = false,
+                   int level = tbc::lock_hierarchy::LEVEL_DEFAULT);
 void LeaveCritical();
 std::string LocksHeld();
 void AssertLockHeldInternal(const char *pszName, const char *pszFile, int nLine,
@@ -74,7 +80,8 @@ void AssertLockHeldInternal(const char *pszName, const char *pszFile, int nLine,
 void DeleteLock(void *cs);
 #else
 static inline void EnterCritical(const char *pszName, const char *pszFile,
-                                 int nLine, void *cs, bool fTry = false) {}
+                                 int nLine, void *cs, bool fTry = false,
+                                 int level = tbc::lock_hierarchy::LEVEL_DEFAULT) {}
 static inline void LeaveCritical() {}
 static inline void AssertLockHeldInternal(const char *pszName,
                                           const char *pszFile, int nLine,

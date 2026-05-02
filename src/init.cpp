@@ -46,6 +46,14 @@
 #include "util.h"
 #include "utilmoneystr.h"
 #include "validation.h"
+#include "validation/signal_dispatcher.h"   // v2.6.1 M2
+#include "validation/chain_dispatcher.h"    // v2.6.1 M4
+#include "validation/per_chain_worker.h"    // v2.6.1 P5.1 (WorkItem)
+#include "validation/worker_validate.h"     // v2.6.1 P3.3 (AcceptToMemoryPoolWorker)
+#include "validation/async_trim.h"          // v2.6.1 P3.4 (AsyncTrim)
+#include "validation/gbt_snapshot.h"        // v2.6.1 P3.6 (GbtSnapshotProvider)
+#include "txn_validation_data.h"            // v2.6.1 M4 (CTxInputData / TxSource)
+#include "mining/journal_change_set.h"      // v2.6.1 M4 (CJournalChangeSetPtr)
 #include "validationinterface.h"
 #include "vmtouch.h"
 
@@ -198,6 +206,18 @@ void Shutdown() {
     RenameThread("bitcoin-shutoff");
     mempool.AddTransactionsUpdated(1);
 
+    // v2.6.1 M2: 早期 stop SignalDispatcher（在 wallet/peerLogic Unregister 之前）
+    // 保证后续 ConnectBlock 不再发新信号，dispatcher worker 线程优雅退出
+    tbc::validation::g_signal_dispatcher.Stop();
+
+    // v2.6.1 M4: stop ChainDispatcher worker pool —— 必须在 g_connman.reset() 之前
+    // worker handler 引用 g_connman，pool 退出后 handler 不再被调用
+    tbc::validation::g_dispatcher.Stop();
+    // v2.6.1 P3.4: stop AsyncTrim 专线程
+    tbc::validation::g_async_trim.Stop();
+    // v2.6.1 P3.6: stop GbtSnapshot refresh worker
+    tbc::validation::g_gbt_snapshot.Stop();
+
     StopHTTPRPC();
     StopREST();
     StopRPC();
@@ -233,11 +253,13 @@ void Shutdown() {
 
     {
         LOCK(cs_main);
-        if (pcoinsTip != nullptr) {
+        // v2.6.1 P0.4a (F3): pcoinsTip 改 shared_ptr，reset 替代 delete
+        // P-3 不变量：本路径在 cs_main 内执行，worker pool / dispatcher 已经在前序步骤停止
+        // （后续 P3.* worker 接入时严格按 worker stop → dispatcher stop → pcoinsTip.reset 顺序）
+        if (pcoinsTip) {
             FlushStateToDisk();
         }
-        delete pcoinsTip;
-        pcoinsTip = nullptr;
+        pcoinsTip.reset();
         delete pcoinscatcher;
         pcoinscatcher = nullptr;
         delete pcoinsdbview;
@@ -436,6 +458,8 @@ std::string HelpMessage(HelpMessageMode mode) {
                        strprintf(_("Whether to save the mempool on shutdown "
                                    "and load on restart (default: %u)"),
                                  DEFAULT_PERSIST_MEMPOOL));
+    // Phase 175 (task #175)：删 -removeforblock=<mode>。
+    //   async 模式破坏 (tip, UTXO, mempool) 同 epoch 不变量；固定 sync (prod 等价)。
     strUsage += HelpMessageOpt(
         "-threadsperblock=<n>",
         strprintf(_("Set the number of script verification threads used when "
@@ -2105,6 +2129,9 @@ bool AppInitParameterInteraction(Config &config) {
     fAcceptDatacarrier =
         gArgs.GetBoolArg("-datacarrier", DEFAULT_ACCEPT_DATACARRIER);
 
+    // Phase 175 (task #175)：删 -removeforblock=<mode>。
+    //   async 模式破坏 (tip, UTXO, mempool) 同 epoch 不变量；固定 sync (prod 等价)。
+
     // Option to startup with mocktime set (used for regression testing):
     SetMockTime(gArgs.GetArg("-mocktime", 0)); // SetMockTime(0) is a no-op
 
@@ -2360,6 +2387,19 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     // Start the lightweight task scheduler thread
     scheduler.startServiceThread(threadGroup);
 
+    // Phase F (task #160 + #168): 周期 FLUSH_STATE_PERIODIC
+    //   原因：v2.6.1 删除 worker per-tx FlushStateToDisk（修 wallet 30s bug，task #146）
+    //         后，闲期（无新块）chainstate dirty 累积无人 flush，崩溃丢最近 entry。
+    //   修法：scheduler 60s 周期触发 PERIODIC flush，FlushStateToDisk 自取 cs_main
+    //         (validation.cpp:4525 LOCK(cs_main))，scheduler 直接调即可。
+    //   task #168 复核：v3 plan 误写"外层 try_lock"。实际不需要 — scheduler 跑在
+    //         独立线程，直接走函数内部 LOCK(cs_main) 即可，cs_main 短期被 ConnectTip
+    //         持时该次 flush 自然 block，不会误失败。无锁倒序风险（cs_main 是顶层）。
+    scheduler.scheduleEvery([&config]() {
+        CValidationState st;
+        FlushStateToDisk(config.GetChainParams(), st, FLUSH_STATE_PERIODIC);
+    }, 60'000);
+
     /* Start the RPC server already.  It will be started in "warmup" mode
      * and not really process calls already (but it will signify connections
      * that the server is there and will be ready later).  Warmup mode will
@@ -2419,6 +2459,18 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     }
     RegisterValidationInterface(peerLogic.get());
     RegisterNodeSignals(GetNodeSignals());
+
+    // v2.6.1 M2 真接入：启动 SignalDispatcher 单线程异步分发
+    // 当前订阅者列表为空（业务方 P5 接入 wallet/ZMQ subscribe 时调 Subscribe）
+    // 队列里 BlockConnected 信号会被 worker 线程消费后丢弃 — 副作用 0
+    tbc::validation::g_signal_dispatcher.Start();
+    LogPrintf("v2.6.1: g_signal_dispatcher started\n");
+
+    // v2.6.1 M4: ChainDispatcher worker pool 在 connman.Start 之后启动
+    //           （handler 依赖 g_connman->getTxnValidator()）— 见下方 connman.Start 之后
+    // H2 修补：handler 提前 set，让启动早期 fallback 走 PTV 而不是 "no fallback handler"
+    tbc::validation::g_dispatcher.SetFallbackHandler(
+        tbc::validation::AcceptToMemoryPoolWorker);
 
     if (gArgs.IsArgSet("-onlynet")) {
         std::set<enum Network> nets;
@@ -2621,7 +2673,9 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         do {
             try {
                 UnloadBlockIndex();
-                delete pcoinsTip;
+                // v2.6.1 P0.4a: pcoinsTip 改 shared_ptr，reset 替代 delete
+                // 其余 raw 指针 delete 不变
+                pcoinsTip.reset();
                 delete pcoinsdbview;
                 delete pcoinscatcher;
                 delete pblocktree;
@@ -2692,7 +2746,8 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
                     break;
                 }
 
-                pcoinsTip = new CCoinsViewCache(pcoinscatcher);
+                // v2.6.1 P0.4a: shared_ptr 构造
+                pcoinsTip = std::make_shared<CCoinsViewCache>(pcoinscatcher);
                 {
                     LOCK(cs_main);
                     LoadChainTip(chainparams);
@@ -2865,6 +2920,9 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     {
         LOCK(cs_main);
         LogPrintf("mapBlockIndex.size() = %u\n", mapBlockIndex.size());
+        // v2.6.1: 启动末尾 seed g_chainstate seqlock —— 让 worker.Capture() 拿到真值
+        //         （ConnectBlock 在新块来之前不会调 UpdateTip → seqlock 默认 0）
+        SeedChainstateAtStartup(config);
     }
     LogPrintf("nBestHeight = %d\n", chainActive.Height());
     if (gArgs.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION)) {
@@ -2897,6 +2955,95 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
 
     if (!connman.Start(scheduler, strNodeError, connOptions)) {
         return InitError(strNodeError);
+    }
+
+    // v2.6.1 P5.1+P5.2 真接入：启动 ChainDispatcher worker pool
+    // handler 现在是 ContextValidationHandler，能拿到 source/pfrom/fLimitFree/nAbsurdFee
+    // 包裹 PTV processValidation —— RPC + P2P 路径都走它。
+    {
+        // v2.6.1：默认 8 worker（用户可通过 -dispatcherworkers=N 覆盖）
+        // review v7 a5 HIGH：clamp [1, 64] 防 -dispatcherworkers=65536 让 pthread 爆。
+        const int default_workers = 8;
+        constexpr int kMaxWorkers = 64;
+        int num_workers = static_cast<int>(
+            gArgs.GetArg("-dispatcherworkers", default_workers));
+        if (num_workers < 1) num_workers = 1;
+        if (num_workers > kMaxWorkers) {
+            LogPrintf("WARNING: -dispatcherworkers=%d > %d, clamping to %d\n",
+                      num_workers, kMaxWorkers, kMaxWorkers);
+            num_workers = kMaxWorkers;
+        }
+        // P1-2 (v2.6.1)：COMMITTED inflight 项 GC 延迟（ms），慢 RPC 客户端
+        //   父 commit 后子 tx 路由窗口。默认 5ms，clamp [1ms, 100ms]。
+        {
+            int64_t gc_ms = gArgs.GetArg("-dispatchercommitgcms",
+                tbc::validation::COMMITTED_GC_DELAY_US_DEFAULT / 1000);
+            int64_t gc_us = gc_ms * 1000;
+            if (gc_us < tbc::validation::COMMITTED_GC_DELAY_US_MIN) {
+                LogPrintf("WARNING: -dispatchercommitgcms=%d < 1ms, clamping to 1ms\n", gc_ms);
+                gc_us = tbc::validation::COMMITTED_GC_DELAY_US_MIN;
+            }
+            if (gc_us > tbc::validation::COMMITTED_GC_DELAY_US_MAX) {
+                LogPrintf("WARNING: -dispatchercommitgcms=%d > 100ms, clamping to 100ms\n", gc_ms);
+                gc_us = tbc::validation::COMMITTED_GC_DELAY_US_MAX;
+            }
+            // L1 (post-Teranode-audit)：release store 让 GC 线程 acquire load 看到稳定值
+            tbc::validation::g_committed_gc_delay_us.store(gc_us, std::memory_order_release);
+        }
+
+        // P3.3: handler 是 AcceptToMemoryPoolWorker（包 doubleCheck 占位 + processValidation）
+        //       后续 P3.1 在 worker_validate.cpp 内填真 4 项 race 兜底，此处不变。
+        tbc::validation::g_dispatcher.Start(
+            num_workers,
+            tbc::validation::AcceptToMemoryPoolWorker);
+        LogPrintf("v2.6.1: g_dispatcher started with %d workers, committed_gc_delay=%dus\n",
+                  num_workers,
+                  static_cast<int>(tbc::validation::g_committed_gc_delay_us.load(std::memory_order_acquire)));
+
+        // P3.4: 启动 AsyncTrim 专线程（mempool 满载时拆批 evict）
+        const uint64_t max_mempool_bytes = config.GetMaxMempool();
+        tbc::validation::g_async_trim.Start(
+            [max_mempool_bytes](size_t /*max_evict*/) -> size_t {
+                // 单批 trim：按 max_mempool size limit 调 mempool.TrimToSize
+                // TrimBatchFunc 返回 evicted 个数；< TRIM_BATCH_SIZE 表示 done
+                mining::CJournalChangeSetPtr changeSet {
+                    mempool.getJournalBuilder().getNewChangeSet(
+                        mining::JournalUpdateReason::INIT)
+                };
+                std::vector<TxId> removed = mempool.TrimToSize(
+                    static_cast<size_t>(max_mempool_bytes), changeSet);
+                return removed.size();
+            });
+        LogPrintf("v2.6.1: g_async_trim started (max_mempool=%d MB)\n",
+                  (int)(max_mempool_bytes / (1024 * 1024)));
+
+        // P3.6: 启动 GbtSnapshot single refresh worker（替代 thread().detach() 爆炸）
+        // refresh_fn 当前 stub：返回空 snapshot；
+        // P3.6.b 真接入时改成调 mining factory 算 snapshot。
+        //
+        // ===== task #135 NotifyTipChanged 持锁审计契约（v2.6.1 P4.1）=====
+        // refresh_fn 跑在 GbtSnapshotProvider::Run() worker thread 上。
+        // 锁次序约束（**违反则死锁**）：
+        //   1. refresh_fn 可拿 cs_main（level 0）、可拿 mempool.smtx shared（level 1）
+        //   2. refresh_fn **不可** 拿 mempool.smtx unique，**不可** 拿 batchWriteMtx
+        //      —— 否则跟 ConnectTip / DisconnectTip 三锁帧 (smtx unique +
+        //      batchWriteMtx unique) + PublishTipEarly → NotifyTipChanged
+        //      → 唤醒本 worker 形成反向锁路径
+        //   3. **任何持 cs_main 的 caller 不可阻塞等 GetSnapshot()**
+        //      —— refresh_fn 自己要拿 cs_main 才能完成；持锁等会死锁。
+        //      生产路径调 GetSnapshot 必须在 cs_main 外。
+        // 当前 stub 仅取 cs_main shared，符合契约。任何未来扩展须维持上述。
+        tbc::validation::g_gbt_snapshot.Start(
+            []() -> tbc::validation::GbtSnapshotProvider::SnapshotPtr {
+                auto s = std::make_shared<tbc::validation::GbtSnapshot>();
+                // 当前 stub：填 prev_hash 防接收方误判（仅取 cs_main 读 tip — 符合契约）
+                LOCK(cs_main);
+                if (chainActive.Tip()) {
+                    s->prev_hash = chainActive.Tip()->GetBlockHash();
+                }
+                return s;
+            });
+        LogPrintf("v2.6.1: g_gbt_snapshot started\n");
     }
 
     // Create mining factory

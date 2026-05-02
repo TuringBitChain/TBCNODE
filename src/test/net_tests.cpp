@@ -204,12 +204,16 @@ BOOST_AUTO_TEST_CASE(test_userAgentLength) {
 
     BOOST_CHECK_EQUAL(userAgent().size(), MAX_SUBVERSION_LENGTH);
 
+    // TBC: with the "/TBCNODE:3.3.0(" prefix (15 chars) plus the trailing ")/"
+    // (2 chars), the truncation point falls at a 4-char "very" boundary,
+    // leaving a full "very)/" tail (not the "v)/" tail the BSV test
+    // expected).
     BOOST_CHECK(userAgent().find(
                       "very very very very very "
                       "very very very very very very very very very very very "
                       "very very very very very very very very very very very "
                       "very very very very very very very very very very very "
-                      "very very very very very very very v)/") != std::string::npos);
+                      "very very very very very very very very)/") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

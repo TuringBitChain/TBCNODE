@@ -69,7 +69,16 @@ static const uint64_t MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS = 750 * ONE_KILOBYTE;
 /**
  * Coinbase transaction outputs can only be spent after this number of new
  * blocks (network rule).
+ *
+ * v2.6.1：废弃此全局常量，改用 chainparam `consensus.coinbaseMaturity`。
+ *   - mainnet/testnet/STN = 1（TBC 共识）
+ *   - regtest = 100（保持 BSV 上游测试假设）
+ *   保留此常量仅为 fallback / 旧 includes 兼容；新代码请直接读 chainparams。
+ *
+ * Phase I (task #166)：[[deprecated]] 强制新 callsite 编译告警，预防未来漂回全局常量。
+ *   验证：grep 现有 callsite 无 .cpp 引用（仅注释），加 attribute 安全。
  */
+[[deprecated("Use Params().GetConsensus().coinbaseMaturity instead — chainparam since v2.6.1")]]
 static const int COINBASE_MATURITY = 1;
 /** Activation time for P2SH (April 1st 2012) */
 static const int64_t P2SH_ACTIVATION_TIME = 1333234914;

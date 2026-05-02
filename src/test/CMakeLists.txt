@@ -93,8 +93,25 @@ add_test_to_suite(bitcoin test_bitcoin
 	jsonutil.cpp
 	key_tests.cpp
 	limitedmap_tests.cpp
+	async_subscriber_tests.cpp
+	async_trim_tests.cpp
+	batchwrite_p99_tests.cpp
+	chain_dispatcher_tests.cpp
+	chainstate_seqlock_tests.cpp
+	coins_p02_dual_write_tests.cpp
+	coins_p03_getcoinconcurrent_tests.cpp
+	double_check_tests.cpp
+	gbt_snapshot_tests.cpp
+	libcuckoo_soak_tests.cpp
 	limitedstack_tests.cpp
+	lock_hierarchy_tests.cpp
 	locked_ref_tests.cpp
+	per_chain_worker_tests.cpp
+	recursive_mutex_spike_tests.cpp
+	scope_guard_tests.cpp
+	signal_dispatcher_tests.cpp
+	topo_sort_tests.cpp
+	tx_stash_tests.cpp
 	m_candidates_tests.cpp
 	main_tests.cpp
 	mempool_tests.cpp
@@ -176,6 +193,7 @@ target_link_libraries(
 	Boost::unit_test_framework
 	rpcclient
 	server
+	libcuckoo                                     # v2.6.1 P0.0a.1 集成（INTERFACE 库，header-only）
 	$<$<PLATFORM_ID:Linux>:rt>) # use librt.so for aio on Linux
 
 # We need to detect if the BOOST_TEST_DYN_LINK flag is required.

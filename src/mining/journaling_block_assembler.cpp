@@ -11,6 +11,7 @@
 #include <txmempool.h>
 #include <util.h>
 #include <validation.h>
+#include <validation/topo_sort.h>  // v2.6.2 修法 Y: TopoSort 兜底防 reorg ancestor race
 
 #include <limits>
 
@@ -70,6 +71,15 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
     LOCK(cs_main);
     CBlockIndex* pindexPrevNew { chainActive.Tip() };
 
+    // v2.6.2 修法 Y：TopoSort 兜底
+    //   ★ 问题：reorg 异步 PTV 让子先于父 commit 进 mempool，子 m_parents 字段空（脏），
+    //   journal 按 insertion_index 排子在父前 → block.vtx 子在前父在后 →
+    //   ConnectBlock 按 vtx 顺序处理子时父 outpoint 不在 chainstate UTXO →
+    //   "bad-txns-inputs-missingorspent" → block 自家 reject。
+    //   ★ BSV/上游不修（mainnet 算力分散统计自愈）；TBC 测试链算力集中需修。
+    //   ★ 实施：CreateNewBlock 一刻对 vtx[1..] 拓扑排序。coinbase vtx[0] 必须保留首位。
+    //   ★ 锁层级（review v7 HIGH 修订）：TopoSort + mTxFees/mTxSigOpsCount 重写
+    //     必须在 mMtx 内做完，否则跟后台 updateBlock thread race。
     {
         std::unique_lock<std::mutex> lock { mMtx };
 
@@ -77,7 +87,61 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
         updateBlock(pindexPrevNew, mNewBlockFill? std::numeric_limits<uint64_t>::max() : mMaxSlotTransactions.load());
         // Copy our current transactions into the block
         block->vtx = mBlockTxns;
-    }
+        // 注：mBlockTxns[0] 是 newBlock() 用 emplace_back() 创的 dummy nullptr
+        //   CTransactionRef，FillBlockHeader 之后会把它替换成真 coinbase。Fix Y
+        //   TopoSort 不能 deref vtx[0]（nullptr），所以循环跳 i=0。
+
+        // ★ TopoSort 兜底（在 mMtx 内，跟 mTxFees/mTxSigOpsCount 同保护）
+        if (block->vtx.size() > 2) {
+            try {
+                // 拆出 coinbase 跟其他 tx；vtx[0] 是 newBlock() emplace_back() 的
+                //   dummy nullptr placeholder，FillBlockHeader 之后会替换成真 coinbase。
+                //   TopoSort 只处理 vtx[1..]，跳过 vtx[0] 防 nullptr deref。
+                CTransactionRef coinbase = block->vtx[0];
+                std::vector<CTransactionRef> non_coinbase(
+                    block->vtx.begin() + 1, block->vtx.end());
+
+                // TopoSort（Kahn 算法，validation/topo_sort.h）— 只对非 coinbase 跑。
+                //   non_coinbase 里若仍有 nullptr（防御），TopoSort 内部 GetId 会崩；
+                //   但生产路径 mBlockTxns[1..] 都是 addTransaction 加的真 tx，无 nullptr。
+                auto sorted = tbc::validation::TopoSort(std::move(non_coinbase));
+
+                // 建立 txid → 老 index 映射（用于重排 fees / sigops）。
+                //   i 从 1 开始跳 dummy nullptr coinbase（vtx[0]）。
+                std::unordered_map<TxId, size_t, std::hash<TxId>> old_idx_of;
+                old_idx_of.reserve(block->vtx.size());
+                for (size_t i = 1; i < block->vtx.size(); i++) {
+                    if (!block->vtx[i]) continue;  // 防御：mBlockTxns 里若混入 nullptr
+                    old_idx_of[block->vtx[i]->GetId()] = i;
+                }
+
+                // 重组 vtx + 按新顺序重排 mTxFees / mTxSigOpsCount
+                std::vector<CTransactionRef> new_vtx;
+                new_vtx.reserve(block->vtx.size());
+                new_vtx.push_back(std::move(coinbase));
+
+                std::vector<Amount> new_fees(block->vtx.size());
+                std::vector<int64_t> new_sigops(block->vtx.size());
+                new_fees[0] = mTxFees.size() > 0 ? mTxFees[0] : Amount(0);
+                new_sigops[0] = mTxSigOpsCount.size() > 0 ? mTxSigOpsCount[0] : 0;
+                for (size_t i = 0; i < sorted.size(); i++) {
+                    new_vtx.push_back(sorted[i]);
+                    size_t old_i = old_idx_of[sorted[i]->GetId()];
+                    new_fees[i + 1] = (old_i < mTxFees.size()) ? mTxFees[old_i] : Amount(0);
+                    new_sigops[i + 1] = (old_i < mTxSigOpsCount.size()) ? mTxSigOpsCount[old_i] : 0;
+                }
+                block->vtx = std::move(new_vtx);
+                mTxFees = std::move(new_fees);
+                mTxSigOpsCount = std::move(new_sigops);
+            } catch (const tbc::validation::BatchTopoSortError& e) {
+                // 极罕见：mempool 含环或重复 txid（不该发生）。保留原顺序让
+                // TestBlockValidity 报真错。
+                LogPrintf("WARNING JournalingBlockAssembler: TopoSort failed: %s "
+                          "(falling back to journal order, block may be rejected)\n",
+                          e.what());
+            }
+        }
+    }  // ★ 释放 mMtx
 
     // Fill in the block header fields
     FillBlockHeader(block, pindexPrevNew, scriptPubKeyIn);

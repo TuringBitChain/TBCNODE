@@ -176,10 +176,25 @@ public:
                 *it = 0;
         }
 
-        BOOST_CHECK_MESSAGE(
-            vchDecrypted1 == vchDecrypted2,
-            HexStr(vchDecrypted1.begin(), vchDecrypted1.end()) +
-                " != " + HexStr(vchDecrypted2.begin(), vchDecrypted2.end()));
+        // Both decryptors must agree byte-for-byte when the ciphertext is
+        // legitimate (i.e. has valid PKCS#7 padding). When the ciphertext is
+        // arbitrary (as in the random-data fuzz cases below) both routines
+        // return failure (result1 == result2 == 0) but the contents of their
+        // output buffers on failure are implementation-defined and have
+        // diverged across OpenSSL versions: OpenSSL >= 1.1 (incl. 3.x) holds
+        // the final block back in EVP_DecryptUpdate and discards it when
+        // EVP_DecryptFinal_ex reports a padding error, leaving the trailing
+        // block as the buffer's initial value (zeros under our secure
+        // allocator), whereas the in-tree CBCDecrypt writes the raw decrypted
+        // bytes through and only signals failure via the return value. Skip
+        // the buffer comparison in that case.
+        if (result1) {
+            BOOST_CHECK_MESSAGE(
+                vchDecrypted1 == vchDecrypted2,
+                HexStr(vchDecrypted1.begin(), vchDecrypted1.end()) +
+                    " != " +
+                    HexStr(vchDecrypted2.begin(), vchDecrypted2.end()));
+        }
 
         if (vchPlaintext.size())
             BOOST_CHECK(CKeyingMaterial(vchPlaintext.begin(),

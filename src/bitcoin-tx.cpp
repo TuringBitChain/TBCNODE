@@ -564,7 +564,7 @@ static void MutateTxSign(const Config& config, CMutableTransaction& tx, const st
     // raw tx:
     CMutableTransaction mergedTx(txVariants[0]);
     bool fComplete = true;
-    CCoinsView viewDummy;
+    CCoinsViewEmpty viewDummy;   // C-6: stub backing view
     CCoinsViewCache view(&viewDummy);
 
     if (!registers.count("privatekeys")) {

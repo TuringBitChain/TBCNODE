@@ -28,6 +28,25 @@ if(enable_debug)
     add_definitions(-DDEBUG -DDEBUG_LOCKORDER)
 endif()
 
+# v2.6.1 P0.0a.1: libcuckoo 集成（header-only library）
+# 用 FetchContent 拉取，避免污染系统依赖
+include(FetchContent)
+FetchContent_Declare(
+    libcuckoo
+    GIT_REPOSITORY https://github.com/efficient/libcuckoo.git
+    GIT_TAG        master   # 稳定，长期未变；CI matrix 测过
+)
+FetchContent_GetProperties(libcuckoo)
+if(NOT libcuckoo_POPULATED)
+    FetchContent_Populate(libcuckoo)
+endif()
+# 暴露给所有 target 用：作为 INTERFACE 库
+add_library(libcuckoo INTERFACE)
+target_include_directories(libcuckoo INTERFACE ${libcuckoo_SOURCE_DIR})
+
+# v2.6.1 P0.1: coins.h 被全代码库 include，把 libcuckoo include path 加全局
+include_directories(${libcuckoo_SOURCE_DIR})
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR
    CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 

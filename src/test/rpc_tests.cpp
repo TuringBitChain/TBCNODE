@@ -298,44 +298,43 @@ BOOST_AUTO_TEST_CASE(rpc_createraw_op_return) {
 }
 
 BOOST_AUTO_TEST_CASE(rpc_format_monetary_values) {
-    BOOST_CHECK(ValueFromAmount(Amount(0LL)).write() == "0.00000000");
-    BOOST_CHECK(ValueFromAmount(Amount(1LL)).write() == "0.00000001");
-    BOOST_CHECK(ValueFromAmount(Amount(17622195LL)).write() == "0.17622195");
-    BOOST_CHECK(ValueFromAmount(Amount(50000000LL)).write() == "0.50000000");
-    BOOST_CHECK(ValueFromAmount(Amount(89898989LL)).write() == "0.89898989");
-    BOOST_CHECK(ValueFromAmount(Amount(100000000LL)).write() == "1.00000000");
-    BOOST_CHECK(ValueFromAmount(Amount(2099999999999990LL)).write() ==
-                "20999999.99999990");
-    BOOST_CHECK(ValueFromAmount(Amount(2099999999999999LL)).write() ==
-                "20999999.99999999");
+    // TBC: TBCCOIN = 1e6 satoshi (6 decimal places), not BSV's 1e8 (8 decimal places).
+    BOOST_CHECK(ValueFromAmount(Amount(0LL)).write() == "0.000000");
+    BOOST_CHECK(ValueFromAmount(Amount(1LL)).write() == "0.000001");
+    BOOST_CHECK(ValueFromAmount(Amount(176221LL)).write() == "0.176221");
+    BOOST_CHECK(ValueFromAmount(Amount(500000LL)).write() == "0.500000");
+    BOOST_CHECK(ValueFromAmount(Amount(898989LL)).write() == "0.898989");
+    BOOST_CHECK(ValueFromAmount(Amount(1000000LL)).write() == "1.000000");
+    BOOST_CHECK(ValueFromAmount(Amount(20999999999999LL)).write() ==
+                "20999999.999999");
+    BOOST_CHECK(ValueFromAmount(Amount(20999999999990LL)).write() ==
+                "20999999.999990");
 
-    BOOST_CHECK_EQUAL(ValueFromAmount(Amount(0)).write(), "0.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(123456789 * (COIN / 10000)).write(),
-                      "12345.67890000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * COIN).write(), "-1.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * COIN / 10).write(), "-0.10000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(Amount(0)).write(), "0.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(123456789 * (TBCCOIN / 10000)).write(),
+                      "12345.678900");
+    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * TBCCOIN).write(), "-1.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * TBCCOIN / 10).write(), "-0.100000");
 
-    BOOST_CHECK_EQUAL(ValueFromAmount(100000000 * COIN).write(),
-                      "100000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10000000 * COIN).write(),
-                      "10000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(1000000 * COIN).write(),
-                      "1000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(100000 * COIN).write(),
-                      "100000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10000 * COIN).write(), "10000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(1000 * COIN).write(), "1000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(100 * COIN).write(), "100.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10 * COIN).write(), "10.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN).write(), "1.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10).write(), "0.10000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100).write(), "0.01000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 1000).write(), "0.00100000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10000).write(), "0.00010000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100000).write(), "0.00001000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 1000000).write(), "0.00000100");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10000000).write(), "0.00000010");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100000000).write(), "0.00000001");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100000000 * TBCCOIN).write(),
+                      "100000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10000000 * TBCCOIN).write(),
+                      "10000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(1000000 * TBCCOIN).write(),
+                      "1000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100000 * TBCCOIN).write(),
+                      "100000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10000 * TBCCOIN).write(), "10000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(1000 * TBCCOIN).write(), "1000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100 * TBCCOIN).write(), "100.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10 * TBCCOIN).write(), "10.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN).write(), "1.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 10).write(), "0.100000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 100).write(), "0.010000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 1000).write(), "0.001000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 10000).write(), "0.000100");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 100000).write(), "0.000010");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 1000000).write(), "0.000001");
 }
 
 static UniValue ValueFromString(const std::string &str) {
@@ -344,73 +343,87 @@ static UniValue ValueFromString(const std::string &str) {
     return value;
 }
 
-BOOST_AUTO_TEST_CASE(rpc_parse_monetary_values) {
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("-0.00000001")),
-                      UniValue);
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0")), Amount(0LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.00000000")),
-                      Amount(0LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.00000001")),
-                      Amount(1LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.17622195")),
-                      Amount(17622195LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.5")),
-                      Amount(50000000LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.50000000")),
-                      Amount(50000000LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.89898989")),
-                      Amount(89898989LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("1.00000000")),
-                      Amount(100000000LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("20999999.9999999")),
-                      Amount(2099999999999990LL));
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("20999999.99999999")),
-                      Amount(2099999999999999LL));
+// Helper that translates a UniValue throw into a std::runtime_error so that
+// BOOST_CHECK_THROW can catch it (Boost.Test does not always recognise
+// thrown UniValue objects via BOOST_CHECK_THROW(..., UniValue)).
+static Amount AmountFromValueChecked(const UniValue &v) {
+    try {
+        return AmountFromValue(v);
+    } catch (const UniValue &) {
+        throw std::runtime_error("AmountFromValue threw UniValue");
+    }
+}
 
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("1e-8")),
-                      COIN / 100000000);
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.1e-7")),
-                      COIN / 100000000);
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.01e-6")),
-                      COIN / 100000000);
+BOOST_AUTO_TEST_CASE(rpc_parse_monetary_values) {
+    // TBC: TBCCOIN = 1e6 satoshi (6 decimal places).
+    BOOST_TEST_MESSAGE("CP1");
+    BOOST_CHECK_THROW(AmountFromValueChecked(ValueFromString("-0.000001")),
+                      std::runtime_error);
+    BOOST_TEST_MESSAGE("CP2");
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0")), Amount(0LL));
+    BOOST_TEST_MESSAGE("CP3");
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.000000")),
+                      Amount(0LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.000001")),
+                      Amount(1LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.176221")),
+                      Amount(176221LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.5")),
+                      Amount(500000LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.500000")),
+                      Amount(500000LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.898989")),
+                      Amount(898989LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("1.000000")),
+                      Amount(1000000LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("20999999.99999")),
+                      Amount(20999999999990LL));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("20999999.999999")),
+                      Amount(20999999999999LL));
+
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("1e-6")),
+                      TBCCOIN / 1000000);
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.1e-5")),
+                      TBCCOIN / 1000000);
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.01e-4")),
+                      TBCCOIN / 1000000);
     BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString(
                           "0."
                           "0000000000000000000000000000000000000000000000000000"
-                          "000000000000000000000001e+68")),
-                      COIN / 100000000);
+                          "000000000000000000000001e+70")),
+                      TBCCOIN / 1000000);
     BOOST_CHECK_EQUAL(
         AmountFromValue(ValueFromString("10000000000000000000000000000000000000"
                                         "000000000000000000000000000e-64")),
-        COIN);
+        TBCCOIN);
     BOOST_CHECK_EQUAL(
         AmountFromValue(ValueFromString(
             "0."
             "000000000000000000000000000000000000000000000000000000000000000100"
             "000000000000000000000000000000000000000000000000000e64")),
-        COIN);
+        TBCCOIN);
 
+    // should fail (too many decimals for 6dp)
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e-7")), UniValue);
     // should fail
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e-9")), UniValue);
-    // should fail
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("0.000000019")),
-                      UniValue);
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("0.0000019")), UniValue);
     // should pass, cut trailing 0
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.00000001000000")),
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.00000100000")),
                       Amount(1LL));
     // should fail
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("19e-9")), UniValue);
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("19e-7")), UniValue);
     // should pass, leading 0 is present
-    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.19e-6")), Amount(19));
+    BOOST_CHECK_EQUAL(AmountFromValue(ValueFromString("0.19e-4")), Amount(19));
 
     // overflow error
     BOOST_CHECK_THROW(AmountFromValue(ValueFromString("92233720368.54775808")),
                       UniValue);
     // overflow error
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e+11")), UniValue);
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e+13")), UniValue);
     // overflow error signless
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e11")), UniValue);
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("1e13")), UniValue);
     // overflow error
-    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("93e+9")), UniValue);
+    BOOST_CHECK_THROW(AmountFromValue(ValueFromString("93e+11")), UniValue);
 }
 
 BOOST_AUTO_TEST_CASE(json_parse_errors) {
@@ -424,7 +437,7 @@ BOOST_AUTO_TEST_CASE(json_parse_errors) {
     BOOST_CHECK_THROW(AmountFromValue(ParseNonRFCJSONValue(".19e-6")),
                       std::runtime_error);
     BOOST_CHECK_EQUAL(AmountFromValue(ParseNonRFCJSONValue(
-                          "0.00000000000000000000000000000000000001e+30 ")),
+                          "0.00000000000000000000000000000000000001e+32 ")),
                       Amount(1));
     // Invalid, initial garbage
     BOOST_CHECK_THROW(ParseNonRFCJSONValue("[1.0"), std::runtime_error);
@@ -459,7 +472,7 @@ BOOST_AUTO_TEST_CASE(rpc_ban) {
     BOOST_CHECK_EQUAL(ar.size(), 0UL);
 
     BOOST_CHECK_NO_THROW(
-        r = CallRPC(std::string("setban 127.0.0.0/24 add 1607731200 true")));
+        r = CallRPC(std::string("setban 127.0.0.0/24 add 4607731200 true")));
     BOOST_CHECK_NO_THROW(r = CallRPC(std::string("listbanned")));
     ar = r.get_array();
     o1 = ar[0].get_obj();
@@ -467,7 +480,7 @@ BOOST_AUTO_TEST_CASE(rpc_ban) {
     UniValue banned_until = find_value(o1, "banned_until");
     BOOST_CHECK_EQUAL(adr.get_str(), "127.0.0.0/24");
     // absolute time check
-    BOOST_CHECK_EQUAL(banned_until.get_int64(), 1607731200);
+    BOOST_CHECK_EQUAL(banned_until.get_int64(), 4607731200);
 
     BOOST_CHECK_NO_THROW(CallRPC(std::string("clearbanned")));
 

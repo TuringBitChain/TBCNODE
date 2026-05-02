@@ -278,7 +278,7 @@ SetupDummyInputs(CBasicKeyStore &keystoreRet, CCoinsViewCache &coinsRet) {
 
 BOOST_AUTO_TEST_CASE(test_Get) {
     CBasicKeyStore keystore;
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // v2.6.1 P4.6: CCoinsView abstract
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions =
         SetupDummyInputs(keystore, coins);
@@ -627,7 +627,7 @@ BOOST_AUTO_TEST_CASE(test_witness) {
 BOOST_AUTO_TEST_CASE(test_IsStandard) {
     LOCK(cs_main);
     CBasicKeyStore keystore;
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // v2.6.1 P4.6: CCoinsView abstract
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions =
         SetupDummyInputs(keystore, coins);
@@ -648,8 +648,9 @@ BOOST_AUTO_TEST_CASE(test_IsStandard) {
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
 
     // Check dust with default relay fee:
-    Amount nDustThreshold = 3 * Amount(182 * dustRelayFee.GetFeePerK() / 1000);
-    BOOST_CHECK_EQUAL(nDustThreshold, Amount(135));
+    // TBC: GetDustThreshold returns a fixed Amount(10) regardless of fee rate
+    Amount nDustThreshold = t.vout[0].GetDustThreshold(dustRelayFee, true);
+    BOOST_CHECK_EQUAL(nDustThreshold, Amount(10));
     // dust:
     t.vout[0].nValue = nDustThreshold - Amount(1);
     BOOST_CHECK(!IsStandardTx(testConfig, CTransaction(t), 1, reason));
@@ -657,14 +658,13 @@ BOOST_AUTO_TEST_CASE(test_IsStandard) {
     t.vout[0].nValue = nDustThreshold;
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
 
-    // Check dust with odd relay fee to verify rounding:
-    // nDustThreshold = 182 * 1234 / 1000 * 3
+    // Check dust threshold ignores relay fee in TBC (fixed at 10 sat):
     dustRelayFee = CFeeRate(Amount(1234));
     // dust:
-    t.vout[0].nValue = Amount(672 - 1);
+    t.vout[0].nValue = Amount(10 - 1);
     BOOST_CHECK(!IsStandardTx(testConfig, CTransaction(t), 1, reason));
     // not dust:
-    t.vout[0].nValue = Amount(672);
+    t.vout[0].nValue = Amount(10);
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
     dustRelayFee = CFeeRate(DUST_RELAY_TX_FEE);
 
@@ -703,7 +703,7 @@ BOOST_AUTO_TEST_CASE(test_IsStandard_MaxTxSizePolicy)
 {
     LOCK(cs_main);
     CBasicKeyStore keystore;
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // v2.6.1 P4.6: CCoinsView abstract
     CCoinsViewCache coins(&coinsDummy);
     std::vector<CMutableTransaction> dummyTransactions = SetupDummyInputs(keystore, coins);
 

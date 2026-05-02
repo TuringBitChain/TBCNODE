@@ -12,6 +12,8 @@
 #include <scheduler.h>
 #include <time_locked_mempool.h>
 #include <txn_validator.h>
+#include <consensus/validation.h>           // v2.6.1 REJECT_INVALID
+#include <validation/chain_dispatcher.h>    // v2.6.1 P5.x
 
 using namespace mining;
 
@@ -283,25 +285,27 @@ bool CTimeLockedMempool::loadMempool(const task::CCancellationToken& shutdownTok
 
             if(nTime + mPurgeAge > nNow)
             {
-                // Mempool Journal ChangeSet
-                CJournalChangeSetPtr changeSet {
-                    mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::INIT)
-                };
+                // v2.6.1 P5.x: dispatcher 启动 → SubmitSync(file)；未启动 fallback PTV
                 std::string reason {};
                 bool standard { IsStandardTx(GlobalConfig::GetConfig(), *tx, chainActive.Tip()->nHeight + 1, reason) };
-                const CValidationState& state {
-                    // Execute txn validation synchronously.
-                    txValidator->processValidation(
+                CValidationState state;
+                if (tbc::validation::g_dispatcher.IsStarted()) {
+                    std::string err;
+                    bool ok = tbc::validation::g_dispatcher.SubmitSync(
+                        tx, err, TxSource::file, /*absurdFee*/0,
+                        /*fLimitFree*/true, nTime);
+                    if (!ok) state.Invalid(false, REJECT_INVALID, err);
+                } else {
+                    CJournalChangeSetPtr changeSet {
+                        mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::INIT)
+                    };
+                    state = txValidator->processValidation(
                         std::make_shared<CTxInputData>(
-                            pTxIdTracker, // a pointer to the TxIdTracker
-                            tx,    // a pointer to the tx
-                            TxSource::file, // tx source
+                            pTxIdTracker, tx, TxSource::file,
                             standard ? TxValidationPriority::high : TxValidationPriority::low,
-                            nTime, // nAcceptTime
-                            true),  // fLimitFree
-                        changeSet, // an instance of the mempool journal
-                        true) // fLimitMempoolSize
-                };
+                            nTime, true),
+                        changeSet, true);
+                }
 
                 // Check results
                 if(state.IsValid())
@@ -563,13 +567,20 @@ void CTimeLockedMempool::periodicChecks()
             // For full belt-and-braces safety, resubmit newly final transaction for revalidation
             std::string reason {};
             bool standard { IsStandardTx(GlobalConfig::GetConfig(), *txn, chainTip->nHeight + 1, reason) };
-            g_connman->EnqueueTxnForValidator(
-                std::make_shared<CTxInputData>(
-                    pTxIdTracker,
-                    txn,
-                    TxSource::finalised,
-                    standard ? TxValidationPriority::high : TxValidationPriority::low,
-                    GetTime()));
+            // v2.6.1 P5.x: dispatcher 启动 → SubmitAsync(finalised)；未启动 fallback PTV
+            if (tbc::validation::g_dispatcher.IsStarted()) {
+                tbc::validation::g_dispatcher.SubmitAsync(
+                    txn, TxSource::finalised, /*absurdFee*/0,
+                    /*fLimitFree*/false, GetTime());
+            } else {
+                g_connman->EnqueueTxnForValidator(
+                    std::make_shared<CTxInputData>(
+                        pTxIdTracker,
+                        txn,
+                        TxSource::finalised,
+                        standard ? TxValidationPriority::high : TxValidationPriority::low,
+                        GetTime()));
+            }
         }
         // Purge age passed?
         else if(timeInPool >= mPurgeAge)

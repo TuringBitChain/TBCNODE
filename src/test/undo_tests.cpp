@@ -48,7 +48,7 @@ BOOST_AUTO_TEST_CASE(connect_utxo_extblock) {
     CBlock block;
     CMutableTransaction tx;
 
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // v2.6.1 P4.6: CCoinsView abstract
     CCoinsViewCache view(&coinsDummy);
 
     block.hashPrevBlock = InsecureRand256();

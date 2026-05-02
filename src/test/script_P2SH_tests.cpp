@@ -371,7 +371,7 @@ BOOST_AUTO_TEST_CASE(switchover) {
 
 BOOST_AUTO_TEST_CASE(AreInputsStandard) {
     LOCK(cs_main);
-    CCoinsView coinsDummy;
+    CCoinsViewEmpty coinsDummy;   // v2.6.1 P4.6: CCoinsView abstract
     CCoinsViewCache coins(&coinsDummy);
     CBasicKeyStore keystore;
     CKey key[6];

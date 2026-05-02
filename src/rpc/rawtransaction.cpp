@@ -28,6 +28,8 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
 #include "validation.h"
+#include "validation/chain_dispatcher.h"   // v2.6.1 M5
+#include "validation/topo_sort.h"          // v2.6.1 P2.5
 #ifdef ENABLE_WALLET
 #include "wallet/rpcwallet.h"
 #include "wallet/wallet.h"
@@ -143,32 +145,29 @@ void getrawtransaction(const Config& config,
                        const JSONRPCRequest& request,
                        CTextWriter& textWriter,
                        bool processedInBatch,
-                       std::function<void()> httpCallback) 
+                       std::function<void()> httpCallback)
 {
-    
-    LOCK(cs_main);
-
     TxId txid = TxId(ParseHashV(request.params[0], "parameter 1"));
 
     // Accept either a bool (true) or a num (>=1) to indicate verbose output.
     bool fVerbose = false;
-    if (request.params.size() > 1) 
+    if (request.params.size() > 1)
     {
-        if (request.params[1].isNum()) 
+        if (request.params[1].isNum())
         {
-            if (request.params[1].get_int() != 0) 
+            if (request.params[1].get_int() != 0)
             {
                 fVerbose = true;
             }
-        } 
-        else if (request.params[1].isBool()) 
+        }
+        else if (request.params[1].isBool())
         {
-            if (request.params[1].isTrue()) 
+            if (request.params[1].isTrue())
             {
                 fVerbose = true;
             }
-        } 
-        else 
+        }
+        else
         {
             throw JSONRPCError(
                 RPC_TYPE_ERROR,
@@ -176,10 +175,42 @@ void getrawtransaction(const Config& config,
         }
     }
 
+    // verbose=false fast path: cs_main-free.
+    // No chain context (hashBlock / confirmations / blocktime) is needed for
+    // hex-only output, so we route through GetTransactionRaw which bypasses
+    // cs_main entirely (mempool.smtx + LevelDB + append-only block files).
+    if (!fVerbose)
+    {
+        CTransactionRef tx;
+        if (!GetTransactionRaw(txid, tx))
+        {
+            throw JSONRPCError(
+                RPC_INVALID_ADDRESS_OR_KEY,
+                std::string(fTxIndex ? "No such mempool or blockchain transaction"
+                                     : "No such mempool transaction. Use -txindex "
+                                       "to enable blockchain transaction queries") +
+                    ". Use gettransaction for wallet transactions.");
+        }
+        if (!processedInBatch)
+        {
+            httpCallback();
+        }
+        textWriter.Write("{\"result\": \"");
+        EncodeHexTx(*tx, textWriter, RPCSerializationFlags());
+        textWriter.Write("\", \"error\": " + NullUniValue.write() + ", \"id\": " + request.id.write() + "}");
+        return;
+    }
+
+    // verbose=true path: needs chain context (blockhash / confirmations /
+    // blocktime / blockheight). Take cs_main and use the legacy GetTransaction
+    // which fills hashBlock and isGenesisEnabled while reading mapBlockIndex /
+    // chainActive under the lock.
+    LOCK(cs_main);
+
     CTransactionRef tx;
     uint256 hashBlock;
     bool isGenesisEnabled;
-    if (!GetTransaction(config, txid, tx, true, hashBlock, isGenesisEnabled)) 
+    if (!GetTransaction(config, txid, tx, true, hashBlock, isGenesisEnabled))
     {
         throw JSONRPCError(
             RPC_INVALID_ADDRESS_OR_KEY,
@@ -189,17 +220,9 @@ void getrawtransaction(const Config& config,
                 ". Use gettransaction for wallet transactions.");
     }
 
-    if (!processedInBatch) 
+    if (!processedInBatch)
     {
         httpCallback();
-    }
-
-    if (!fVerbose) 
-    {
-        textWriter.Write("{\"result\": \"");
-        EncodeHexTx(*tx, textWriter, RPCSerializationFlags());
-        textWriter.Write("\", \"error\": " + NullUniValue.write() + ", \"id\": " + request.id.write() + "}");
-        return;
     }
 
     textWriter.Write("{\"result\": ");
@@ -216,29 +239,72 @@ void getrawtransaction(const Config& config,
     {
         CBlockDetailsData blockData;
         auto mi = mapBlockIndex.find(hashBlock);
-        if (mi != mapBlockIndex.end() && mi->second) 
+        if (mi != mapBlockIndex.end() && mi->second)
         {
             const CBlockIndex* pindex = mi->second;
-            if (chainActive.Contains(pindex)) 
+            if (chainActive.Contains(pindex))
             {
                 blockData.confirmations = 1 + chainActive.Height() - pindex->nHeight;
                 blockData.time = pindex->GetBlockTime();
                 blockData.blockTime = pindex->GetBlockTime();
                 blockData.blockHeight = pindex->nHeight;
             }
-            else 
+            else
             {
                 blockData.confirmations = 0;
             }
         }
         TxToJSON(*tx, hashBlock, isGenesisEnabled, RPCSerializationFlags(), jWriter, blockData);
-    } 
-    else 
+    }
+    else
     {
         TxToJSON(*tx, uint256(), isGenesisEnabled, RPCSerializationFlags(), jWriter);
     }
 
     textWriter.Write(", \"error\": " + NullUniValue.write() + ", \"id\": " + request.id.write() + "}");
+}
+
+static UniValue getrawtransactiondata(const Config &config,
+                                      const JSONRPCRequest &request) {
+    if (request.fHelp || request.params.size() != 1) {
+        throw std::runtime_error(
+            "getrawtransactiondata \"txid\"\n"
+            "\nReturns ONLY the serialized hex-encoded transaction bytes for "
+            "\"txid\".\n"
+            "\nThis is a cs_main-free fast path. Unlike getrawtransaction, it "
+            "does NOT return blockhash, confirmations, blocktime, or any "
+            "verbose decoded fields.\n"
+            "\nLookups proceed: mempool first, then -txindex on disk. The "
+            "transaction is returned as it was serialized at the time it was "
+            "stored; no chain context (e.g. confirmation count) is computed "
+            "or returned.\n"
+            "\nUse this for high-throughput clients that already know a "
+            "transaction's identity and need only its raw bytes (e.g. "
+            "indexers, signing services, FT/Pool processors).\n"
+            "\nArguments:\n"
+            "1. \"txid\"      (string, required) The transaction id\n"
+            "\nResult:\n"
+            "\"data\"      (string) The serialized, hex-encoded data for "
+            "'txid'\n"
+            "\nExamples:\n" +
+            HelpExampleCli("getrawtransactiondata", "\"mytxid\"") +
+            HelpExampleRpc("getrawtransactiondata", "\"mytxid\""));
+    }
+
+    TxId txid(ParseHashV(request.params[0], "parameter 1"));
+
+    CTransactionRef tx;
+    if (!GetTransactionRaw(txid, tx)) {
+        throw JSONRPCError(
+            RPC_INVALID_ADDRESS_OR_KEY,
+            std::string(fTxIndex
+                        ? "No such mempool or blockchain transaction"
+                        : "No such mempool transaction. Use -txindex to "
+                          "enable blockchain transaction queries") +
+                ". Use gettransaction for wallet transactions.");
+    }
+
+    return EncodeHexTx(*tx, RPCSerializationFlags());
 }
 
 static UniValue gettxoutproof(const Config &config,
@@ -869,7 +935,7 @@ static UniValue signrawtransaction(const Config &config,
     CMutableTransaction mergedTx(txVariants[0]);
 
     // Fetch previous transactions (inputs):
-    CCoinsView viewDummy;
+    CCoinsViewEmpty viewDummy;   // C-6: stub backing view
     CCoinsViewCache view(&viewDummy);
     {
         std::shared_lock lock(mempool.smtx);
@@ -1165,6 +1231,13 @@ static UniValue sendrawtransaction(const Config &config,
     }
     RPCTypeCheck(request.params,
                  {UniValue::VSTR, UniValue::VBOOL, UniValue::VBOOL});
+
+    // sub-A5 (task #161 + #203)：删 BatchWrite 期 RPC 短路。
+    //   原 dev 在 BatchWrite 期立即 reject 是 fail-fast 优化（RPC 不阻塞 client），
+    //   但偏离 prod 行为（prod RPC 阻塞等 cs_main 完成 BatchWrite 后跑 PTV）。
+    //   既然要"零偏离 prod RPC 接口"，RPC 也跟 P2P 一样阻塞等 dispatcher → worker
+    //   走完 ConnectTip 三锁帧，client 看到的延迟是 prod 等价的 cs_main wait。
+
     // parse hex string from parameter
     CMutableTransaction mtx;
     if (!DecodeHexTx(mtx, request.params[0].get_str())) {
@@ -1193,52 +1266,122 @@ static UniValue sendrawtransaction(const Config &config,
             mempool.PrioritiseTransaction(tx->GetId(), tx->GetId().ToString(),
                                           0.0, MAX_MONEY);
         }
-        // Mempool Journal ChangeSet
-        CJournalChangeSetPtr changeSet {
-            mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::NEW_TXN)
-        };
-        // Forward transaction to the validator and wait for results.
-        // To support backward compatibility (of this interface) we need
-        // to wait until the transaction is processed.
-        // At this stage any information about validation failure (or mempool rejects)
-        // are put into the log file.
-        const auto& txValidator = g_connman->getTxnValidator();
-        const CValidationState& status {
-            txValidator->processValidation(
-                std::make_shared<CTxInputData>(
-                    g_connman->GetTxIdTracker(), // a pointer to the TxIdTracker
-                    std::move(tx), // a pointer to the tx
-                    TxSource::rpc, // tx source
-                    TxValidationPriority::normal, // tx validation priority
-                    GetTime(),     // nAcceptTime
-                    false,         // fLimitFree
-                    nMaxRawTxFee), // nAbsurdFee
-                changeSet, // an instance of the journal
-                true) // fLimitMempoolSize
-        };
-        // Check if the transaction was accepted by the mempool.
-        // Due to potential race-condition we have to explicitly call exists() instead of
-        // checking a result from the status variable.
-        if (!mempool.Exists(txid) && !mempool.getNonFinalPool().exists(txid)) {
-            if (!status.IsValid()) {
-                if (dontCheckFee) {
-                    mempool.ClearPrioritisation(txid);
+
+        // v2.6.1 P5.1 真接入：dispatcher 启动时全走新路径（含 allowhighfees）
+        //                    handler 用 item.nAbsurdFee 作 absurd-fee cap。
+        // sub-A12 (task #152)：拿全 CValidationState 而非 (bool, string)，让下游 throw
+        //                      用真实 reject_code / IsMissingInputs 跟 prod 等价。
+        bool used_dispatcher = false;
+        CValidationState dispatcher_state;
+        if (tbc::validation::g_dispatcher.IsStarted()) {
+            used_dispatcher = true;
+            dispatcher_state = tbc::validation::g_dispatcher.SubmitSyncState(
+                tx,
+                TxSource::rpc,
+                nMaxRawTxFee.GetSatoshis(),  // absurd fee
+                /*fLimitFree*/false,
+                GetTime());
+        }
+
+        if (!used_dispatcher) {
+            // Mempool Journal ChangeSet
+            CJournalChangeSetPtr changeSet {
+                mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::NEW_TXN)
+            };
+            // Forward transaction to the validator and wait for results.
+            // To support backward compatibility (of this interface) we need
+            // to wait until the transaction is processed.
+            // At this stage any information about validation failure (or mempool rejects)
+            // are put into the log file.
+            const auto& txValidator = g_connman->getTxnValidator();
+            const CValidationState& status {
+                txValidator->processValidation(
+                    std::make_shared<CTxInputData>(
+                        g_connman->GetTxIdTracker(), // a pointer to the TxIdTracker
+                        std::move(tx), // a pointer to the tx
+                        TxSource::rpc, // tx source
+                        TxValidationPriority::normal, // tx validation priority
+                        GetTime(),     // nAcceptTime
+                        false,         // fLimitFree
+                        nMaxRawTxFee), // nAbsurdFee
+                    changeSet, // an instance of the journal
+                    true) // fLimitMempoolSize
+            };
+            // Check if the transaction was accepted by the mempool.
+            // Due to potential race-condition we have to explicitly call exists() instead of
+            // checking a result from the status variable.
+            if (!mempool.Exists(txid) && !mempool.getNonFinalPool().exists(txid)) {
+                if (!status.IsValid()) {
+                    if (dontCheckFee) {
+                        mempool.ClearPrioritisation(txid);
+                    }
+                    if (status.IsMissingInputs()) {
+                            throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
+                    } else if (status.IsInvalid()) {
+                        throw JSONRPCError(RPC_TRANSACTION_REJECTED,
+                                           strprintf("%i: %s", status.GetRejectCode(),
+                                                     status.GetRejectReason()));
+                    } else {
+                        throw JSONRPCError(RPC_TRANSACTION_ERROR, status.GetRejectReason());
+                    }
                 }
-                if (status.IsMissingInputs()) {
+            // At this stage we do reject a request which reached this point due to a race
+            // condition so we can return correct error code to the caller.
+            } else if (!status.IsValid()) {
+                throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN,
+                                   "Transaction already in the mempool");
+            }
+        } else {
+            // dispatcher 走完，根据结果 + mempool 实际状态 throw 合适错误
+            // sub-A12 (task #151 + #152)：跟 prod processValidation 路径同语义：
+            //   - dispatcher_state.IsMissingInputs → RPC_TRANSACTION_ERROR "Missing inputs"
+            //   - dispatcher_state.IsInvalid → RPC_TRANSACTION_REJECTED + reject_code
+            //   - dispatcher_state.IsError → RPC_TRANSACTION_ERROR + reason
+            //   - dispatcher_state OK 但 !mempool.Exists → 节点状态不一致，
+            //     不再静默 accept（prod 行为：不可能发生，dev race 路径必须显式 reject）
+            if (!mempool.Exists(txid) && !mempool.getNonFinalPool().exists(txid)) {
+                if (!dispatcher_state.IsValid()) {
+                    if (dontCheckFee) {
+                        mempool.ClearPrioritisation(txid);
+                    }
+                    if (dispatcher_state.IsMissingInputs()) {
                         throw JSONRPCError(RPC_TRANSACTION_ERROR, "Missing inputs");
-                } else if (status.IsInvalid()) {
-                    throw JSONRPCError(RPC_TRANSACTION_REJECTED,
-                                       strprintf("%i: %s", status.GetRejectCode(),
-                                                 status.GetRejectReason()));
+                    } else if (dispatcher_state.IsInvalid()) {
+                        throw JSONRPCError(RPC_TRANSACTION_REJECTED,
+                                           strprintf("%i: %s",
+                                                     dispatcher_state.GetRejectCode(),
+                                                     dispatcher_state.GetRejectReason()));
+                    } else {
+                        // review v7 a3 HIGH：IsError 路径 reason 可能空 — fallback
+                        //   到 "internal error" 防客户端拿到空错误字符串。
+                        std::string reason = dispatcher_state.GetRejectReason();
+                        if (reason.empty()) reason = "internal error";
+                        throw JSONRPCError(RPC_TRANSACTION_ERROR, reason);
+                    }
                 } else {
-                    throw JSONRPCError(RPC_TRANSACTION_ERROR, status.GetRejectReason());
+                    // M3 (post-Teranode-audit) 修：dispatcher OK 但 mempool 不存在
+                    //   原行为统一回 ALREADY_IN_CHAIN，若 worker 内部静默丢 tx
+                    //   客户端会误以为已确认。
+                    //   修法：先用 GetTransaction 验证 tx 是否真在 chain，
+                    //         真在 → ALREADY_IN_CHAIN（race 上链路径，正确）
+                    //         不在 → RPC_TRANSACTION_ERROR + "validation race: not in mempool/chain"
+                    //              提示客户端真有问题（不要假成功）
+                    CTransactionRef confirmedTx;
+                    uint256 hashBlockUnused;
+                    bool isGenesisEnabledUnused;
+                    bool inChain = GetTransaction(config, TxId(txid), confirmedTx,
+                                                  /*allowSlow*/false,
+                                                  hashBlockUnused,
+                                                  isGenesisEnabledUnused)
+                                   && !hashBlockUnused.IsNull();
+                    if (inChain) {
+                        throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN,
+                                           "Transaction already in chain (race)");
+                    }
+                    throw JSONRPCError(RPC_TRANSACTION_ERROR,
+                                       "validation race: tx not in mempool or chain");
                 }
             }
-        // At this stage we do reject a request which reached this point due to a race
-        // condition so we can return correct error code to the caller.
-        } else if (!status.IsValid()) {
-            throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN,
-                               "Transaction already in the mempool");
         }
     } else {
         throw JSONRPCError(RPC_TRANSACTION_ALREADY_IN_CHAIN,
@@ -1377,6 +1520,14 @@ static UniValue sendrawtransactions(const Config &config,
 
     RPCTypeCheck(request.params, {UniValue::VARR});
 
+    // review v7 a3 CRITICAL：sendrawtransactions 跟 sendrawtransaction 同语义，
+    //   必须先检 g_connman；否则 GetTxIdTracker() deref nullptr。
+    if (!g_connman) {
+        throw JSONRPCError(
+            RPC_CLIENT_P2P_DISABLED,
+            "Error: Peer-to-peer functionality missing or disabled");
+    }
+
     if (request.params[0].empty()) {
         throw JSONRPCError(RPC_INVALID_PARAMETER,
             std::string("Invalid parameter: An empty json array of objects"));
@@ -1473,23 +1624,72 @@ static UniValue sendrawtransactions(const Config &config,
      * Run synchronous batch validation.
      */
     CTxnValidator::RejectedTxns rejectedTxns {};
-    // Applay journal changeSet straight after processValidation call.
     {
-        // Mempool Journal ChangeSet
-        CJournalChangeSetPtr changeSet {
-            mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::NEW_TXN)
-        };
         // Prioritise transactions (if any were requested to prioritise)
         // - mempool prioritisation cleanup is done during destruction
         //   for those txns which are not accepted by the mempool
         CTxPrioritizer txPrioritizer(mempool, std::move(vTxToPrioritise));
-        // Run synch batch validation and wait for results.
-        const auto& txValidator = g_connman->getTxnValidator();
-        rejectedTxns =
-            txValidator->processValidation(
-                vTxInputData, // A vector of txns that need to be processed
-                changeSet, // an instance of the journal
-                true); // fLimitMempoolSize
+
+        // v2.6.1：sendrawtransactions 直接走新逻辑（无 fallback）：
+        //   1. TopoSort 父子链排序（环 / 重复 txid → 整批拒绝）
+        //   2. 并行 SubmitForFuture 派给 8 worker
+        //   3. 整批 30s budget 等结果
+        //   未启动时 SubmitForFuture 内部 fallback 同步调 handler（覆盖启动早期窗口）
+
+        // 1) 收集 tx 列表 + 保留对应 input data
+        std::vector<CTransactionRef> tx_list;
+        std::unordered_map<TxId, TxInputDataSPtr, std::hash<TxId>> tx_to_input;
+        tx_list.reserve(vTxInputData.size());
+        tx_to_input.reserve(vTxInputData.size());
+        for (const TxInputDataSPtr& pIn : vTxInputData) {
+            tx_list.push_back(pIn->GetTxnPtr());
+            tx_to_input.emplace(pIn->GetTxnPtr()->GetId(), pIn);
+        }
+
+        // 2) TopoSort（Kahn）
+        std::vector<CTransactionRef> sorted;
+        bool toposort_failed = false;
+        std::string toposort_err;
+        try {
+            sorted = tbc::validation::TopoSort(std::move(tx_list));
+        } catch (const tbc::validation::BatchTopoSortError& e) {
+            toposort_failed = true;
+            toposort_err = e.what();
+        }
+        if (toposort_failed) {
+            for (const TxInputDataSPtr& pIn : vTxInputData) {
+                CValidationState st;
+                st.Invalid(false, REJECT_INVALID,
+                           std::string("batch-toposort: ") + toposort_err);
+                rejectedTxns.first.emplace(pIn->GetTxnPtr()->GetId(), std::move(st));
+            }
+        } else {
+            // 3) 并行 SubmitForFuture（sub-A12：future 类型迁 CValidationState）
+            using FT = std::shared_future<CValidationState>;
+            std::vector<std::pair<TxId, FT>> pending;
+            pending.reserve(sorted.size());
+            for (const auto& tx : sorted) {
+                const auto& pIn = tx_to_input[tx->GetId()];
+                FT fut = tbc::validation::g_dispatcher.SubmitForFuture(
+                    tx,
+                    pIn->GetTxSource(),
+                    pIn->GetAbsurdFee().GetSatoshis(),
+                    pIn->IsLimitFree(),
+                    pIn->GetAcceptTime());
+                pending.emplace_back(tx->GetId(), std::move(fut));
+            }
+
+            // 4) 等所有 future 完成（无 budget — 跟 prod BSV 行为一致）。
+            //    sub-A12 (task #152)：保留全 reject_code / reject_reason / IsMissingInputs，
+            //    不再压平为 REJECT_INVALID 字符串，让上层 RPC 客户端按 prod 等价拿真错误码。
+            for (auto& [txid, fut] : pending) {
+                fut.wait();
+                CValidationState st = fut.get();
+                if (!st.IsValid()) {
+                    rejectedTxns.first.emplace(txid, std::move(st));
+                }
+            }
+        }
     }
 
     /**
@@ -1573,6 +1773,7 @@ static const CRPCCommand commands[] = {
     //  category            name                      actor (function)        okSafeMode
     //  ------------------- ------------------------  ----------------------  ----------
     { "rawtransactions",    "getrawtransaction",      getrawtransaction,      true,  {"txid","verbose"} },
+    { "rawtransactions",    "getrawtransactiondata",  getrawtransactiondata,  true,  {"txid"} },
     { "rawtransactions",    "createrawtransaction",   createrawtransaction,   true,  {"inputs","outputs","locktime"} },
     { "rawtransactions",    "decoderawtransaction",   decoderawtransaction,   true,  {"hexstring"} },
     { "rawtransactions",    "decodescript",           decodescript,           true,  {"hexstring"} },

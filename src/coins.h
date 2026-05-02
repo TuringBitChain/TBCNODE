@@ -13,11 +13,16 @@
 #include "serialize.h"
 #include "uint256.h"
 
+// v2.6.1 P0.1: libcuckoo 并发哈希表（跟现有 std::unordered_map 并存，过渡到 P0.2 完整切换）
+#include <libcuckoo/cuckoohash_map.hh>
+
+#include <atomic>
 #include <cassert>
 #include <cstdint>
-#include <unordered_map>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
+#include <unordered_map>
 
 /**
  * A UTXO entry.
@@ -117,6 +122,11 @@ struct CCoinsCacheEntry {
 typedef std::unordered_map<COutPoint, CCoinsCacheEntry, SaltedOutpointHasher>
     CCoinsMap;
 
+// v2.6.1 P0.1: 并发版本 cacheCoins 类型（libcuckoo cuckoohash_map）
+// P0.1 阶段跟 CCoinsMap 并存，P0.2/P0.3 完整切换
+typedef libcuckoo::cuckoohash_map<COutPoint, CCoinsCacheEntry, SaltedOutpointHasher>
+    ConcurrentCCoinsMap;
+
 /** Cursor for iterating over CoinsView state */
 class CCoinsViewCursor {
 public:
@@ -171,8 +181,57 @@ public:
     //! As we use CCoinsViews polymorphically, have a virtual destructor
     virtual ~CCoinsView() {}
 
+    // v2.6.1 P0.3 真切：optional concurrent variant — 非 default 实现，CCoinsViewCache 覆盖。
+    //   GetCoinConcurrent / HaveCoinConcurrent 用 batchWriteMtx + libcuckoo，不持
+    //   mCoinsViewCacheMtx → 多 worker 并发不互相阻塞，只在 BatchWrite 期间被 unique_lock 互斥。
+    virtual bool GetCoinConcurrentVirtual(const COutPoint& outpoint, Coin& coin) const {
+        return GetCoin(outpoint, coin);   // base 默认 fallback
+    }
+    virtual bool HaveCoinConcurrentVirtual(const COutPoint& outpoint) const {
+        return HaveCoin(outpoint);
+    }
+
+    // v2.6.1 P4.1 (架构 C-6)：纯虚强制每个具体派生类显式声明 NoLockVirtual 行为，
+    //   防止未来叶子继承时静默走 default 而 bypass token 契约。
+    //   sentinel viewDummy 改用 CCoinsViewEmpty 显式实现（见下方）。
+    virtual bool BatchWriteNoLockVirtual(CCoinsMap& mapCoins,
+                                          const uint256& hashBlock,
+                                          const class BatchWriteLockToken& token) = 0;
+
     //! Estimate database size (0 if not implemented)
     virtual size_t EstimateSize() const { return 0; }
+};
+
+// v2.6.1 P4.1 (架构 C-6)：永远空的 sentinel view（替代以前的 `CCoinsView viewDummy`）。
+//   bitcoin-tx / rest / rpc/rawtransaction 用它作 backing view 给 CCoinsViewCache，
+//   只是为了让缓存的 GetCoin 走入 cacheCoins 而非 nullptr 派生的 ABV。
+class CCoinsViewEmpty final : public CCoinsView {
+public:
+    bool GetCoin(const COutPoint&, Coin&) const override { return false; }
+    bool HaveCoin(const COutPoint&) const override { return false; }
+    uint256 GetBestBlock() const override { return uint256(); }
+    std::vector<uint256> GetHeadBlocks() const override { return {}; }
+    bool BatchWrite(CCoinsMap&, const uint256&) override { return false; }
+    bool BatchWriteNoLockVirtual(CCoinsMap& m, const uint256& h,
+                                 const class BatchWriteLockToken&) override {
+        return BatchWrite(m, h);
+    }
+};
+
+// v2.6.1 P4.1 (HIGH-C 修补): pass-token 模式
+//   ConnectTip / DisconnectTip 是 static 函数（内部链接），无法做 friend；
+//   改 pass-token：调用 FlushNoLock / BatchWriteNoLock 必须先持 unique_lock(batchWriteMtx)
+//   构造 BatchWriteLockToken，运行时 owns_lock 检查防误用。
+class BatchWriteLockToken {
+public:
+    explicit BatchWriteLockToken(std::unique_lock<std::shared_mutex>& lock) {
+        if (!lock.owns_lock()) {
+            std::abort();   // 防误用：传未持锁 unique_lock
+        }
+    }
+    BatchWriteLockToken() = delete;
+    BatchWriteLockToken(const BatchWriteLockToken&) = delete;
+    BatchWriteLockToken& operator=(const BatchWriteLockToken&) = delete;
 };
 
 /** CCoinsView backed by another CCoinsView */
@@ -191,6 +250,14 @@ public:
     CCoinsViewCursor *Cursor() const override;
     CCoinsViewCursor *Cursor(const TxId &txId) const override;
     size_t EstimateSize() const override;
+
+    // v2.6.1 P4.1 (架构 C-6)：CCoinsViewBacked 不持 batchWriteMtx，
+    //   转发到 base 让其负责（CCoinsViewCache override，CCoinsViewDB 等叶子委托 BatchWrite）。
+    bool BatchWriteNoLockVirtual(CCoinsMap& mapCoins,
+                                 const uint256& hashBlock,
+                                 const BatchWriteLockToken& token) override {
+        return base->BatchWriteNoLockVirtual(mapCoins, hashBlock, token);
+    }
 };
 
 /**
@@ -205,8 +272,12 @@ protected:
     mutable uint256 hashBlock;
     mutable CCoinsMap cacheCoins;
 
+    // v2.6.1 P0.1: 并发版本数据结构（跟老 cacheCoins 并存，P0.1 阶段空，P0.2/P0.3 接入）
+    mutable ConcurrentCCoinsMap cacheCoinsConcurrent;
+
     /* Cached dynamic memory usage for the inner Coin objects. */
-    mutable size_t cachedCoinsUsage;
+    // v2.6.1 P0.4b: atomic 替换 size_t（多线程并发更新）
+    mutable std::atomic<size_t> cachedCoinsUsage{0};
 
 public:
     CCoinsViewCache(CCoinsView *baseIn);
@@ -229,6 +300,38 @@ public:
      * CCoinsView are made.
      */
     bool HaveCoinInCache(const COutPoint &outpoint) const;
+
+    // v2.6.1 P0.1: 并发安全读 API stub（实现在 P0.3）
+    // 给 worker hot path 用（不持 cs_main 路径）。P0.1 阶段暂走老路径包装。
+    bool GetCoinConcurrent(const COutPoint &outpoint, Coin &coin) const;
+    bool HaveCoinConcurrent(const COutPoint &outpoint) const;
+
+    // v2.6.1 P0.3 真切：override CCoinsView 虚函数，让 base->GetCoinConcurrentVirtual
+    //                  自动路由到 GetCoinConcurrent（CCoinsViewMemPool 等 wrapper 透明使用）
+    bool GetCoinConcurrentVirtual(const COutPoint& outpoint, Coin& coin) const override {
+        return GetCoinConcurrent(outpoint, coin);
+    }
+    bool HaveCoinConcurrentVirtual(const COutPoint& outpoint) const override {
+        return HaveCoinConcurrent(outpoint);
+    }
+
+    // v2.6.1 P4.1 (Phase 2)：pass-token 强制 caller 持 batchWriteMtx unique
+    //   FlushNoLock 跟 BatchWriteNoLock 仅给 ConnectTip/DisconnectTip 等持外帧锁的 caller 用
+    //   token 构造时运行时检查 owns_lock，防误用
+    bool FlushNoLock(const BatchWriteLockToken& token);
+    bool BatchWriteNoLock(CCoinsMap& mapCoins, const uint256& hashBlock,
+                          const BatchWriteLockToken& token);
+
+    //! v2.6.1 P4.1 Override base 虚函数（Phase 2 实施）
+    bool BatchWriteNoLockVirtual(CCoinsMap& mapCoins,
+                                  const uint256& hashBlock,
+                                  const BatchWriteLockToken& token) override {
+        return BatchWriteNoLock(mapCoins, hashBlock, token);
+    }
+
+    // v2.6.1 P0.1: 暴露 BatchWrite 是否正在进行（M-v3-2 方法：用 try_lock 判断，无窗口）
+    // RPC busy 检测路径用（详见 P3.5 REJECT_OVERLOADED）
+    bool IsBatchWriteInProgress() const;
 
     /**
      * Return a reference to a Coin in the cache, or a pruned one if not found.
@@ -324,9 +427,19 @@ private:
      */
     CCoinsViewCache(const CCoinsViewCache &);
 
+public:
+    // v2.6.1 P4.1 Phase 2: 公开 batchWriteMtx 给 ConnectTip / DisconnectTip 持 unique
+    //   读权限：worker GetCoinConcurrent 持 shared
+    //   写权限：ConnectTip 帧持 unique，调 FlushNoLock(token) 内核
+    //   pass-token 模式（HIGH-C 修补）：caller 显式 unique_lock 后构造 BatchWriteLockToken
+    mutable std::shared_mutex batchWriteMtx;
+
 private:
     /* A mutex to support a thread safe access. */
     mutable std::mutex mCoinsViewCacheMtx {};
+
+    // metaMtx (level 3)：hashBlock + cachedCoinsUsage 元数据保护
+    mutable std::shared_mutex metaMtx;
 };
 
 //! Utility function to add all of a transaction's outputs to a cache.

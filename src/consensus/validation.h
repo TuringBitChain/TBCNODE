@@ -19,6 +19,9 @@ static const uint8_t REJECT_DUST = 0x41;
 static const uint8_t REJECT_INSUFFICIENTFEE = 0x42;
 static const uint8_t REJECT_CHECKPOINT = 0x43;
 static const uint8_t REJECT_TOOBUSY = 0x44;
+// sub-A5 (task #203 + #210)：删除 v2.6.1 自加 REJECT_OVERLOADED=0x45。
+//   按 v7 plan §5 决策，RPC 拥塞路径改用 prod 既有 REJECT_NONSTANDARD + reason "node-busy"，
+//   客户端按 reason 字符串判重试（不依赖 dev 自加 reject code）。
 
 /** Capture information about block/transaction validation */
 class CValidationState {

@@ -285,6 +285,15 @@ add_library(server
 	txn_recent_rejects.cpp
 	ui_interface.cpp
 	validation.cpp
+	validation/async_trim.cpp
+	validation/chain_dispatcher.cpp
+	validation/chainstate.cpp
+	validation/gbt_snapshot.cpp
+	validation/metrics.cpp
+	validation/per_chain_worker.cpp
+	validation/signal_dispatcher.cpp
+	validation/tx_stash.cpp
+	validation/worker_validate.cpp
 	validationinterface.cpp
     vmtouch.cpp
 )

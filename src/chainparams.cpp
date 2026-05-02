@@ -136,8 +136,10 @@ public:
         // February 2020, Genesis Upgrade
         consensus.genesisHeight = GENESIS_ACTIVATION_MAIN;
 
-        // Schnorr activation height is not yet determined
-        consensus.schnorrMultisigHeight = 941688;
+        // Schnorr multisig active from the fork point
+        consensus.schnorrMultisigHeight = 824640;
+        // TBC mainnet 共识：coinbase 1 块即可花
+        consensus.coinbaseMaturity = 1;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -148,10 +150,10 @@ public:
         diskMagic[1] = 0xbe;
         diskMagic[2] = 0xb4;
         diskMagic[3] = 0xd9;
-        netMagic[0] = 0xe3;
-        netMagic[1] = 0xe1;
-        netMagic[2] = 0xf3;
-        netMagic[3] = 0xe8;
+        netMagic[0] = 0xf4;
+        netMagic[1] = 0xb2;
+        netMagic[2] = 0xc3;
+        netMagic[3] = 0xd4;
         nDefaultPort = 8333;
         nPruneAfterHeight = 100000;
 
@@ -165,20 +167,18 @@ public:
                uint256S("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b"
                         "7afdeda33b"));
 
+        vFixedSeeds.clear();
+        vSeeds.clear();
         // Note that of those with the service bits flag, most only support a
         // subset of possible options.
-        // TBC seeder
-        vSeeds.push_back(CDNSSeedData("tbcnode.org", "seed.tbcnode.org", true));
-        vSeeds.push_back(CDNSSeedData("tbcnode.com", "seed.tbcnode.com", true));
+        // TBC dev seeder
+        vSeeds.push_back(CDNSSeedData("tbcdev.org", "seed.tbcdev.org", true));
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 0);
         base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 5);
         base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 128);
         base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x88, 0xB2, 0x1E};
         base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x88, 0xAD, 0xE4};
-
-        vFixedSeeds = std::vector<SeedSpec6>(
-            pnSeed6_main, pnSeed6_main + ARRAYLEN(pnSeed6_main));
 
         fMiningRequiresPeers = true;
         fDefaultConsistencyChecks = false;
@@ -222,9 +222,7 @@ public:
                 {530359, uint256S("0000000000000000011ada8bd08f46074f44a8f15539"
                                   "6f43e38acf9501c49103")},
                 {824190, uint256S("0000000058968601042df9b0d57e41b092c76d6f91f3"
-                                  "33dc231cdd4cc4fd861d")},
-                {918000, uint256S("000000000ac75877e1766b8e9bdd807126b08647a7db"
-                                  "968006546ce2e3f58861")}
+                                  "33dc231cdd4cc4fd861d")}
             }};
 
         // Data as of block
@@ -300,6 +298,7 @@ public:
 
         // Schnorr activation height is not yet determined
         consensus.schnorrMultisigHeight = 941688;
+        consensus.coinbaseMaturity = 1;
 
         /**
          * The message start string is designed to be unlikely to occur in
@@ -404,6 +403,7 @@ public:
 
         // Schnorr activation height is not yet determined
         consensus.schnorrMultisigHeight = 941688;
+        consensus.coinbaseMaturity = 1;
 
         diskMagic[0] = 0x0b;
         diskMagic[1] = 0x11;
@@ -524,6 +524,8 @@ public:
 
         // Schnorr is always enabled on regtest.
         consensus.schnorrMultisigHeight = 0;
+        // regtest 保持 BSV 上游 100，让 wallet/functional 测试 100-mature 假设满足
+        consensus.coinbaseMaturity = 100;
 
         diskMagic[0] = 0xfa;
         diskMagic[1] = 0xbf;

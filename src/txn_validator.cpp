@@ -136,16 +136,14 @@ CValidationState CTxnValidator::processValidation(
     const CTransaction &tx = *ptx;
     LogPrint(BCLog::TXNVAL,
             "Txnval-synch: Got a new txn= %s \n", tx.GetId().ToString());
-    // TODO: A temporary workaroud uses cs_main lock to control pcoinsTip change
-    // A synchronous interface locks mtxs in the following order:
-    // - first: cs_main
-    // - second: mMainMtx
-    // It needs to be in that way as the wallet itself (and it's rpc interface) locks
-    // cs_main in many places and holds it (mostly rpc interface) for an entire duration of the call.
-    // A synchronous interface is called from a different threads:
-    // - bitcoin-main, bitcoin-loadblk. bitcoin-httpwor.
-    LOCK(cs_main);
-    std::unique_lock lock { mMainMtx };
+    // v2.6.1 P3.3 Step 3：移除外层 cs_main + mMainMtx
+    //   - TxnValidation 已用 g_chainstate snap 取代 chainActive 直读
+    //   - pcoinsTip 通过 GetCoinConcurrent + batchWriteMtx 保护
+    //   - mempool API 内部自带 smtx 锁
+    //   - mpTxnDoubleSpendDetector 自带 mutex
+    //   - mpTxnRecentRejects 自带 shared_mutex
+    //   → 8 worker 可并行进 executeTxnValidationNL，跟 ConnectBlock 通过 batchWriteMtx 协调。
+    //   保留只在 commit 阶段需要的 cs_main（ProcessValidatedTxn 内 mempool 操作）由内部锁保证。
     CTxnValResult result {};
     // Special handlers
     CTxnHandlers handlers {
@@ -193,11 +191,12 @@ CValidationState CTxnValidator::processValidation(
     if (result.mState.IsValid()) {
         GetMainSignals().TransactionAddedToMempool(result.mTxInputData->GetTxnPtr());
     }
-    // After we've (potentially) uncached entries, ensure our coins cache is
-    // still within its size limits
-    CValidationState dummyState;
-    FlushStateToDisk(mConfig.GetChainParams(), dummyState, FLUSH_STATE_PERIODIC);
-
+    // v2.6.1 #146 修复：删除 worker thread 的 FlushStateToDisk 调用。
+    //   原因：FlushStateToDisk 内部 LOCK(cs_main)，而启动期 bitcoin-loadblk
+    //         线程长持 cs_main（ActivateBestChain + LoadMempool reaccept），
+    //         所有 dispatcher worker 调到这里集体卡 30s。
+    //   策略：FLUSH_STATE_PERIODIC 由 main scheduler 路径触发，worker per-tx
+    //         不需要每笔都触发。删掉零损失。
     return result.mState;
 }
 
@@ -214,16 +213,10 @@ CTxnValidator::RejectedTxns CTxnValidator::processValidation(
     if (!vTxInputDataSize) {
         return {};
     }
-    // TODO: A temporary workaroud uses cs_main lock to control pcoinsTip change
-    // A synchronous interface locks mtxs in the following order:
-    // - first: cs_main
-    // - second: mMainMtx
-    // It needs to be in that way as the wallet itself (and it's rpc interface) locks
-    // cs_main in many places and holds it (mostly rpc interface) for an entire duration of the call.
-    // A synchronous interface is called from a different threads:
-    // - bitcoin-main, bitcoin-loadblk. bitcoin-httpwor.
-    LOCK(cs_main);
-    std::unique_lock lock { mMainMtx };
+    // v2.6.1 P3.3 完整版：批量 processValidation 移除外层 cs_main + mMainMtx
+    //   单笔同样的理由：TxnValidation 用 g_chainstate snap，pcoinsTip 内部 mtx 自保护，
+    //   mempool API 自带 smtx，DoubleSpendDetector / RecentRejects 自带 mutex。
+    //   8 dispatcher worker 调批量路径时不再相互串行化，进入 ParallelTxnValidation 真并发。
     // A vector of accepted txns
     std::vector<TxInputDataSPtr> vAcceptedTxns {};
     // A hash table containing invalid transacions, including their validation state.

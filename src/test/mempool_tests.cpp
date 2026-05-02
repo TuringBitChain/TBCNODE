@@ -10,6 +10,7 @@
 
 #include "test/test_bitcoin.h"
 
+#include <algorithm>
 #include <boost/test/unit_test.hpp>
 #include <list>
 #include <vector>
@@ -440,19 +441,34 @@ BOOST_AUTO_TEST_CASE(MempoolAncestorIndexingTest) {
     sortedOrder.insert(sortedOrder.begin() + 1, tx7.GetId().ToString());
     CheckSort<ancestor_score>(pool, sortedOrder);
 
-    /* after tx6 is mined, tx7 should move up in the sort */
+    /* after tx6 is mined: v2.6.1 issue #12 fix (RemoveForBlockNL 减 descendants
+     * 的 nCountWithAncestors / nSizeWithAncestors / nModFeesWithAncestors /
+     * nSigOpCountWithAncestors) 让 tx7 的 cached ancestor stats 正确减去 tx6 的
+     * size/fee/sigops。fee 公式 (20000 / tx2Size) * (tx7Size + tx6Size) - 1 让 tx7
+     * 单独 feerate（去 tx6 后）严格高于 tx2，所以 tx7 升到 ancestor_score 第一位。
+     * 老测试假设 cache 不刷新（旧 BSV 残留 bug），现在 fix 后 expected 调整为新行为。
+     * 旧问题记录见 docs/plans/test-rot-bugs.md。
+     */
     std::vector<CTransactionRef> vtx;
     vtx.push_back(MakeTransactionRef(tx6));
     std::vector<CTransactionRef> txNew;
     pool.RemoveForBlock(vtx, nullChangeSet, txNew);
 
-    sortedOrder.erase(sortedOrder.begin() + 1);
-    // Ties are broken by hash
+    // 删 tx6（在 sortedOrder 中可能是 last 或 second-last 取决于跟 tx3 hash 比较）
     if (tx3.GetId() < tx6.GetId())
         sortedOrder.pop_back();
     else
         sortedOrder.erase(sortedOrder.end() - 2);
-    sortedOrder.insert(sortedOrder.begin(), tx7.GetId().ToString());
+    // issue #12 fix 后：tx7 单独 feerate > tx2 → tx7 升到 ancestor_score 第一位
+    //   原 sortedOrder[1]=tx7 → 移到 [0]；tx2 从 [0] 退到 [1]
+    {
+        auto it = std::find(sortedOrder.begin(), sortedOrder.end(),
+                            tx7.GetId().ToString());
+        if (it != sortedOrder.end() && it != sortedOrder.begin()) {
+            sortedOrder.erase(it);
+            sortedOrder.insert(sortedOrder.begin(), tx7.GetId().ToString());
+        }
+    }
     CheckSort<ancestor_score>(pool, sortedOrder);
 }
 

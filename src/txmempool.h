@@ -565,7 +565,11 @@ public:
         indexed_transaction_set;
 
     // DEPRECATED - this will become private and ultimately changed or removed
-    mutable std::shared_mutex smtx;
+    // v2.6.1 P4.1 HIGH-E 修补：std::shared_mutex 没 try_lock_for，改 shared_timed_mutex
+    //                          支持超时获取（Phase 3 V-4 RPC 路径必需）。
+    //                          shared_lock<shared_timed_mutex> / unique_lock<shared_timed_mutex>
+    //                          API 跟 shared_mutex 完全兼容，现有调用零修改。
+    mutable std::shared_timed_mutex smtx;
     // DEPRECATED - this will become private and ultimately changed or removed
     indexed_transaction_set mapTx;
 
@@ -701,6 +705,19 @@ public:
             const std::vector<CTransactionRef> &vtx,
             const mining::CJournalChangeSetPtr& changeSet,
             std::vector<CTransactionRef>& txNew);
+
+    //! v2.6.1 P4.1 Phase 3: caller 已持 smtx unique 时用此版本（ConnectTip 三锁帧）
+    void RemoveForBlockNL(
+            const std::vector<CTransactionRef> &vtx,
+            const mining::CJournalChangeSetPtr& changeSet,
+            std::vector<CTransactionRef>& txNew);
+
+    //! v2.6.1 P4.1 Phase 4: caller 已持 smtx unique 时用此版本
+    //! （UpdateMempoolForReorg 帧 — 把 disconnectpool 的多次 Remove 串成一帧）。
+    void RemoveRecursiveNL(
+            const CTransaction &origTx,
+            const mining::CJournalChangeSetPtr& changeSet,
+            MemPoolRemovalReason reason);
 
     void Clear();
 

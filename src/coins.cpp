@@ -26,6 +26,9 @@ std::vector<uint256> CCoinsView::GetHeadBlocks() const {
 bool CCoinsView::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) {
     return false;
 }
+
+// v2.6.1 P4.1 (架构 C-6)：基类纯虚化（声明在 coins.h），
+//   sentinel viewDummy 改用 CCoinsViewEmpty 显式 override。
 CCoinsViewCursor *CCoinsView::Cursor() const {
     return nullptr;
 }
@@ -220,7 +223,47 @@ void CCoinsViewCache::SetBestBlock(const uint256 &hashBlockIn) {
 
 bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins,
                                  const uint256 &hashBlockIn) {
+    // v2.6.1 P4.1 Phase 2: wrapper 自持 batchWriteMtx unique，调 NoLock 内核
+    std::unique_lock<std::shared_mutex> bw_lock { batchWriteMtx };
+    BatchWriteLockToken token(bw_lock);
+    return BatchWriteNoLock(mapCoins, hashBlockIn, token);
+}
+
+bool CCoinsViewCache::BatchWriteNoLock(CCoinsMap &mapCoins,
+                                        const uint256 &hashBlockIn,
+                                        const BatchWriteLockToken& token) {
+    // 调用方已持 batchWriteMtx unique（token 构造时 owns_lock 已检查）
+    (void)token;
     std::unique_lock<std::mutex> lock { mCoinsViewCacheMtx };
+
+    // Lambda：双写——把变化同步到 cacheCoinsConcurrent（K2 路径：insert + update_fn fallback）
+    // P0.2 阶段：cacheCoinsConcurrent 跟 cacheCoins 双写保持一致
+    // P0.5 阶段（未来）：迁移完成后砍掉 cacheCoins 老路径
+    //
+    // 异常安全（P0 审核修补）：noexcept + 内部 try/catch
+    //   libcuckoo OOM / 内部异常时不能让老路径 BatchWrite 中断（老 cacheCoins 是权威）
+    //   失败语义：仅 cacheCoinsConcurrent 临时不一致；下次 BatchWrite 同 outpoint 再 upsert 时
+    //             老路径会再写一次同样数据，自动 resync
+    auto sync_to_concurrent_upsert = [this](const COutPoint& op, const CCoinsCacheEntry& e) noexcept {
+        try {
+            bool ins = cacheCoinsConcurrent.insert(op, e);
+            if (!ins) {
+                cacheCoinsConcurrent.update_fn(op, [&e](CCoinsCacheEntry& existing) noexcept {
+                    existing = e;
+                });
+            }
+        } catch (...) {
+            // 老 cacheCoins 仍权威，cacheCoinsConcurrent 失败容忍
+        }
+    };
+    auto sync_to_concurrent_erase = [this](const COutPoint& op) noexcept {
+        try {
+            cacheCoinsConcurrent.erase(op);
+        } catch (...) {
+            // 同上
+        }
+    };
+
     for (CCoinsMap::iterator it = mapCoins.begin(); it != mapCoins.end();) {
         // Ignore non-dirty entries (optimization).
         if (it->second.flags & CCoinsCacheEntry::DIRTY) {
@@ -241,6 +284,8 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins,
                     // parent's cache and already exist in the grandparent
                     if (it->second.flags & CCoinsCacheEntry::FRESH)
                         entry.flags |= CCoinsCacheEntry::FRESH;
+                    // P0.2 双写
+                    sync_to_concurrent_upsert(it->first, entry);
                 }
             } else {
                 // Assert that the child cache entry was not marked FRESH if the
@@ -261,6 +306,8 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins,
                     // it from the parent.
                     cachedCoinsUsage -= itUs->second.coin.DynamicMemoryUsage();
                     cacheCoins.erase(itUs);
+                    // P0.2 双写：同步删除
+                    sync_to_concurrent_erase(it->first);
                 } else {
                     // A normal modification.
                     cachedCoinsUsage -= itUs->second.coin.DynamicMemoryUsage();
@@ -272,6 +319,8 @@ bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins,
                     // we must not copy that FRESH flag to the parent as that
                     // pruned state likely still needs to be communicated to the
                     // grandparent.
+                    // P0.2 双写
+                    sync_to_concurrent_upsert(it->first, itUs->second);
                 }
             }
         }
@@ -308,9 +357,20 @@ size_t CCoinsViewCache::EstimateSize() const {
 }
 
 bool CCoinsViewCache::Flush() {
+    // v2.6.1 P4.1 Phase 2 (HIGH-C 修补 pass-token): wrapper 自持 batchWriteMtx unique
+    std::unique_lock<std::shared_mutex> bw(batchWriteMtx);
+    BatchWriteLockToken token(bw);
+    return FlushNoLock(token);
+}
+
+bool CCoinsViewCache::FlushNoLock(const BatchWriteLockToken& token) {
+    // 调用方必须已持 batchWriteMtx unique（token 构造时已 owns_lock 检查）
+    (void)token;
     std::unique_lock<std::mutex> lock { mCoinsViewCacheMtx };
-    bool fOk = base->BatchWrite(cacheCoins, hashBlock);
+    bool fOk = base->BatchWriteNoLockVirtual(cacheCoins, hashBlock, token);
     cacheCoins.clear();
+    // C-2 修补：同步清空 cacheCoinsConcurrent，避免 LevelDB 回填的 entries 永久驻留
+    cacheCoinsConcurrent.clear();
     cachedCoinsUsage = 0;
     return fOk;
 }
@@ -470,4 +530,72 @@ const Coin AccessByTxid(const CCoinsViewCache& view, const TxId& txid)
         }
     }
     return coinEmpty;
+}
+
+// ============================================================================
+// v2.6.1 P0.3: 并发接口实现（L1 cacheCoinsConcurrent + L3 LevelDB）
+// L2 LRU（64MB）作为 H3 LevelDB 慢路径缓解，留 P0.3 后续优化（不阻塞 GATE-M0）
+// ============================================================================
+
+bool CCoinsViewCache::GetCoinConcurrent(const COutPoint &outpoint, Coin &coin) const {
+    // P0.3 H-1 修补：LevelDB 慢路径不持 batchWriteMtx，避免 worker 慢读阻塞 ConnectBlock
+    {
+        std::shared_lock<std::shared_mutex> bw(batchWriteMtx);
+        // L1: cacheCoinsConcurrent 命中（read-only 不改 map）
+        bool hit = cacheCoinsConcurrent.find_fn(outpoint, [&coin](const CCoinsCacheEntry& e) noexcept {
+            coin = e.coin;
+        });
+        if (hit) {
+            return !coin.IsSpent();
+        }
+    }
+    // 锁已释放，LevelDB 慢路径独立跑
+    Coin tmp;
+    if (!base->GetCoin(outpoint, tmp)) {
+        return false;
+    }
+
+    // 回填 cacheCoinsConcurrent，重新拿 shared_lock 保证 BatchWrite 不并发
+    CCoinsCacheEntry entry;
+    entry.coin = tmp;
+    entry.flags = 0;
+    {
+        std::shared_lock<std::shared_mutex> bw(batchWriteMtx);
+        // P0.3 C-1 修补：先看 cacheCoins 是否已有（双写源），有则不重复计 cachedCoinsUsage
+        bool already_in_cache_coins = false;
+        {
+            std::unique_lock<std::mutex> cv_lock(mCoinsViewCacheMtx);
+            already_in_cache_coins = (cacheCoins.find(outpoint) != cacheCoins.end());
+        }
+        bool ins = cacheCoinsConcurrent.insert(outpoint, std::move(entry));
+        if (ins && !already_in_cache_coins) {
+            // 仅当 cacheCoins 没有同 outpoint 时才计 usage（C-1 防双重计数）
+            cachedCoinsUsage.fetch_add(tmp.DynamicMemoryUsage(), std::memory_order_relaxed);
+        }
+    }
+    coin = std::move(tmp);
+    return !coin.IsSpent();
+}
+
+bool CCoinsViewCache::HaveCoinConcurrent(const COutPoint &outpoint) const {
+    std::shared_lock<std::shared_mutex> bw(batchWriteMtx);
+
+    // L1: cacheCoinsConcurrent 不修改路径
+    bool found_alive = false;
+    bool found_in_l1 = cacheCoinsConcurrent.find_fn(outpoint, [&found_alive](const CCoinsCacheEntry& e) noexcept {
+        found_alive = !e.coin.IsSpent();
+    });
+    if (found_in_l1) return found_alive;
+
+    // L3: LevelDB（不回填，纯查询）
+    Coin tmp;
+    if (!base->GetCoin(outpoint, tmp)) return false;
+    return !tmp.IsSpent();
+}
+
+bool CCoinsViewCache::IsBatchWriteInProgress() const {
+    // M-v3-2: 用 try_lock 判断（无窗口）
+    // BatchWrite 路径持 unique_lock(batchWriteMtx)；此函数 try shared 失败即说明 BatchWrite 持 unique
+    std::shared_lock<std::shared_mutex> bw(batchWriteMtx, std::try_to_lock);
+    return !bw.owns_lock();
 }

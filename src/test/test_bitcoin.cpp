@@ -97,7 +97,7 @@ TestingSetup::TestingSetup(const std::string &chainName, mining::CMiningFactory:
     mempool.SetSanityCheck(1.0);
     pblocktree = new CBlockTreeDB(1 << 20, true);
     pcoinsdbview = new CCoinsViewDB(1 << 23, true);
-    pcoinsTip = new CCoinsViewCache(pcoinsdbview);
+    pcoinsTip = std::make_shared<CCoinsViewCache>(pcoinsdbview);   // v2.6.1 P0.4a
     if (!InitBlockIndex(testConfig)) {
         throw std::runtime_error("InitBlockIndex failed.");
     }
@@ -129,7 +129,7 @@ TestingSetup::~TestingSetup() {
     threadGroup.interrupt_all();
     threadGroup.join_all();
     UnloadBlockIndex();
-    delete pcoinsTip;
+    pcoinsTip.reset();   // v2.6.1 P0.4a
     delete pcoinsdbview;
     delete pblocktree;
     fs::remove_all(pathTemp);
@@ -141,7 +141,9 @@ TestChain100Setup::TestChain100Setup()
     coinbaseKey.MakeNewKey(true);
     CScript scriptPubKey = CScript() << ToByteVector(coinbaseKey.GetPubKey())
                                      << OP_CHECKSIG;
-    for (int i = 0; i < COINBASE_MATURITY; i++) {
+    // v2.6.1: 用 chainparam（regtest=100）而非 global const（mainnet=1），
+    // 让 wallet/单测 BSV 100-mature 假设满足。
+    for (int i = 0; i < Params().GetConsensus().coinbaseMaturity; i++) {
         std::vector<CMutableTransaction> noTxns;
         CBlock b = CreateAndProcessBlock(noTxns, scriptPubKey);
         coinbaseTxns.push_back(*b.vtx[0]);

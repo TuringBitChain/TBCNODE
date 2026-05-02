@@ -104,6 +104,12 @@ public:
         CCoinsViewCursorEmpty* cc = new CCoinsViewCursorEmpty(GetBestBlock());
         return cc;
     }
+
+    // v2.6.1 P4.1 (架构 C-6)：测试 mock 直接走 BatchWrite。
+    bool BatchWriteNoLockVirtual(CCoinsMap& m, const uint256& h,
+                                 const BatchWriteLockToken&) override {
+        return BatchWrite(m, h);
+    }
 };
 
 class CCoinsViewCacheTest : public CCoinsViewCache {
@@ -125,7 +131,9 @@ public:
     }
 
     CCoinsMap &map() { return cacheCoins; }
-    size_t &usage() { return cachedCoinsUsage; }
+    // v2.6.1 P0.4b: cachedCoinsUsage 改 std::atomic<size_t>，返回 atomic 引用
+    // 调用方 `usage() += val` 仍 work（atomic operator+= 重载）
+    std::atomic<size_t> &usage() { return cachedCoinsUsage; }
 };
 } // namespace
 
@@ -657,7 +665,7 @@ public:
             InsertCoinMapEntry(cache.map(), cache_value, cache_flags);
     }
 
-    CCoinsView root;
+    CCoinsViewEmpty root;   // v2.6.1 P4.6: CCoinsView abstract (pure virtual BatchWriteNoLockVirtual)
     CCoinsViewCacheTest base{&root};
     CCoinsViewCacheTest cache{&base};
 };

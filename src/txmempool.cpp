@@ -509,11 +509,21 @@ void CTxMemPool::AddUnchecked(
 
     {
         std::unique_lock lock(smtx);
-        // Add to memory pool without checking anything.
+        // v2.6.1 P3.3 HIGH-1 修补：cs_main 移除后，外部传入的 setAncestors
+        // 是在 shared_lock(smtx) 内算的，跟当前 unique_lock 之间存在 TOCTOU
+        // —— 父 tx 可能在两次锁之间刚 AddUnchecked。**持 unique_lock 后重算
+        // ancestors**（跟下面第二个 overload 行为一致）。
+        setEntries fresh_ancestors;
+        uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
+        std::string dummy;
+        CalculateMemPoolAncestorsNL(
+            entry, fresh_ancestors, nNoLimit, nNoLimit, nNoLimit, nNoLimit, dummy);
+        // 与外部传入合并（外部可能含已知 ancestors，比如 RBF 或测试场景）
+        for (auto it : setAncestors) fresh_ancestors.insert(it);
         AddUncheckedNL(
              hash,
              entry,
-             setAncestors,
+             fresh_ancestors,
              changeSet,
              pnMempoolSize,
              pnDynamicMemoryUsage);
@@ -730,6 +740,15 @@ void CTxMemPool::RemoveRecursive(
     }
 }
 
+// v2.6.1 P4.1 Phase 4：caller 已持 smtx unique。
+// 给 UpdateMempoolForReorg 把多次 Remove 串成一帧用，避免 worker 半态可见。
+void CTxMemPool::RemoveRecursiveNL(
+    const CTransaction &origTx,
+    const CJournalChangeSetPtr& changeSet,
+    MemPoolRemovalReason reason) {
+    removeRecursiveNL(origTx, changeSet, reason);
+}
+
 void CTxMemPool::removeRecursiveNL(
     const CTransaction &origTx,
     const CJournalChangeSetPtr& changeSet,
@@ -819,7 +838,7 @@ void CTxMemPool::RemoveForReorg(
                 if (coin.IsSpent() ||
                     (coin.IsCoinBase() &&
                      nMemPoolHeight - coin.GetHeight() <
-                         COINBASE_MATURITY)) {
+                         Params().GetConsensus().coinbaseMaturity)) {
                     txToRemove.insert(it);
                     break;
                 }
@@ -873,6 +892,18 @@ void CTxMemPool::RemoveForBlock(
     std::vector<CTransactionRef>& txNew){
 
     std::unique_lock lock(smtx);
+    RemoveForBlockNL(vtx, changeSet, txNew);
+}
+
+void CTxMemPool::RemoveForBlockNL(
+    const std::vector<CTransactionRef> &vtx,
+    const CJournalChangeSetPtr& changeSet,
+    std::vector<CTransactionRef>& txNew){
+
+    // v2.6.1 P4.1 Phase 3: caller 已持 smtx unique（ConnectTip 三锁帧调用）。
+    // review v7 a4 F-6：std::shared_timed_mutex 无 try_lock-style assert（try_lock 拿成功
+    //   会破坏调用方的 unique_lock）。NL contract 靠 caller 守约 + DEBUG_LOCKORDER 在
+    //   LOCK_LEVEL_TRACK 注册路径检测倒序。Phase 0.7 sweep（task #199）会扩到 NL 路径。
     int64_t nStartTime = GetTimeMicros();
     size_t nTxCount = vtx.size();
     setEntries toBeRemoved;
@@ -956,6 +987,35 @@ void CTxMemPool::RemoveForBlock(
             }
             // Add tx to txNew only if it wasn't in mempool (regardless of conflict status)
             txNew.push_back(tx);
+        }
+    }
+
+    // ★★★ issue #12 fix (Required #1) — 减 descendants 的 ancestor cached aggregates ★★★
+    //
+    // 问题：原 RemoveForBlockNL 只切 mapLinks 不减 descendants 的 nCountWithAncestors /
+    //   nSizeWithAncestors / nModFeesWithAncestors / nSigOpCountWithAncestors。脏 cache
+    //   永久残留 → journal 按 nCountWithAncestors 排序后续新加 tx 让父子序错乱 →
+    //   矿工出 block 自家 ConnectBlock reject "bad-txns-inputs-missingorspent"。
+    //
+    // 修法：在切 mapLinks 之前用 mapLinks 算 descendants，per-removed entry 减 4 个
+    //   cached aggregates。跟 removeStagedNL 路径的 updateForRemoveFromMempoolNL
+    //   (updateDescendants=true) 做的事一致，只是 RemoveForBlockNL 之前漏了这一步。
+    //
+    // 顺序约束：必须在下面 updateParentNL(child, parentToRemove, false) 切链接之前调，
+    //   否则 CalculateDescendantsNL 走不到 children。
+    for (txiter removeIt : toBeRemoved)
+    {
+        setEntries setDescendants;
+        CalculateDescendantsNL(removeIt, setDescendants);
+        setDescendants.erase(removeIt);  // don't update state for self
+        int64_t modifySize = -static_cast<int64_t>(removeIt->GetTxSize());
+        Amount modifyFee = -1 * removeIt->GetModifiedFee();
+        int modifySigOps = -removeIt->GetSigOpCount();
+        for (txiter dit : setDescendants)
+        {
+            // skip 也在 toBeRemoved 里的 descendant（被一起删，无需修状态）
+            if (toBeRemoved.find(dit) != toBeRemoved.end()) continue;
+            mapTx.modify(dit, update_ancestor_state(modifySize, modifyFee, -1, modifySigOps));
         }
     }
 
@@ -1178,7 +1238,8 @@ void CTxMemPool::CheckMempool(
             CValidationState state;
             bool fCheckResult = tx.IsCoinBase() ||
                                 Consensus::CheckTxInputs(
-                                    tx, state, mempoolDuplicate, nSpendHeight);
+                                    tx, state, mempoolDuplicate, nSpendHeight,
+                                    Params().GetConsensus().coinbaseMaturity);
             assert(fCheckResult);
             UpdateCoins(tx, mempoolDuplicate, 1000000);
         }
@@ -1200,7 +1261,8 @@ void CTxMemPool::CheckMempool(
             bool fCheckResult =
                 entry->GetTx().IsCoinBase() ||
                 Consensus::CheckTxInputs(entry->GetTx(), state,
-                                         mempoolDuplicate, nSpendHeight);
+                                         mempoolDuplicate, nSpendHeight,
+                                         Params().GetConsensus().coinbaseMaturity);
             assert(fCheckResult);
             UpdateCoins(entry->GetTx(), mempoolDuplicate, 1000000);
             stepsSinceLastRemove = 0;
@@ -1406,7 +1468,7 @@ std::vector<TxMempoolInfo> CTxMemPool::InfoAllNL() const {
 }
 
 CTransactionRef CTxMemPool::Get(const uint256 &txid) const {
-    std::unique_lock lock(smtx);
+    std::shared_lock lock(smtx);
     return GetNL(txid);
 }
 
@@ -1573,11 +1635,15 @@ bool CCoinsViewMemPool::GetCoin(const COutPoint &outpoint, Coin &coin) const {
         return false;
     }
 
-    return base->GetCoin(outpoint, coin) && !coin.IsSpent();
+    // v2.6.1 P0.3 真切：用 GetCoinConcurrentVirtual 代替 GetCoin
+    //   - CCoinsViewCache 实现：走 cacheCoinsConcurrent (libcuckoo) + batchWriteMtx shared_lock
+    //   - 多 worker 并发读不互相阻塞，只在 ConnectBlock view.Flush() 期间被 unique_lock 序列化
+    //   - 其他 CCoinsView 子类（如 CCoinsViewDB / mock）默认 fallback 到 GetCoin（基类实现）
+    return base->GetCoinConcurrentVirtual(outpoint, coin) && !coin.IsSpent();
 }
 
 bool CCoinsViewMemPool::HaveCoin(const COutPoint &outpoint) const {
-    return mempool.ExistsNL(outpoint) || base->HaveCoin(outpoint);
+    return mempool.ExistsNL(outpoint) || base->HaveCoinConcurrentVirtual(outpoint);
 }
 
 size_t CTxMemPool::DynamicMemoryUsage() const {

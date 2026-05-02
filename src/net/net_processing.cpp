@@ -37,6 +37,7 @@
 #include "utilmoneystr.h"
 #include "utilstrencodings.h"
 #include "validation.h"
+#include "validation/chain_dispatcher.h"   // v2.6.1 M6
 #include "protocol.h"
 #include "validationinterface.h"
 
@@ -774,38 +775,53 @@ static void Misbehaving(const CNodePtr& node, int howmuch, const std::string &re
 
 PeerLogicValidation::PeerLogicValidation(CConnman *connmanIn)
     : connman(connmanIn)
-{}
+{
+    // v2.6.1 P4 §5.3：Subscriber 注册前启动异步 worker，避免漏 callback。
+    m_async_worker.Start();
+}
+
+PeerLogicValidation::~PeerLogicValidation() {
+    // v2.6.1 P4 §5.3：UnregisterValidationInterface 在 init.cpp Shutdown
+    // 阶段调用之后，析构时 stop worker，drain 已 push 的 task。
+    m_async_worker.Stop();
+}
 
 void PeerLogicValidation::BlockConnected(
     const std::shared_ptr<const CBlock> &pblock, const CBlockIndex *pindex,
     const std::vector<CTransactionRef> &vtxConflicted) {
-    LOCK(cs_main);
-    std::vector<uint256> vOrphanErase {};
-    for (const CTransactionRef &ptx : pblock->vtx) {
-        const CTransaction &tx = *ptx;
-        // Which orphan pool entries must we evict?
-        for (size_t j = 0; j < tx.vin.size(); j++) {
-            auto vOrphanTxns = g_connman->GetOrphanTxnsHash(tx.vin[j].prevout);
-            if (vOrphanTxns.empty()) {
-                continue;
-            } else {
-                vOrphanErase.insert(
+    // v2.6.1 P4 §5.3：原 body 同步持 cs_main 做 orphan 池清理；现在
+    // push 到独立 worker，ConnectTip 帧立刻返回。pblock 是 shared_ptr，
+    // capture by value 即可延寿到 worker 消费完。pindex 是 mapBlockIndex
+    // 长寿对象，但本 callback 体不读它，省略。
+    m_async_worker.Enqueue([pblock] {
+        LOCK(cs_main);
+        std::vector<uint256> vOrphanErase{};
+        for (const CTransactionRef &ptx : pblock->vtx) {
+            const CTransaction &tx = *ptx;
+            // Which orphan pool entries must we evict?
+            for (size_t j = 0; j < tx.vin.size(); j++) {
+                auto vOrphanTxns = g_connman->GetOrphanTxnsHash(tx.vin[j].prevout);
+                if (vOrphanTxns.empty()) {
+                    continue;
+                } else {
+                    vOrphanErase.insert(
                         vOrphanErase.end(),
                         std::make_move_iterator(vOrphanTxns.begin()),
                         std::make_move_iterator(vOrphanTxns.end()));
+                }
             }
         }
-    }
-    // Erase orphan transactions include or precluded by this block
-    if (vOrphanErase.size()) {
-        int nErased = 0;
-        for (uint256 &orphanId : vOrphanErase) {
-            nErased += g_connman->EraseOrphanTxn(orphanId);
+        // Erase orphan transactions include or precluded by this block
+        if (vOrphanErase.size()) {
+            int nErased = 0;
+            for (uint256 &orphanId : vOrphanErase) {
+                nErased += g_connman->EraseOrphanTxn(orphanId);
+            }
+            LogPrint(BCLog::MEMPOOL,
+                     "Erased %d orphan txns included or conflicted by block\n",
+                     nErased);
         }
-        LogPrint(BCLog::MEMPOOL,
-                 "Erased %d orphan txns included or conflicted by block\n",
-                 nErased);
-    }
+    });
 }
 
 namespace
@@ -2385,19 +2401,32 @@ static void ProcessTxMessage(const Config& config,
     }
     // Enqueue txn for validation if it is not known
     if (!IsTxnKnown(inv)) {
-        // Forward transaction to the validator thread.
-        // By default, treat a received txn as a 'high' priority txn.
-        // If the validation timeout occurs the txn is moved to the 'low' priority queue.
-        connman.EnqueueTxnForValidator(
-            std::make_shared<CTxInputData>(
-                connman.GetTxIdTracker(),
-                std::move(ptx), // a pointer to the tx
-                TxSource::p2p,  // tx source
-                TxValidationPriority::high,  // tx validation priority
-                GetTime(),      // nAcceptTime
-                true,           // fLimitFree
-                Amount(0),      // nAbsurdFee
-                pfrom));        // pNode
+        // v2.6.1 P5.2 真切：dispatcher 启动时走新 SubmitAsyncP2P 路径
+        //   - inflight Queued → 路由 worker → handler 调 processValidation
+        //   - pfrom / accept_time / fLimitFree / nAbsurdFee 全携带
+        //   - dispatcher 未启动（启动早期）→ fallback 走旧 EnqueueTxnForValidator
+        if (tbc::validation::g_dispatcher.IsStarted()) {
+            tbc::validation::g_dispatcher.SubmitAsyncP2P(
+                ptx,                  // CTransactionRef
+                pfrom,                // CNodePtr (orphan/ban/relay 上下文)
+                GetTime(),            // accept_time
+                true,                 // fLimitFree
+                0);                   // nAbsurdFee（P2P 默认 0）
+        } else {
+            // Forward transaction to the validator thread.
+            // By default, treat a received txn as a 'high' priority txn.
+            // If the validation timeout occurs the txn is moved to the 'low' priority queue.
+            connman.EnqueueTxnForValidator(
+                std::make_shared<CTxInputData>(
+                    connman.GetTxIdTracker(),
+                    std::move(ptx),
+                    TxSource::p2p,
+                    TxValidationPriority::high,
+                    GetTime(),
+                    true,
+                    Amount(0),
+                    pfrom));
+        }
     } else {
         // Always relay transactions received from whitelisted peers,
         // even if they were already in the mempool or rejected from it

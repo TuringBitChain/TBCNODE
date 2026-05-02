@@ -112,12 +112,19 @@ bool CZMQNotificationInterface::Initialize() {
         return false;
     }
 
+    // v2.6.1 P4 §5.3：启动异步 worker（必须在 notifiers ready 之后；
+    // RegisterValidationInterface 注册后才会进 callback）
+    m_async_worker.Start();
+    LogPrint(BCLog::ZMQ, "zmq: async subscriber worker started\n");
+
     return true;
 }
 
 // Called during shutdown sequence
 void CZMQNotificationInterface::Shutdown() {
     LogPrint(BCLog::ZMQ, "zmq: Shutdown notification interface\n");
+    // v2.6.1 P4 §5.3：先 stop async worker，确保不再有 task 引用 notifiers
+    m_async_worker.Stop();
     if (pcontext) {
         for (std::list<CZMQAbstractNotifier *>::iterator i = notifiers.begin();
              i != notifiers.end(); ++i) {
@@ -132,145 +139,165 @@ void CZMQNotificationInterface::Shutdown() {
     }
 }
 
+// v2.6.1 P4 §5.3：Worker-thread-only helpers.
+// 这些函数 ONLY 在 m_async_worker 线程上下文执行。CValidationInterface
+// 的 callback 入口仅做 lambda capture + Enqueue，立刻返回到主验证链帧。
+// notifiers 链表只被 worker 线程读写（Shutdown 时 worker 已 stop）→ 无需额外锁。
+
 void CZMQNotificationInterface::UpdatedBlockTip(const CBlockIndex *pindexNew,
                                                 const CBlockIndex *pindexFork,
                                                 bool fInitialDownload) {
     // In IBD or blocks were disconnected without any new ones
     if (fInitialDownload || pindexNew == pindexFork) return;
 
-    for (std::list<CZMQAbstractNotifier *>::iterator i = notifiers.begin();
-         i != notifiers.end();) {
-        CZMQAbstractNotifier *notifier = *i;
-        if (notifier->NotifyBlock(pindexNew)) {
-            ++i;
-        } else {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
+    // pindexNew 是 mapBlockIndex 长寿对象，capture 指针安全
+    m_async_worker.Enqueue([this, pindexNew] {
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier *notifier = *i;
+            if (notifier->NotifyBlock(pindexNew)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
         }
-    }
+    });
 }
 
 void CZMQNotificationInterface::TransactionAddedToMempool(
     const CTransactionRef &ptx) {
-    // Used by BlockConnected and BlockDisconnected as well, because they're all
-    // the same external callback.
-    const CTransaction &tx = *ptx;
-
-    for (std::list<CZMQAbstractNotifier *>::iterator i = notifiers.begin();
-         i != notifiers.end();) {
-        CZMQAbstractNotifier *notifier = *i;
-        if (notifier->NotifyTransaction(tx)) {
-            ++i;
-        } else {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
+    // capture by value 保证 worker 线程取到有效 tx
+    m_async_worker.Enqueue([this, ptx] {
+        const CTransaction &tx = *ptx;
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier *notifier = *i;
+            if (notifier->NotifyTransaction(tx)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
         }
-    }
+    });
 }
 
-void CZMQNotificationInterface::TransactionDiscardedFromMempool(const uint256& txid, MemPoolRemovalReason reason, 
-                                                              const CTransaction* conflictedWith)
-{
-
-    for (auto i = notifiers.begin(); i != notifiers.end();)
-    {
-        CZMQAbstractNotifier *notifier = *i;
-        if (notifier->NotifyRemovedFromMempool(txid, reason, conflictedWith))
-        {
-            ++i;
-        }
-        else
-        {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
-        }
+void CZMQNotificationInterface::TransactionDiscardedFromMempool(
+    const uint256& txid, MemPoolRemovalReason reason,
+    const CTransaction* conflictedWith) {
+    // conflictedWith 是 raw pointer（mempool entry 内的 tx），主验证链
+    // 帧返回前还活着；为 worker 线程消费安全考虑做一份 deep-copy。
+    std::shared_ptr<const CTransaction> conflicted_copy;
+    if (conflictedWith != nullptr) {
+        conflicted_copy = std::make_shared<const CTransaction>(*conflictedWith);
     }
+    m_async_worker.Enqueue([this, txid, reason, conflicted_copy] {
+        const CTransaction *cw = conflicted_copy ? conflicted_copy.get() : nullptr;
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier *notifier = *i;
+            if (notifier->NotifyRemovedFromMempool(txid, reason, cw)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
+        }
+    });
 }
 
-void CZMQNotificationInterface::TransactionRemovedFromMempoolBlock(const uint256& txid, MemPoolRemovalReason reason) {
-
-    for (auto i = notifiers.begin(); i != notifiers.end();)
-    {
-        CZMQAbstractNotifier *notifier = *i;
-        if (notifier->NotifyDiscardedFromMempoolBlock(txid, reason))
-        {
-            ++i;
+void CZMQNotificationInterface::TransactionRemovedFromMempoolBlock(
+    const uint256& txid, MemPoolRemovalReason reason) {
+    m_async_worker.Enqueue([this, txid, reason] {
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier *notifier = *i;
+            if (notifier->NotifyDiscardedFromMempoolBlock(txid, reason)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
         }
-        else
-        {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
-        }
-    }
+    });
 }
 
-void CZMQNotificationInterface::TransactionAdded(const CTransactionRef& ptx)
-{
-    // Used by BlockConnected2 and BlockDisconnected2 as well
-    const CTransaction& tx = *ptx;
-
-    for (auto i = notifiers.begin(); i != notifiers.end();) 
-    {
-        CZMQAbstractNotifier* notifier = *i;
-        if (notifier->NotifyTransaction2(tx)) 
-        {
-            ++i;
-        } 
-        else 
-        {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
+void CZMQNotificationInterface::TransactionAdded(const CTransactionRef& ptx) {
+    m_async_worker.Enqueue([this, ptx] {
+        const CTransaction& tx = *ptx;
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier* notifier = *i;
+            if (notifier->NotifyTransaction2(tx)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
         }
-    }
+    });
 }
 
 void CZMQNotificationInterface::BlockConnected(
     const std::shared_ptr<const CBlock> &pblock,
     const CBlockIndex *pindexConnected,
     const std::vector<CTransactionRef> &vtxConflicted) {
-    for (const CTransactionRef &ptx : pblock->vtx) {
-        // Do a normal notify for each transaction added in the block
-        TransactionAddedToMempool(ptx);
-    }
+    // pblock shared_ptr capture：worker 引用计数延寿
+    m_async_worker.Enqueue([this, pblock] {
+        for (const CTransactionRef &ptx : pblock->vtx) {
+            const CTransaction &tx = *ptx;
+            for (auto i = notifiers.begin(); i != notifiers.end();) {
+                CZMQAbstractNotifier *notifier = *i;
+                if (notifier->NotifyTransaction(tx)) {
+                    ++i;
+                } else {
+                    notifier->Shutdown();
+                    i = notifiers.erase(i);
+                    delete notifier;
+                }
+            }
+        }
+    });
 }
 
 void CZMQNotificationInterface::BlockDisconnected(
     const std::shared_ptr<const CBlock> &pblock) {
-    for (const CTransactionRef &ptx : pblock->vtx) {
-        // Do a normal notify for each transaction removed in block
-        // disconnection
-        TransactionAddedToMempool(ptx);
-    }
+    m_async_worker.Enqueue([this, pblock] {
+        for (const CTransactionRef &ptx : pblock->vtx) {
+            const CTransaction &tx = *ptx;
+            for (auto i = notifiers.begin(); i != notifiers.end();) {
+                CZMQAbstractNotifier *notifier = *i;
+                if (notifier->NotifyTransaction(tx)) {
+                    ++i;
+                } else {
+                    notifier->Shutdown();
+                    i = notifiers.erase(i);
+                    delete notifier;
+                }
+            }
+        }
+    });
 }
 
 // Notify for every connected block, even on re-org
 // Only notify for transactions in vtxNew (that are not already in mempool)
 void CZMQNotificationInterface::BlockConnected2(
     const CBlockIndex* pindexConnected,
-    const std::vector<CTransactionRef>& vtxNew)
-{
-    if (IsInitialBlockDownload()) 
-    {
+    const std::vector<CTransactionRef>& vtxNew) {
+    if (IsInitialBlockDownload()) {
         return;
     }
-
-    for (auto i = notifiers.begin(); i != notifiers.end();) 
-    {
-        CZMQAbstractNotifier* notifier = *i;
-        if (notifier->NotifyBlock2(pindexConnected)) 
-        {
-            ++i;
-        } 
-        else 
-        {
-            notifier->Shutdown();
-            i = notifiers.erase(i);
-            delete notifier;
+    m_async_worker.Enqueue([this, pindexConnected] {
+        for (auto i = notifiers.begin(); i != notifiers.end();) {
+            CZMQAbstractNotifier* notifier = *i;
+            if (notifier->NotifyBlock2(pindexConnected)) {
+                ++i;
+            } else {
+                notifier->Shutdown();
+                i = notifiers.erase(i);
+                delete notifier;
+            }
         }
-    }
+    });
 }

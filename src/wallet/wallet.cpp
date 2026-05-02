@@ -31,6 +31,7 @@
 #include "util.h"
 #include "utilmoneystr.h"
 #include "validation.h"
+#include "validation/chain_dispatcher.h"   // v2.6.1 P5.x
 #include "wallet/coincontrol.h"
 #include "wallet/finaltx.h"
 
@@ -1349,37 +1350,40 @@ void CWallet::SyncTransaction(const CTransactionRef &ptx,
     }
 }
 
+// v2.6.1 Phase 4 §5.2：异步化 — 信号回调入队后立即返回；worker thread 调 Sync*
+//   不阻塞 ConnectTip 三锁帧 / TxnValidator processValidation。
+//   capture by value 安全：CTransactionRef shared_ptr / shared_ptr<CBlock> /
+//   CBlockIndex* 由全局 mapBlockIndex 永生持有 / vector by value。
 void CWallet::TransactionAddedToMempool(const CTransactionRef &ptx) {
-    LOCK2(cs_main, cs_wallet);
-    SyncTransaction(ptx);
+    m_async_worker.Enqueue([this, ptx]() {
+        LOCK2(cs_main, cs_wallet);
+        SyncTransaction(ptx);
+    });
 }
 
 void CWallet::BlockConnected(
     const std::shared_ptr<const CBlock> &pblock, const CBlockIndex *pindex,
     const std::vector<CTransactionRef> &vtxConflicted) {
-    LOCK2(cs_main, cs_wallet);
-    // TODO: Tempoarily ensure that mempool removals are notified before
-    // connected transactions. This shouldn't matter, but the abandoned state of
-    // transactions in our wallet is currently cleared when we receive another
-    // notification and there is a race condition where notification of a
-    // connected conflict might cause an outside process to abandon a
-    // transaction and then have it inadvertantly cleared by the notification
-    // that the conflicted transaction was evicted.
-
-    for (const CTransactionRef &ptx : vtxConflicted) {
-        SyncTransaction(ptx);
-    }
-    for (size_t i = 0; i < pblock->vtx.size(); i++) {
-        SyncTransaction(pblock->vtx[i], pindex, i);
-    }
+    m_async_worker.Enqueue([this, pblock, pindex, vtxConflicted]() {
+        LOCK2(cs_main, cs_wallet);
+        // mempool removals notified before connected transactions
+        // （顺序依赖：boost signals2 在同帧中已序列化；本 lambda 内顺序保留）
+        for (const CTransactionRef &ptx : vtxConflicted) {
+            SyncTransaction(ptx);
+        }
+        for (size_t i = 0; i < pblock->vtx.size(); i++) {
+            SyncTransaction(pblock->vtx[i], pindex, i);
+        }
+    });
 }
 
 void CWallet::BlockDisconnected(const std::shared_ptr<const CBlock> &pblock) {
-    LOCK2(cs_main, cs_wallet);
-
-    for (const CTransactionRef &ptx : pblock->vtx) {
-        SyncTransaction(ptx);
-    }
+    m_async_worker.Enqueue([this, pblock]() {
+        LOCK2(cs_main, cs_wallet);
+        for (const CTransactionRef &ptx : pblock->vtx) {
+            SyncTransaction(ptx);
+        }
+    });
 }
 
 isminetype CWallet::IsMine(const CTxIn &txin) const {
@@ -3066,28 +3070,38 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient> &vecSend,
  */
 bool CWallet::CommitTransaction(CWalletTx &wtxNew, CReserveKey &reservekey,
                                 CConnman *connman, CValidationState &state) {
-    LOCK2(cs_main, cs_wallet);
-    LogPrintf("CommitTransaction:\n%s", wtxNew.tx->ToString());
+    // v2.6.1 C2 修补：原 LOCK2(cs_main, cs_wallet) 内调 SubmitTxToMempool →
+    //                  SubmitTxToMempool 走 g_dispatcher.SubmitSync → worker 也要 cs_main →
+    //                  跨线程互等 30s。
+    // 修复：阶段 1 持 LOCK2 做 wallet 记账（AddToWallet/notify/RequestCount）；
+    //       阶段 2 释放两把锁后再调 SubmitTxToMempool + RelayWalletTransaction。
+    {
+        LOCK2(cs_main, cs_wallet);
+        LogPrintf("CommitTransaction:\n%s", wtxNew.tx->ToString());
 
-    // Take key pair from key pool so it won't be used again.
-    reservekey.KeepKey();
+        // Take key pair from key pool so it won't be used again.
+        reservekey.KeepKey();
 
-    // Add tx to wallet, because if it has change it's also ours, otherwise just
-    // for transaction history.
-    AddToWallet(wtxNew);
+        // Add tx to wallet, because if it has change it's also ours, otherwise just
+        // for transaction history.
+        AddToWallet(wtxNew);
 
-    // Notify that old coins are spent.
-    for (const CTxIn &txin : wtxNew.tx->vin) {
-        CWalletTx &coin = mapWallet[txin.prevout.GetTxId()];
-        coin.BindWallet(this);
-        NotifyTransactionChanged(this, coin.GetId(), CT_UPDATED);
+        // Notify that old coins are spent.
+        for (const CTxIn &txin : wtxNew.tx->vin) {
+            CWalletTx &coin = mapWallet[txin.prevout.GetTxId()];
+            coin.BindWallet(this);
+            NotifyTransactionChanged(this, coin.GetId(), CT_UPDATED);
+        }
+
+        // Track how many getdata requests our transaction gets.
+        mapRequestCount[wtxNew.GetId()] = 0;
     }
-
-    // Track how many getdata requests our transaction gets.
-    mapRequestCount[wtxNew.GetId()] = 0;
+    // === 锁已释放 ===
 
     if (fBroadcastTransactions) {
-        // Broadcast
+        // Broadcast — SubmitTxToMempool 内部调 g_dispatcher.SubmitSync，无 cs_main 持有
+        // worst case：进程在 AddToWallet 后、Submit 前崩溃 → wallet 有 tx mempool 没 →
+        //             abandontransaction 清理（跟原同步路径同样的窗口，仅时长略长）
         if (!wtxNew.SubmitTxToMempool(maxTxFee, state)) {
             LogPrintf("CommitTransaction(): Transaction cannot be "
                       "broadcast immediately, %s\n",
@@ -3095,6 +3109,7 @@ bool CWallet::CommitTransaction(CWalletTx &wtxNew, CReserveKey &reservekey,
             // TODO: if we expect the failure to be long term or permanent,
             // instead delete wtx from the wallet and return failure.
         } else {
+            // RelayWalletTransaction 内部读 mapWallet 时自带 LOCK(cs_wallet)，安全
             wtxNew.RelayWalletTransaction(connman);
         }
     }
@@ -4206,6 +4221,8 @@ CWallet *CWallet::CreateWalletFromFile(const CChainParams &chainParams,
 
     LogPrintf(" wallet      %15dms\n", GetTimeMillis() - nStart);
 
+    // v2.6.1 Phase 4 §5.2：启动钱包异步信号 worker thread（注册 validation interface 之前）
+    walletInstance->StartAsyncWorker();
     RegisterValidationInterface(walletInstance);
 
     // Try to top up keypool. No-op if the wallet is locked.
@@ -4556,7 +4573,7 @@ int CMerkleTx::GetBlocksToMaturity() const {
         return 0;
     }
 
-    return std::max(0, (COINBASE_MATURITY + 1) - GetDepthInMainChain());
+    return std::max(0, (Params().GetConsensus().coinbaseMaturity + 1) - GetDepthInMainChain());
 }
 
 bool CMerkleTx::SubmitTxToMempool(const Amount nAbsurdFee,
@@ -4569,6 +4586,15 @@ bool CMerkleTx::SubmitTxToMempool(const Amount nAbsurdFee,
     CJournalChangeSetPtr changeSet {
         mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::NEW_TXN)
     };
+    // v2.6.1 P5.x: dispatcher 启动 → SubmitSync(wallet)；未启动 fallback PTV
+    // sub-A12 (task #156)：用 SubmitSyncState overload 拿全 CValidationState，
+    //   保留真实 reject_code / IsMissingInputs / fResubmitTx，不再压平为 REJECT_INVALID。
+    if (tbc::validation::g_dispatcher.IsStarted()) {
+        state = tbc::validation::g_dispatcher.SubmitSyncState(
+            tx, TxSource::wallet,
+            nAbsurdFee.GetSatoshis(), /*fLimitFree*/true, GetTime());
+        return state.IsValid();
+    }
     // Forward transaction to the validator and wait for results.
     // To support backward compatibility (of this interface) we need
     // to wait until the transaction is processed.

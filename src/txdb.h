@@ -97,6 +97,13 @@ public:
     CCoinsViewCursor *Cursor() const override;
     CCoinsViewCursor *Cursor(const TxId &txId) const override;
 
+    // v2.6.1 P4.1 (架构 C-6)：CCoinsViewDB 不持 batchWriteMtx，叶子节点直接走 BatchWrite。
+    bool BatchWriteNoLockVirtual(CCoinsMap& mapCoins,
+                                 const uint256& hashBlock,
+                                 const BatchWriteLockToken& /*token*/) override {
+        return BatchWrite(mapCoins, hashBlock);
+    }
+
     //! Returns true if database is in an older format.
     bool IsOldDBFormat();
     size_t EstimateSize() const override;

@@ -74,6 +74,8 @@ qrc_*.cpp
 # Mac specific
 .DS_Store
 build
+/build-dbg/
+/build-debug/
 
 #lcov
 *.gcno
@@ -107,3 +109,6 @@ contrib/devtools/split-debug.sh
 
 # Clangd
 .clangd
+
+# 内部教程文档（跟代码版本无关，不进 git history）
+docs/learn/

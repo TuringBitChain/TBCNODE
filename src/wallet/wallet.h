@@ -13,6 +13,7 @@
 #include "tinyformat.h"
 #include "ui_interface.h"
 #include "utilstrencodings.h"
+#include "validation/async_subscriber.h"
 #include "validationinterface.h"
 #include "wallet/crypter.h"
 #include "wallet/rpcwallet.h"
@@ -597,6 +598,13 @@ private:
     static std::atomic<bool> fFlushScheduled;
 
     mutable std::mt19937 randomNumbers;
+
+    // v2.6.1 Phase 4 §5.2：钱包信号异步化。CValidationInterface override 入队后立即返回，
+    //   单 worker thread FIFO 在外面调 SyncTransaction（拿 cs_main + cs_wallet）。
+    //   保证 ConnectTip 三锁帧 / TxnValidator 同步路径不被钱包 IO 阻塞。
+    tbc::validation::AsyncSubscriber m_async_worker{"wallet", 16384};
+    void StartAsyncWorker() { m_async_worker.Start(); }
+    void StopAsyncWorker() { m_async_worker.Stop(); }
     /**
      * Select a set of coins such that nValueRet >= nTargetValue and at least
      * all coins from coinControl are selected; Never select unconfirmed coins
@@ -725,6 +733,9 @@ public:
     }
 
     ~CWallet() {
+        // v2.6.1 Phase 4 §5.2：先 join 异步 worker 让所有 in-flight lambda 完成，
+        //   保证它们对 cs_main / cs_wallet 等 CWallet 成员的访问发生在成员析构前。
+        StopAsyncWorker();
         delete pwalletdbEncryption;
         pwalletdbEncryption = nullptr;
     }

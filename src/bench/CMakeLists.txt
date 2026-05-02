@@ -15,6 +15,7 @@ add_executable(bench_bitcoin
         base58.cpp
         bench.cpp
         ccoins_caching.cpp
+        batchwrite_contention.cpp
         checkblock.cpp
         checkqueue.cpp
         $<$<BOOL:${BUILD_BITCOIN_WALLET}>:coin_selection.cpp>

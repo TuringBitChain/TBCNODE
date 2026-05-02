@@ -109,41 +109,41 @@ BOOST_AUTO_TEST_CASE(GetFeeTest) {
     BOOST_CHECK_EQUAL(feeRate.GetFee(1e5), Amount(0));
 
     feeRate = CFeeRate(Amount(1000));
-    // Must always just return the arg
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(121));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(999));
+    // TBC: GetFee treats nBytes < 1000 as 1000 (1kB minimum), so for any
+    // nBytes <= 1000 the fee is the full feeRate per-kB amount.
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(9000));
 
     feeRate = CFeeRate(Amount(-1000));
-    // Must always just return -1 * arg
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(-1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(-121));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(-999));
+    // TBC: same minimum-size rule, fee is -1000 for any nBytes <= 1000.
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(-1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(-1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(-9000));
 
     feeRate = CFeeRate(Amount(123));
-    // Truncates the result, if not integer
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    // Special case: returns 1 instead of 0
-    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(14));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(122), Amount(15));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(122));
+    // TBC: GetFee enforces nBytes >= 1000 internally, so any nBytes <= 1000
+    // returns the full per-kB rate (123).
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(122), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(123));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(123));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(1107));
 
     feeRate = CFeeRate(Amount(-123));
-    // Truncates the result, if not integer
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    // Special case: returns -1 instead of 0
-    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(-1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(-1));
+    // TBC: same minimum-size rule, returns -123 for any nBytes <= 1000.
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(-123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(-123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(-123));
 
     // Check full constructor
     // default value

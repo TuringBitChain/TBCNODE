@@ -6,6 +6,13 @@
 // Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
 #include "validation.h"
+#include "validation/signal_dispatcher.h"   // v2.6.1 M2
+#include "validation/gbt_snapshot.h"        // v2.6.1 P3.6
+#include "validation/tx_stash.h"            // v2.6.1 P2.4
+#include "validation/chain_dispatcher.h"    // v2.6.1 P2.4 (drain → SubmitAsync)
+#include "validation/chainstate.h"          // v2.6.1 P4.1 (g_reorg_epoch)
+#include "validation/metrics.h"             // Phase pre-J (task #230): g_metrics
+#include "validation/lock_hierarchy_scoped.h" // v2.6.1 P4.1 C-5 (LOCK_LEVEL_TRACK)
 
 #include "arith_uint256.h"
 #include "async_file_reader.h"
@@ -266,7 +273,8 @@ CBlockIndex *FindForkInGlobalIndex(const CChain &chain,
     return chain.Genesis();
 }
 
-CCoinsViewCache *pcoinsTip = nullptr;
+// v2.6.1 P0.4a (F3): shared_ptr lifetime 改造
+std::shared_ptr<CCoinsViewCache> pcoinsTip;
 CBlockTreeDB *pblocktree = nullptr;
 
 static uint32_t GetBlockScriptFlags(const Config &config,
@@ -416,11 +424,15 @@ bool CheckSequenceLocks(
     const Config& config,
     int flags,
     LockPoints *lp,
-    bool useExistingLockPoints) {
+    bool useExistingLockPoints,
+    const CBlockIndex* snap_tip) {
 
-    // cs_main is held by TxnValidator during TxnValidation call.
-    // pool.smtx is held by TxnValidation method. It is required for viewMemPool::GetCoin()
-    CBlockIndex *tip = chainActive.Tip();
+    // v2.6.1 P3.3 修补 CRITICAL-1：原代码持 cs_main 直读 chainActive.Tip()，
+    // P3.3 移除外层 cs_main 后变 data race。改成由 caller 传入 snap_tip
+    // （从 g_chainstate.Capture().tip_index 来）；snap_tip 在 seqlock 保护下读到。
+    // 兼容性：snap_tip == nullptr → fallback 到 chainActive.Tip()（仅 ConnectBlock 等仍持
+    // cs_main 的调用方走此分支）。
+    const CBlockIndex *tip = snap_tip != nullptr ? snap_tip : chainActive.Tip();
 
     // Post-genesis we don't care about the old sequence lock calculations
     if(IsGenesisEnabled(config, tip->nHeight))
@@ -429,7 +441,7 @@ bool CheckSequenceLocks(
     }
 
     CBlockIndex index;
-    index.pprev = tip;
+    index.pprev = const_cast<CBlockIndex*>(tip);   // index.pprev 不修改 *tip，仅引用
     // CheckSequenceLocks() uses chainActive.Height()+1 to evaluate height based
     // locks because when SequenceLocks() is called within ConnectBlock(), the
     // height of the block *being* evaluated is what is used. Thus if we want to
@@ -444,7 +456,7 @@ bool CheckSequenceLocks(
         lockPair.second = lp->time;
     } else {
         // pcoinsTip contains the UTXO set for chainActive.Tip()
-        CCoinsViewMemPool viewMemPool(pcoinsTip, pool);
+        CCoinsViewMemPool viewMemPool(pcoinsTip.get(), pool);
         std::vector<int> prevheights;
         prevheights.resize(tx.vin.size());
         for (size_t txinIndex = 0; txinIndex < tx.vin.size(); txinIndex++) {
@@ -485,7 +497,7 @@ bool CheckSequenceLocks(
                     maxInputHeight = std::max(maxInputHeight, height);
                 }
             }
-            lp->maxInputBlock = tip->GetAncestor(maxInputHeight);
+            lp->maxInputBlock = const_cast<CBlockIndex*>(tip)->GetAncestor(maxInputHeight);
         }
     }
     return EvaluateSequenceLocks(index, lockPair);
@@ -688,14 +700,7 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
     std::vector<uint8_t> countryCodeVec;
 
     // Get pukeyManagerArr from hard code
-    if (!gBlockProductionTest) {
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49")));
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
-    }
-    else{
-        LogPrintf("=============== Block production test mode: using test manager public key ===============\n");
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("b44895b362dac31d35cf8cda5385db2cc254ac31892e7cd9cac6447c039f0a18")));
-    }
+    pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("563c222009a10d447b625bcddd3adfafa7c0c629ea3961c49629f2a3d822309e")));
 
     // Get date from Output Scirpt
     outputScriptIndex += 28;    // Skip P2PKH + op_return + op_pushdata + dataLength(25 + 1 + 1 + 1)
@@ -980,10 +985,10 @@ void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight)
 
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
-    int kycV1ActivationHeight = 824189;
-    int kycV2ActivationHeight = 927000;
+    int kycV1ActivationHeight = 824920;
+    int kycV2ActivationHeight = 824920;
     if(gBlockProductionTest){
-        kycV2ActivationHeight = 824200;
+        kycV2ActivationHeight = 824920;
     }
     int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
     int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
@@ -1528,6 +1533,14 @@ CTxnValResult TxnValidation(
 
     using Result = CTxnValResult;
 
+    // v2.6.1 P3.3 Step 1：函数入口拍 g_chainstate snap，所有原本读 chainActive 的地方
+    //                    改用 snap.height / snap.tip_index。snap 是 seqlock 安全的快照。
+    //                    若 snap 期间 tip 漂移，doubleCheck #1 会在 commit 后捕获并 Resubmit。
+    //                    chainActive_height 函数局部 const，避免 TOCTOU。
+    const auto chainstate_snap = tbc::validation::g_chainstate.Capture();
+    const int chainActive_height = chainstate_snap.height;
+    const CBlockIndex* chainActive_tip_const = chainstate_snap.tip_index;
+
     const CTransactionRef& ptx = pTxInputData->GetTxnPtr();
     const CTransaction &tx = *ptx;
     const TxId txid = tx.GetId();
@@ -1540,7 +1553,7 @@ CTxnValResult TxnValidation(
 
     // First check against consensus limits. If this check fails, then banscore will be increased. 
     // We re-test the transaction with policy rules later in this method (without banning if rules are violated)
-    bool isGenesisEnabled = IsGenesisEnabled(config, chainActive.Height() + 1);
+    bool isGenesisEnabled = IsGenesisEnabled(config, chainActive_height + 1);
     uint64_t maxTxSigOpsCountConsensusBeforeGenesis = config.GetMaxTxSigOpsCountConsensusBeforeGenesis();
     uint64_t maxTxSizeConsensus = config.GetMaxTxSize(isGenesisEnabled, true);
     // Coinbase is only valid in a block, not as a loose transaction.
@@ -1549,7 +1562,7 @@ CTxnValResult TxnValidation(
         // We will re-check the transaction if we are in Genesis gracefull period, to check if genesis rules would 
         // allow this script transaction to be accepted. If it is valid under Genesis rules, we only reject it
         // without adding banscore
-        bool isGenesisGracefulPeriod = IsGenesisGracefulPeriod(config, chainActive.Height() + 1);
+        bool isGenesisGracefulPeriod = IsGenesisGracefulPeriod(config, chainActive_height + 1);
         if (isGenesisGracefulPeriod)
         {
             uint64_t maxTxSizeGraceful = config.GetMaxTxSize(!isGenesisEnabled, true);
@@ -1582,7 +1595,7 @@ CTxnValResult TxnValidation(
     //          but we will mine it nevertheless. Anyone can collect such
     //          coin by providing OP_1 unlock script
     std::string reason;
-    bool fStandard = IsStandardTx(config, tx, chainActive.Height() + 1, reason);
+    bool fStandard = IsStandardTx(config, tx, chainActive_height + 1, reason);
     if (fStandard) {
         state.SetStandardTx();
     }
@@ -1614,7 +1627,7 @@ CTxnValResult TxnValidation(
     bool isFinal = true;
     unsigned int lockTimeFlags;
     {
-        const CBlockIndex* tip = chainActive.Tip();
+        const CBlockIndex* tip = chainActive_tip_const;
         int height { tip->nHeight };
         lockTimeFlags = StandardNonFinalVerifyFlags(IsGenesisEnabled(config, height));
         ContextualCheckTransactionForCurrentBlock(config, tx, height, tip->GetMedianTimePast(),
@@ -1662,24 +1675,24 @@ CTxnValResult TxnValidation(
         return Result{state, pTxInputData};
     }
 
-    CCoinsView dummy;
+    CCoinsViewEmpty dummy;   // C-6: stub backing view
     CCoinsViewCache view(&dummy);
     Amount nValueIn(0);
     LockPoints lp;
     {
         std::shared_lock lock(pool.smtx);
         // Combine db & mempool views together.
-        CCoinsViewMemPool viewMemPool(pcoinsTip, pool);
+        CCoinsViewMemPool viewMemPool(pcoinsTip.get(), pool);
         // Temporarily switch cache backend to db+mempool view
         view.SetBackend(viewMemPool);
         // Do we already have it?
-        if(!CheckTxOutputs(tx, pcoinsTip, view, vCoinsToUncache)) {
+        if(!CheckTxOutputs(tx, pcoinsTip.get(), view, vCoinsToUncache)) {
            state.Invalid(false, REJECT_ALREADY_KNOWN,
                         "txn-already-known");
            return Result{state, pTxInputData, vCoinsToUncache};
         }
         // Do all inputs exist?
-        if(!CheckTxInputExists(tx, pcoinsTip, view, state,
+        if(!CheckTxInputExists(tx, pcoinsTip.get(), view, state,
                                vCoinsToUncache)) {
            return Result{state, pTxInputData, vCoinsToUncache};
         }
@@ -1709,7 +1722,10 @@ CTxnValResult TxnValidation(
         // transactions that can't be mined yet. Must keep pool.cs for this
         // unless we change CheckSequenceLocks to take a CoinsViewCache
         // instead of create its own.
-        if (!CheckSequenceLocks(tx, pool, config, lockTimeFlags, &lp)) {
+        // v2.6.1 P3.3 CRITICAL-1 修补：传入 snap tip 避免 CheckSequenceLocks 内
+        // 直读 chainActive.Tip() 在 cs_main 移除后变 race
+        if (!CheckSequenceLocks(tx, pool, config, lockTimeFlags, &lp, false,
+                                chainActive_tip_const)) {
             state.DoS(0, false, REJECT_NONSTANDARD,
                      "non-BIP68-final");
             return Result{state, pTxInputData, vCoinsToUncache};
@@ -1720,7 +1736,7 @@ CTxnValResult TxnValidation(
     if (!acceptNonStandardOutput)
     {
         auto res =
-            AreInputsStandard(source->GetToken(), config, tx, view, chainActive.Height() + 1);
+            AreInputsStandard(source->GetToken(), config, tx, view, chainActive_height + 1);
 
         if (!res.has_value())
         {
@@ -1740,7 +1756,7 @@ CTxnValResult TxnValidation(
     else if (fUseLimits && (TxValidationPriority::low != pTxInputData->GetTxValidationPriority()))
     {
         auto res =
-            AreInputsStandard(source->GetToken(), config, tx, view, chainActive.Height() + 1);
+            AreInputsStandard(source->GetToken(), config, tx, view, chainActive_height + 1);
         if (!res.has_value() || !res.value()) {
             state.SetValidationTimeoutExceeded();
             state.DoS(0, false, REJECT_NONSTANDARD,
@@ -1756,7 +1772,7 @@ CTxnValResult TxnValidation(
     // Check that the transaction doesn't have an excessive number of
     // sigops, making it impossible to mine. We consider this an invalid rather
     // than merely non-standard transaction.
-    if (sigOpCountError || nSigOpsCount > config.GetMaxTxSigOpsCountPolicy(IsGenesisEnabled(config, chainActive.Height() + 1))) {
+    if (sigOpCountError || nSigOpsCount > config.GetMaxTxSigOpsCountPolicy(IsGenesisEnabled(config, chainActive_height + 1))) {
         state.DoS(0, false, REJECT_NONSTANDARD,
                  "bad-txns-too-many-sigops",
                   false,
@@ -1781,7 +1797,7 @@ CTxnValResult TxnValidation(
     // Note that consolidation transactions paying a voluntary fee will
     // be treated with higher priority. The higher the fee the higher
     // the priority
-    bool skipFeeTest = IsConsolidationTxn(config, tx, view, chainActive.Height() + 1);
+    bool skipFeeTest = IsConsolidationTxn(config, tx, view, chainActive_height + 1);
     if (skipFeeTest) {
         double priority = 0;
         const CFeeRate blockMinTxFee = config.GetBlockMinFeePerKB();
@@ -1795,7 +1811,7 @@ CTxnValResult TxnValidation(
 
     Amount inChainInputValue;
     double dPriority =
-        view.GetPriority(tx, chainActive.Height(), inChainInputValue);
+        view.GetPriority(tx, chainActive_height, inChainInputValue);
     // Keep track of transactions that spend a coinbase, which we re-scan
     // during reorgs to ensure COINBASE_MATURITY is still met.
     const bool fSpendsCoinbase = CheckTxSpendsCoinbase(tx, view);
@@ -1815,7 +1831,7 @@ CTxnValResult TxnValidation(
     // chainActive.Height() can never be negative when adding transactions to the mempool,
     // since active chain contains at least genesis block.
     // We can therefore use std::max to convert height to unsigned integer.
-    unsigned int uiChainActiveHeight = std::max(chainActive.Height(), 0);
+    unsigned int uiChainActiveHeight = std::max(chainActive_height, 0);
     std::shared_ptr<CTxMemPoolEntry> pMempoolEntry {
         std::make_shared<CTxMemPoolEntry>(
             ptx,
@@ -1860,7 +1876,7 @@ CTxnValResult TxnValidation(
 
     // We are getting flags as they would be if the utxos are before genesis. 
     // "CheckInputs" is adding specific flags for each input based on its height in the main chain
-    uint32_t scriptVerifyFlags = GetScriptVerifyFlags(config, IsGenesisEnabled(config, chainActive.Height() + 1));
+    uint32_t scriptVerifyFlags = GetScriptVerifyFlags(config, IsGenesisEnabled(config, chainActive_height + 1));
     // Check against previous transactions. This is done last to help
     // prevent CPU exhaustion denial-of-service attacks.
     PrecomputedTransactionData txdata(tx);
@@ -1908,14 +1924,14 @@ CTxnValResult TxnValidation(
     // invalid blocks (using TestBlockValidity), however allowing such
     // transactions into the mempool can be exploited as a DoS attack.
     uint32_t currentBlockScriptVerifyFlags =
-        GetBlockScriptFlags(config, chainActive.Tip());
+        GetBlockScriptFlags(config, chainActive_tip_const);
     res =
         CheckInputsFromMempoolAndCache(
             source->GetToken(),
             config,
             tx,
             state,
-            pcoinsTip,
+            pcoinsTip.get(),
             view,
             pool,
             currentBlockScriptVerifyFlags,
@@ -2507,7 +2523,7 @@ static void PostValidationStepsForP2PTxn(
         // Finalising txns have another round of validation before making it into the
         // mempool, hold off relaying them until that has completed.
         if(pool.Exists(ptx->GetId()) || pool.getNonFinalPool().exists(ptx->GetId())) {
-            pool.CheckMempool(pcoinsTip, handlers.mJournalChangeSet);
+            pool.CheckMempool(pcoinsTip.get(), handlers.mJournalChangeSet);
             RelayTransaction(*ptx, *g_connman);
         }
         pNode->nLastTXTime = GetTime();
@@ -2542,7 +2558,7 @@ static void PostValidationStepsForFinalisedTxn(
 
     if(state.IsValid())
     {
-        pool.CheckMempool(pcoinsTip, handlers.mJournalChangeSet);
+        pool.CheckMempool(pcoinsTip.get(), handlers.mJournalChangeSet);
         RelayTransaction(*ptx, *g_connman);
     }
 }
@@ -2565,6 +2581,15 @@ static void UpdateMempoolForReorg(const Config &config,
                                   bool fAddToMempool,
                                   const CJournalChangeSetPtr& changeSet) {
     AssertLockHeld(cs_main);
+    // sub-A4 (task #167)：UpdateMempoolForReorg 设计上必然两段 mempool.smtx 帧 +
+    //   中间 PTV 帧外（PTV processValidation 自取 mempool.smtx，caller 持锁会死锁）。
+    //   reorg_epoch 跨整段 ActivateBestChainStep RAII 单调递增（task #159）→
+    //   worker 看 half-state 一致重试。本函数不再独立 +2 epoch，避免双重抬升。
+    //   合 caller 持 cs_main 跟整体形成两段 V-5a：
+    //     Phase 1: cs_main + unique(mempool.smtx) — disconnectpool → vTxInputData
+    //     Phase 2: cs_main only — PTV 帧外 processValidation
+    //     Phase 3: cs_main + unique(mempool.smtx) — 失败 tx RemoveRecursive 清理
+    //   不可一段化：会跟 PTV 锁倒序。
     TxInputDataSPtrVec vTxInputData {};
     // disconnectpool's insertion_order index sorts the entries from oldest to
     // newest, but the oldest entry will be the last tx from the latest mined
@@ -2572,41 +2597,69 @@ static void UpdateMempoolForReorg(const Config &config,
     // Iterate disconnectpool in reverse, so that we add transactions back to
     // the mempool starting with the earliest transaction that had been
     // previously seen in a block.
-    auto it = disconnectpool.queuedTx.get<insertion_order>().rbegin();
-    while (it != disconnectpool.queuedTx.get<insertion_order>().rend()) {
-        bool fRemoveRecursive { !fAddToMempool || (*it)->IsCoinBase() };
-        if (fRemoveRecursive) {
-            // If the transaction doesn't make it in to the mempool, remove any
-            // transactions that depend on it (which would now be orphans).
-            mempool.RemoveRecursive(**it, changeSet, MemPoolRemovalReason::REORG);
-        } else {
-            vTxInputData.emplace_back(
-                std::make_shared<CTxInputData>(
-                    TxIdTrackerWPtr{}, // TxIdTracker is not used during reorgs
-                    *it,              // a pointer to the tx
-                    TxSource::reorg,  // tx source
-                    TxValidationPriority::normal,  // tx validation priority
-                    GetTime(),        // nAcceptTime
-                    false));          // fLimitFree
+    // v2.6.1 P4.1 Phase 4：disconnectpool → mempool 的 RemoveRecursive 串成一帧
+    //   持 smtx unique 一次性处理所有 fRemoveRecursive，避免 worker 见多次 Remove 之间的半态。
+    //   PTV 走 processValidation 还是要拿自己的 smtx，所以在帧外。
+    {
+        LOCK_LEVEL_TRACK(mempool.smtx, tbc::lock_hierarchy::LEVEL_MEMPOOL_SMTX);
+        std::unique_lock<std::shared_timed_mutex> reorg_lock(mempool.smtx);
+        auto it = disconnectpool.queuedTx.get<insertion_order>().rbegin();
+        while (it != disconnectpool.queuedTx.get<insertion_order>().rend()) {
+            bool fRemoveRecursive { !fAddToMempool || (*it)->IsCoinBase() };
+            if (fRemoveRecursive) {
+                // If the transaction doesn't make it in to the mempool, remove any
+                // transactions that depend on it (which would now be orphans).
+                mempool.RemoveRecursiveNL(**it, changeSet, MemPoolRemovalReason::REORG);
+            } else {
+                vTxInputData.emplace_back(
+                    std::make_shared<CTxInputData>(
+                        TxIdTrackerWPtr{}, // TxIdTracker is not used during reorgs
+                        *it,              // a pointer to the tx
+                        TxSource::reorg,  // tx source
+                        TxValidationPriority::normal,  // tx validation priority
+                        GetTime(),        // nAcceptTime
+                        // review v7 a4 F-7：reorg 重提的 tx 之前已经在 mempool 通过过费率
+                        //   检查，fLimitFree=true 跳过重新费率限制（否则若全网最低费上调，
+                        //   合法的低费 reorg tx 会反复被 reject 直到 stash TTL 过期）。
+                        true));          // fLimitFree
+            }
+            ++it;
         }
-        ++it;
+        disconnectpool.queuedTx.clear();
     }
-    disconnectpool.queuedTx.clear();
-    // Validate a set of transactions
+    // v2.6.1 C1 修补（设计 §2.5 简化版）：
+    //   reorg 路径调用方持 cs_main，**不能**用 SubmitSync 走 dispatcher worker
+    //   —— worker 也要 cs_main → 跨线程互等 30s × N 笔，节点冻死。
+    //   保持 PTV 直调（同线程安全），失败 tx 进 ReorgStash 由后台 drain 线程异步重试。
+    //   完整 TriggerReorgResubmit + reorg_thread 在 P4.5 重构 cs_main 时再做。
     g_connman->getTxnValidator()->processValidation(vTxInputData, changeSet, true);
     // Mempool related updates
     std::vector<uint256> vHashUpdate {};
-    for (const auto& txInputData : vTxInputData) {
-        auto const& txid = txInputData->GetTxnPtr()->GetId();
-        if (mempool.Exists(txid)) {
-            // A set of transaction hashes from a disconnected block re-added to the mempool.
-            vHashUpdate.emplace_back(txid);
-        } else {
-            // If the transaction doesn't make it in to the mempool, remove any
-            // transactions that depend on it (which would now be orphans).
-            mempool.RemoveRecursive(*(txInputData->GetTxnPtr()), changeSet, MemPoolRemovalReason::REORG);
+    // v2.6.1 P4.1 Phase 4：PTV 后清理失败 tx 也串成一帧
+    {
+        LOCK_LEVEL_TRACK(mempool.smtx, tbc::lock_hierarchy::LEVEL_MEMPOOL_SMTX);
+        std::unique_lock<std::shared_timed_mutex> reorg_lock(mempool.smtx);
+        for (const auto& txInputData : vTxInputData) {
+            auto const& txid = txInputData->GetTxnPtr()->GetId();
+            if (mempool.ExistsNL(txid)) {
+                // A set of transaction hashes from a disconnected block re-added to the mempool.
+                vHashUpdate.emplace_back(txid);
+            } else {
+                // If the transaction doesn't make it in to the mempool, remove any
+                // transactions that depend on it (which would now be orphans).
+                mempool.RemoveRecursiveNL(*(txInputData->GetTxnPtr()), changeSet, MemPoolRemovalReason::REORG);
+            }
         }
     }
+    // v2.6.1 P2.4 真接入：reorg 失败的 tx 进 ReorgStash（200k 容量, 10min TTL）
+    // —— UpdateTip 后台 drain 时再投递 dispatcher 重试，不阻塞 reorg 主路径
+    for (const auto& txInputData : vTxInputData) {
+        const auto& tx = txInputData->GetTxnPtr();
+        if (!mempool.Exists(tx->GetId())) {
+            tbc::validation::g_reorg_stash.Push(tx);
+        }
+    }
+
     // Validator/addUnchecked all assume that new mempool entries have
     // no in-mempool children, which is generally not true when adding
     // previously-confirmed transactions back to the mempool.
@@ -2620,7 +2673,7 @@ static void UpdateMempoolForReorg(const Config &config,
     mempool.
         RemoveForReorg(
             config,
-            pcoinsTip,
+            pcoinsTip.get(),
             changeSet,
             height,
             chainActive.Tip()->GetMedianTimePast(),
@@ -2708,6 +2761,50 @@ bool GetTransaction(const Config &config, const TxId &txid,
     }
 
     return false;
+}
+
+bool GetTransactionRaw(const TxId &txid, CTransactionRef &txOut) {
+    // Stage 1: mempool lookup (uses mempool.smtx only, no cs_main).
+    if (CTransactionRef ptx = mempool.Get(txid); ptx) {
+        txOut = std::move(ptx);
+        return true;
+    }
+
+    // Stage 2: txindex lookup (LevelDB is thread-safe; block files are
+    // append-only so concurrent reads are safe without cs_main).
+    if (!fTxIndex) {
+        return false;
+    }
+
+    CDiskTxPos postx;
+    if (!pblocktree->ReadTxIndex(txid, postx)) {
+        return false;
+    }
+
+    CAutoFile file(CDiskFiles::OpenBlockFile(postx, true), SER_DISK,
+                   CLIENT_VERSION);
+    if (file.IsNull()) {
+        return false;
+    }
+
+    try {
+        CBlockHeader header;
+        file >> header;
+#if defined(WIN32)
+        _fseeki64(file.Get(), postx.nTxOffset, SEEK_CUR);
+#else
+        fseek(file.Get(), postx.nTxOffset, SEEK_CUR);
+#endif
+        CTransactionRef diskTx;
+        file >> diskTx;
+        if (!diskTx || diskTx->GetId() != txid) {
+            return false;
+        }
+        txOut = std::move(diskTx);
+        return true;
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -3414,7 +3511,8 @@ std::pair<int,int> GetSpendHeightAndMTP(const CCoinsViewCache &inputs) {
 /// zws!!!!!!
 namespace Consensus {
 bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
-                   const CCoinsViewCache &inputs, int nSpendHeight) {
+                   const CCoinsViewCache &inputs, int nSpendHeight,
+                   int coinbaseMaturity) {
     // This doesn't trigger the DoS code on purpose; if it did, it would make it
     // easier for an attacker to attempt to split the network.
     if (!inputs.HaveInputs(tx)) {
@@ -3430,7 +3528,7 @@ bool CheckTxInputs(const CTransaction &tx, CValidationState &state,
 
         // If prev is coinbase, check that it's matured
         if (coin.IsCoinBase()) {
-            if (nSpendHeight - coin.GetHeight() < COINBASE_MATURITY) {
+            if (nSpendHeight - coin.GetHeight() < coinbaseMaturity) {
                 return state.Invalid(
                     false, REJECT_INVALID,
                     "bad-txns-premature-spend-of-coinbase",
@@ -3507,7 +3605,8 @@ std::optional<bool> CheckInputs(
         }
     }
 
-    if (!Consensus::CheckTxInputs(tx, state, inputs, spendHeight)) 
+    if (!Consensus::CheckTxInputs(tx, state, inputs, spendHeight,
+                                   config.GetChainParams().GetConsensus().coinbaseMaturity))
     {
         return false;
     }
@@ -4573,11 +4672,77 @@ void PruneAndFlush() {
 }
 
 /**
+ * v2.6.1 P4.1 (C-B): 在 view.Flush() 之前提前发布 tip
+ *   - chainActive.SetTip → 后续 chain query 看到新 tip
+ *   - g_chainstate seqlock → worker.Capture 看到新 tip
+ *   - g_gbt_snapshot 通知 → GBT 重算
+ *
+ * 调用 SetTip 之后 readers 看到新 tip，但 pcoinsTip UTXO 还是旧的。
+ * batchWriteMtx 序列化 — readers 查询 UTXO 时被 view.Flush() 的 unique_lock 阻塞，
+ * 等 Flush 完了再读 → 读到的 UTXO 跟新 tip 一致。
+ *
+ * 信号分发 + mempool 计数 + log 仍在 UpdateTip 末段（由 ConnectTip 在 Flush 后调）。
+ */
+static void PublishTipEarly(const Config &config, CBlockIndex *pindexNew) {
+    chainActive.SetTip(pindexNew);
+    if (pindexNew != nullptr) {
+        const uint32_t script_flags = GetBlockScriptFlags(config, pindexNew);
+        const int32_t genesis_h = static_cast<int32_t>(config.GetGenesisActivationHeight());
+        const bool is_genesis = IsGenesisEnabled(config, pindexNew->nHeight + 1);
+        tbc::validation::g_chainstate.UpdateTip(pindexNew, script_flags, genesis_h, is_genesis);
+        tbc::validation::g_gbt_snapshot.NotifyTipChanged();
+    }
+}
+
+// v2.6.1：启动末尾用 chainActive.Tip() seed g_chainstate seqlock
+// 调用方持 cs_main（init.cpp LOCK(cs_main)）
+void SeedChainstateAtStartup(const Config &config) {
+    AssertLockHeld(cs_main);
+    CBlockIndex *tip = chainActive.Tip();
+    if (tip == nullptr) return;
+    const uint32_t script_flags = GetBlockScriptFlags(config, tip);
+    const int32_t genesis_h = static_cast<int32_t>(config.GetGenesisActivationHeight());
+    const bool is_genesis = IsGenesisEnabled(config, tip->nHeight + 1);
+    tbc::validation::g_chainstate.UpdateTip(tip, script_flags, genesis_h, is_genesis);
+    LogPrintf("v2.6.1: g_chainstate seeded with tip=%s height=%d\n",
+              tip->GetBlockHash().ToString(), tip->nHeight);
+}
+
+/**
  * Update chainActive and related internal data structures when adding a new
  * block to the chain tip.
+ *
+ * v2.6.1 P4.1: early_published=true 表示 ConnectTip 已经在 view.Flush() 之前调过
+ *              PublishTipEarly，本次跳过 SetTip + g_chainstate + GBT notify。
  */
-static void UpdateTip(const Config &config, CBlockIndex *pindexNew) {
-    chainActive.SetTip(pindexNew);
+static void UpdateTip(const Config &config, CBlockIndex *pindexNew,
+                      bool early_published = false) {
+    if (!early_published) {
+        chainActive.SetTip(pindexNew);
+
+        // v2.6.1 M1 真接入：g_chainstate seqlock 元数据同步
+        // 调用方持 cs_main（AssertLockHeld 已在 ConnectBlock / ActivateBestChainStep 验证）
+        // F2 try_lock 守卫在已持锁本线程返回 true，立即 unlock 平衡 count
+        if (pindexNew != nullptr) {
+            const uint32_t script_flags = GetBlockScriptFlags(config, pindexNew);
+            const int32_t genesis_h = static_cast<int32_t>(config.GetGenesisActivationHeight());
+            const bool is_genesis = IsGenesisEnabled(config, pindexNew->nHeight + 1);
+            tbc::validation::g_chainstate.UpdateTip(pindexNew, script_flags, genesis_h, is_genesis);
+            tbc::validation::g_gbt_snapshot.NotifyTipChanged();
+        }
+    }
+
+    // 信号分发 + mempool 计数 + log（C-B 后置 — Flush 完成后再发，避免 subscriber 看到不一致状态）
+    if (pindexNew != nullptr) {
+        // v2.6.1 M2 真接入：异步信号分发（解耦 wallet/ZMQ subscriber 反向锁）
+        tbc::validation::g_signal_dispatcher.EnqueueBlock(
+            tbc::validation::SignalType::BlockConnected,
+            pindexNew->GetBlockHash());
+
+        // v2.6.1 H3 修补：drain 移到后台 RunDrainStash 线程，UpdateTip 内只 notify。
+        //                 旧实现在 cs_main 内做 200×100×16 shard shared_lock，拖死 reorg。
+        tbc::validation::g_dispatcher.NotifyDrainStash();
+    }
 
     // New best block
     mempool.AddTransactionsUpdated(1);
@@ -4669,7 +4834,7 @@ static bool DisconnectTip(const Config &config, CValidationState &state,
     // Apply the block atomically to the chain state.
     int64_t nStart = GetTimeMicros();
     {
-        CCoinsViewCache view(pcoinsTip);
+        CCoinsViewCache view(pcoinsTip.get());
         assert(view.GetBestBlock() == pindexDelete->GetBlockHash());
         // Use new private CancellationSource that can not be cancelled
         if (DisconnectBlock(block, pindexDelete, view, task::CCancellationSource::Make()->GetToken()) != DISCONNECT_OK) {
@@ -4677,8 +4842,30 @@ static bool DisconnectTip(const Config &config, CValidationState &state,
                          pindexDelete->GetBlockHash().ToString());
         }
 
-        bool flushed = view.Flush();
-        assert(flushed);
+        // v2.6.1 P4.1 Phase 4 (C-B for DisconnectTip 反向，V-5b + 设计文档 §5)：
+        //   level 1: unique(mempool.smtx)（虽 DisconnectTip 不写 mempool，仍持 unique
+        //                                  以序列化 mempool reader → worker 不会在
+        //                                  tip 翻新中看到旧 mempool 视图）
+        //   level 2: unique(pcoinsTip->batchWriteMtx)
+        //   原子区: view.FlushNoLock 撤销 UTXO，再 PublishTipEarly(pprev) 退回 tip。
+        //   反向语义跟 ConnectTip 相对——撤销 UTXO 在前，tip 退回在后。
+        //   pass-token 模式（HIGH-C 修补）：BatchWriteLockToken 强制 caller 持 batchWriteMtx unique。
+        //   架构修补 architect C-1：补上 smtx unique 让 DisconnectTip 也满足 V-5b
+        //   "(tip, UTXO, mempool) 同 epoch" 不变量。
+        {
+            LOCK_LEVEL_TRACK(mempool.smtx, tbc::lock_hierarchy::LEVEL_MEMPOOL_SMTX);
+            std::unique_lock<std::shared_timed_mutex> m_lock(mempool.smtx);
+            LOCK_LEVEL_TRACK(pcoinsTip->batchWriteMtx, tbc::lock_hierarchy::LEVEL_BATCHWRITE_MTX);
+            std::unique_lock<std::shared_mutex> bw(pcoinsTip->batchWriteMtx);
+            BatchWriteLockToken bwToken(bw);
+            bool flushed = view.FlushNoLock(bwToken);
+            if (!flushed) {
+                LogPrintf("FATAL: view.FlushNoLock failed during DisconnectTip(%s); abort\n",
+                          pindexDelete->GetBlockHash().ToString());
+                std::abort();
+            }
+            PublishTipEarly(config, pindexDelete->pprev);
+        }
     }
 
     LogPrint(BCLog::BENCH, "- Disconnect block: %.2fms\n",
@@ -4709,7 +4896,8 @@ static bool DisconnectTip(const Config &config, CValidationState &state,
     }
 
     // Update chainActive and related variables.
-    UpdateTip(config, pindexDelete->pprev);
+    // C-B for Disconnect: tip 已经在 view.Flush() 之后发布过了，这里只跑后置部分
+    UpdateTip(config, pindexDelete->pprev, /*early_published=*/true);
     // Let wallets know transactions went from 1-confirmed to
     // 0-confirmed or conflicted:
     GetMainSignals().BlockDisconnected(pblock);
@@ -4867,8 +5055,10 @@ static bool ConnectTip(
     int64_t nTime3;
     LogPrint(BCLog::BENCH, "  - Load block from disk: %.2fms [%.2fs]\n",
              (nTime2 - nTime1) * 0.001, nTimeReadFromDisk * 0.000001);
+    // P4.1 Phase 3：txNew 由帧内 RemoveForBlockNL 填充；BlockConnected2 在帧外消费。
+    std::vector<CTransactionRef> txNew;
     {
-        CCoinsViewCache view(pcoinsTip);
+        CCoinsViewCache view(pcoinsTip.get());
 
         // Temporarily stop tracing events if we are in parallel validation as
         // we will possibly release cs_main lock for a while. In case of an
@@ -4903,24 +5093,52 @@ static bool ConnectTip(
         nTimeConnectTotal += nTime3 - nTime2;
         LogPrint(BCLog::BENCH, "  - Connect total: %.2fms [%.2fs]\n",
                  (nTime3 - nTime2) * 0.001, nTimeConnectTotal * 0.000001);
-        bool flushed = view.Flush();
-        assert(flushed);
-    }
 
-    std::vector<CTransactionRef> txNew;
-    auto asyncRemoveForBlock = std::async(std::launch::async, 
-        [&blockConnecting, &pindexNew, &changeSet, &txNew]()
+        // v2.6.1 P4.1 Phase 3 (C-B 完整三锁原子帧 V-5a + 设计文档 §5)：
+        //   level 1: unique(mempool.smtx)
+        //   level 2: unique(pcoinsTip->batchWriteMtx)
+        //   原子区: PublishTipEarly + view.FlushNoLock + RemoveForBlockNL
+        //   保证 worker 任何时刻拍 snap 的 (tip_hash, UTXO 视图, mempool)
+        //   三者同 epoch 一致。
+        //   pass-token 模式（HIGH-C 修补）：BatchWriteLockToken 强制 caller 持锁。
+        // Phase 175 (task #175)：删除 -removeforblock=async 旁路；async 破坏同 epoch
+        //   不变量。固定 sync (prod 等价)。
+        // Phase pre-J (task #230)：三锁帧 latency 钩子（围在锁外 measure 整段帧时长）
+        const int64_t three_lock_t0 = GetTimeMicros();
         {
-            RenameThread("Async RemoveForBlock");
+            // C-5: 注册到 lock_hierarchy；DEBUG_LOCKORDER 检测倒序
+            LOCK_LEVEL_TRACK(mempool.smtx, tbc::lock_hierarchy::LEVEL_MEMPOOL_SMTX);
+            std::unique_lock<std::shared_timed_mutex> m_lock(mempool.smtx);
+            LOCK_LEVEL_TRACK(pcoinsTip->batchWriteMtx, tbc::lock_hierarchy::LEVEL_BATCHWRITE_MTX);
+            std::unique_lock<std::shared_mutex> bw(pcoinsTip->batchWriteMtx);
+            // bwToken（不命名为 token）以避免 shadowing 函数参数
+            // const task::CCancellationToken& token (line 4986)。
+            BatchWriteLockToken bwToken(bw);
+            PublishTipEarly(config, pindexNew);
+            bool flushed = view.FlushNoLock(bwToken);
+            if (!flushed) {
+                // §5 P-2: std::abort 不调析构（OS 回收 vmspace）；LevelDB POSIX advisory
+                // lock + bitcoind.pid 随 fd close 自动释放，无 datadir 污染。
+                // chainstate 是 BatchWrite 之前的快照，重启从 LevelDB 重建 → 一致 tip。
+                LogPrintf("FATAL: view.FlushNoLock failed after PublishTipEarly(%s); abort\n",
+                          pindexNew->GetBlockHash().ToString());
+                std::abort();
+            }
             int64_t nTimeRemoveForBlock = GetTimeMicros();
-            // Remove transactions from the mempool.;
-            mempool.RemoveForBlock(blockConnecting.vtx, changeSet, txNew);
+            // RemoveForBlockNL：caller 已持 mempool.smtx unique，不再二次加锁
+            mempool.RemoveForBlockNL(blockConnecting.vtx, changeSet, txNew);
             nTimeRemoveForBlock = GetTimeMicros() - nTimeRemoveForBlock;
             nTimeRemoveFromMempool += nTimeRemoveForBlock;
             LogPrint(BCLog::BENCH, "    - Remove transactions from the mempool: %.2fms [%.2fs]\n",
-                    nTimeRemoveForBlock * 0.001, nTimeRemoveFromMempool * 0.000001);
+                     nTimeRemoveForBlock * 0.001, nTimeRemoveFromMempool * 0.000001);
         }
-    );
+        // Phase pre-J (task #230)：三锁帧总时长写 metric
+        const uint64_t three_lock_dt = static_cast<uint64_t>(GetTimeMicros() - three_lock_t0);
+        tbc::validation::g_metrics.connecttip_three_lock_us_total.fetch_add(
+            three_lock_dt, std::memory_order_relaxed);
+        tbc::validation::g_metrics.connecttip_three_lock_count.fetch_add(
+            1, std::memory_order_relaxed);
+    }
 
     int64_t nTime4 = GetTimeMicros();
     nTimeFlush += nTime4 - nTime3;
@@ -4929,7 +5147,6 @@ static bool ConnectTip(
     // Write the chain state to disk, if necessary.
     if (!FlushStateToDisk(config.GetChainParams(), state,
                           FLUSH_STATE_IF_NEEDED)) {
-        asyncRemoveForBlock.wait();
         return false;
     }
     int64_t nTime5 = GetTimeMicros();
@@ -4941,9 +5158,10 @@ static bool ConnectTip(
         g_connman->DequeueTransactions(blockConnecting.vtx);
     }
     disconnectpool.removeForBlock(blockConnecting.vtx);
-    asyncRemoveForBlock.wait();
     // Update chainActive & related variables.
-    UpdateTip(config, pindexNew);
+    // P4.1 (C-B): tip 已经在 view.Flush() 之前发布（PublishTipEarly），
+    //             这里只跑后置部分（信号分发 / mempool 计数 / log）。
+    UpdateTip(config, pindexNew, /*early_published=*/true);
 
     int64_t nTime6 = GetTimeMicros();
     nTimePostConnect += nTime6 - nTime5;
@@ -5075,6 +5293,40 @@ static bool ActivateBestChainStep(
     // Disconnect active blocks which are no longer in the best chain.
     bool fBlocksDisconnected = false;
     DisconnectedBlockTransactions disconnectpool;
+    // sub-A4 (task #159)：reorg 整段 RAII epoch guard
+    //   原 dev：仅 UpdateMempoolForReorg 进出 +2，multi-disconnect 中间 epoch=偶数，
+    //   worker 看不到 "reorg in-progress"。
+    //   修法：reorg 入口（chainActive.Tip != pindexFork 时）抬升 epoch 进奇数，
+    //   ActivateBestChainStep 整段退出再 +1 退到下一个偶数。
+    //   保证：跨 N-disconnect + UpdateMempoolForReorg + reconnect 整段 epoch 全奇。
+    // sub-A4 review v2 CRITICAL (task #238)：用 g_reorg_nesting_depth ref-count
+    //   防嵌套 guard 各自抬 epoch 中间错变偶数。仅 0↔1 边界改 epoch + gauge。
+    struct ActivateReorgEpochGuard {
+        bool active = false;
+        ~ActivateReorgEpochGuard() {
+            if (active) {
+                if (tbc::validation::g_reorg_nesting_depth.fetch_sub(
+                        1, std::memory_order_acq_rel) == 1) {
+                    // 真正退出最外层 → epoch 退偶数 + gauge 落 0
+                    tbc::validation::g_reorg_epoch.fetch_add(
+                        1, std::memory_order_release);
+                    tbc::validation::g_metrics.reorg_in_progress_current.store(
+                        0, std::memory_order_release);
+                }
+            }
+        }
+    } activateReorgGuard;
+    if (chainActive.Tip() && chainActive.Tip() != pindexFork) {
+        activateReorgGuard.active = true;
+        if (tbc::validation::g_reorg_nesting_depth.fetch_add(
+                1, std::memory_order_acq_rel) == 0) {
+            // 最外层进入：epoch 抬奇数 + gauge 起 1
+            tbc::validation::g_reorg_epoch.fetch_add(
+                1, std::memory_order_release);
+            tbc::validation::g_metrics.reorg_in_progress_current.store(
+                1, std::memory_order_release);
+        }
+    }
     try {
         while (chainActive.Tip() && chainActive.Tip() != pindexFork) {
             if (!DisconnectTip(config, state, &disconnectpool, changeSet)) {
@@ -5176,7 +5428,7 @@ static bool ActivateBestChainStep(
         {
             changeSet->apply();
         }
-        mempool.CheckMempool(pcoinsTip, changeSet);
+        mempool.CheckMempool(pcoinsTip.get(), changeSet);
     }
     catch(...) {
         // We were probably cancelled. Make the mempool consistent with the current tip.
@@ -5564,6 +5816,43 @@ bool InvalidateBlock(const Config &config, CValidationState &state,
 
     DisconnectedBlockTransactions disconnectpool;
     CJournalChangeSetPtr changeSet { mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::REORG) };
+
+    // sub-A4 review H1 (task #159 follow-up)：InvalidateBlock 也是 reorg 入口，
+    //   跟 ActivateBestChainStep 同样需要跨整段 RAII reorg-epoch guard。
+    //   原 review 漏：worker 在 InvalidateBlock disconnect 期间看 epoch=偶数，
+    //   会 commit 用 stale UTXO 视图 → mempool 跟新 tip 不一致。
+    // sub-A4 review v2 CRITICAL (task #238)：用 g_reorg_nesting_depth ref-count
+    //   InvalidateBlock 可能嵌套在 ActivateBestChainStep 内（test 路径），
+    //   两层 guard 必须共享 nesting_depth 而不是各自 +1 epoch。
+    struct InvalidateReorgEpochGuard {
+        bool active = false;
+        ~InvalidateReorgEpochGuard() {
+            if (active) {
+                if (tbc::validation::g_reorg_nesting_depth.fetch_sub(
+                        1, std::memory_order_acq_rel) == 1) {
+                    tbc::validation::g_reorg_epoch.fetch_add(
+                        1, std::memory_order_release);
+                    tbc::validation::g_metrics.reorg_in_progress_current.store(
+                        0, std::memory_order_release);
+                }
+            }
+        }
+    } invalidateReorgGuard;
+    // review v5 → v6 修订：guard 仅在真有 disconnect-tip work 时激活。
+    //   else 分支走 InvalidateChain 仅读 mapBlockIndex 标 status，不动 UTXO；
+    //   后续 UpdateMempoolForReorg 在 disconnectpool 为空时也是 no-op。
+    //   两路都不影响 worker 的 epoch 视图，激活反而让 stall metric 误报"reorg blocked"。
+    if (chainActive.Contains(pindex)) {
+        invalidateReorgGuard.active = true;
+        if (tbc::validation::g_reorg_nesting_depth.fetch_add(
+                1, std::memory_order_acq_rel) == 0) {
+            tbc::validation::g_reorg_epoch.fetch_add(
+                1, std::memory_order_release);
+            tbc::validation::g_metrics.reorg_in_progress_current.store(
+                1, std::memory_order_release);
+        }
+    }
+
     if (chainActive.Contains(pindex))
     {
         while (chainActive.Contains(pindex))
@@ -5615,7 +5904,7 @@ bool InvalidateBlock(const Config &config, CValidationState &state,
     }
 
     // Check mempool & journal
-    mempool.CheckMempool(pcoinsTip, changeSet);
+    mempool.CheckMempool(pcoinsTip.get(), changeSet);
 
     return true;
 }
@@ -6644,7 +6933,7 @@ bool TestBlockValidity(const Config &config, CValidationState &state,
                      state.GetRejectReason().c_str());
     }
 
-    CCoinsViewCache viewNew(pcoinsTip);
+    CCoinsViewCache viewNew(pcoinsTip.get());
     CBlockIndex indexDummy(block);
     uint256 dummyHash;
     indexDummy.phashBlock = &dummyHash;
@@ -7916,23 +8205,25 @@ bool LoadMempool(const Config &config, const task::CCancellationToken& shutdownT
                                               prioritydummy, amountdelta);
             }
             if (nTime + nExpiryTimeout > nNow) {
-                // Mempool Journal ChangeSet
-                CJournalChangeSetPtr changeSet {
-                    mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::INIT)
-                };
-                const CValidationState& state {
-                    // Execute txn validation synchronously.
-                    txValidator->processValidation(
+                // v2.6.1 P5.x: dispatcher 启动 → 走 SubmitSync(file)；未启动 fallback PTV
+                CValidationState state;
+                if (tbc::validation::g_dispatcher.IsStarted()) {
+                    std::string err;
+                    bool ok = tbc::validation::g_dispatcher.SubmitSync(
+                        tx, err, TxSource::file, /*absurdFee*/0,
+                        /*fLimitFree*/true, nTime);
+                    if (!ok) state.Invalid(false, REJECT_INVALID, err);
+                } else {
+                    CJournalChangeSetPtr changeSet {
+                        mempool.getJournalBuilder().getNewChangeSet(JournalUpdateReason::INIT)
+                    };
+                    state = txValidator->processValidation(
                         std::make_shared<CTxInputData>(
-                            pTxIdTracker, // a pointer to the TxIdTracker
-                            tx,    // a pointer to the tx
-                            TxSource::file, // tx source
-                            TxValidationPriority::normal,  // tx validation priority
-                            nTime, // nAcceptTime
-                            true),  // fLimitFree
-                        changeSet, // an instance of the mempool journal
-                        true) // fLimitMempoolSize
-                };
+                            pTxIdTracker, tx, TxSource::file,
+                            TxValidationPriority::normal,
+                            nTime, true),
+                        changeSet, true);
+                }
                 // Check results
                 if (state.IsValid()) {
                     ++count;

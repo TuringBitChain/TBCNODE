@@ -4,6 +4,8 @@
 
 #include "bench.h"
 
+#include "chainparams.h"
+#include "config.h"
 #include "crypto/sha256.h"
 #include "key.h"
 #include "random.h"
@@ -15,6 +17,10 @@ int main(int argc, char **argv) {
     RandomInit();
     ECC_Start();
     SetupEnvironment();
+    // P4.3: 让需要 BlockSizeParams 的 bench (BatchWriteContention 等) 能跑
+    SelectParams(CBaseChainParams::MAIN);
+    GlobalConfig::GetConfig().SetDefaultBlockSizeParams(
+        Params().GetDefaultBlockSizeParams());
 
     // don't want to write to bitcoind.log file
     GetLogger().fPrintToDebugLog = false;

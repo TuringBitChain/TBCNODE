@@ -175,7 +175,11 @@ BOOST_AUTO_TEST_CASE(multisig_verify) {
             MutableTransactionSignatureChecker(&txTo[1], 0, amount),
             &err);
     BOOST_CHECK(!res.value());
-    BOOST_CHECK_MESSAGE(err == SCRIPT_ERR_SIG_DER, ScriptErrorString(err));
+    // TBC: with the post-Genesis ECDSA/Schnorr signature encoding now
+    // enforced, a 1-byte placeholder signature (OP_1 -> [0x01]) is rejected
+    // because stripping the trailing sighash byte leaves an empty vchSig,
+    // which trips SCRIPT_ERR_ECDSA_SIG_SIZE before the DER check can run.
+    BOOST_CHECK_MESSAGE(err == SCRIPT_ERR_ECDSA_SIG_SIZE, ScriptErrorString(err));
 
     for (int i = 0; i < 4; i++)
         for (int j = 0; j < 4; j++) {

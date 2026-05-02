@@ -691,6 +691,18 @@ static UniValue getblocktemplate(const Config &config,
     return result;
 }
 
+// v2.6.1 P4 §5.3 决议：submitblock_StateCatcher 保持同步。
+//
+// 评估结论（参见 docs/plans/v2.6.1-subscriber-audit.md §#4）：
+//   1. 临时 stack 对象，processBlock 内 RegisterValidationInterface ->
+//      performBlockOperation -> UnregisterValidationInterface 三步同帧，
+//      processBlock 紧接着读取 sc.found / sc.state 形成 RPC 响应。异步化
+//      会导致 sc 析构后 callback 才触发，或 sc.found 仍为 false 时返回
+//      "inconclusive"，破坏 BIP22 contract。
+//   2. callback body 仅做条件赋值（hash 比较 + state 拷贝），不持任何
+//      user-mutex，没有反向锁路径，主验证链帧内同步开销可忽略。
+//   3. 被触发位点是 CheckBlock 失败 / ConnectTip 完成，不在 P4.1 三锁帧
+//      最深栈，跟 mempool.smtx unique 无重叠。
 class submitblock_StateCatcher : public CValidationInterface {
 public:
     uint256 hash;
