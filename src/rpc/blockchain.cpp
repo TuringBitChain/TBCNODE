@@ -287,12 +287,9 @@ std::string EntryDescriptionString() {
            "of in-mempool descendants (including this one)\n"
            "    \"descendantfees\" : n,   (numeric) modified fees (see above) "
            "of in-mempool descendants (including this one)\n"
-           "    \"ancestorcount\" : n,    (numeric) number of in-mempool "
-           "ancestor transactions (including this one)\n"
-           "    \"ancestorsize\" : n,     (numeric) virtual transaction size "
-           "of in-mempool ancestors (including this one)\n"
-           "    \"ancestorfees\" : n,     (numeric) modified fees (see above) "
-           "of in-mempool ancestors (including this one)\n"
+           // Phase 4 (v3.3.0): ancestorcount/ancestorsize/ancestorfees fields removed along
+           // with the 4 cached ancestor aggregates. Use ancestorsHeight (chain depth) instead;
+           // ancestor fee/size aggregates are recomputable on demand if a future RPC needs them.
            "    \"depends\" : [           (array) unconfirmed transactions "
            "used as inputs for this transaction\n"
            "        \"transactionid\",    (string) parent transaction id\n"
@@ -312,10 +309,9 @@ void entryToJSONNL(UniValue &info, const CTxMemPoolEntry &e) {
     info.push_back(Pair("descendantsize", e.GetSizeWithDescendants()));
     info.push_back(
         Pair("descendantfees", e.GetModFeesWithDescendants().GetSatoshis()));
-    info.push_back(Pair("ancestorcount", e.GetCountWithAncestors()));
-    info.push_back(Pair("ancestorsize", e.GetSizeWithAncestors()));
-    info.push_back(
-        Pair("ancestorfees", e.GetModFeesWithAncestors().GetSatoshis()));
+    // Phase 4 (v3.3.0): ancestorcount/ancestorsize/ancestorfees output fields deleted (4 cached
+    // ancestor aggregates removed in Phase 1+2). Affects 4 RPC verbose modes:
+    // getrawmempool true / getmempoolentry / getmempoolancestors true / getmempooldescendants true.
     const CTransaction &tx = e.GetTx();
     std::set<std::string> setDepends;
     for (const CTxIn &txin : tx.vin) {

@@ -1,9 +1,15 @@
 // Copyright (c) 2019 Bitcoin Association.
 // Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
+#include <chain.h>
 #include <chainparams.h>
 #include <config.h>
+#include <consensus/merkle.h>
 #include <mining/assembler.h>
+#include <pow.h>
+#include <primitives/transaction.h>
+#include <script/script.h>
+#include <script/script_num.h>
 #include <timedata.h>
 #include <util.h>
 #include <validation.h>
@@ -71,5 +77,64 @@ void BlockAssembler::FillBlockHeader(CBlockRef& block, const CBlockIndex* pindex
     UpdateTime(block.get(), mConfig, pindex);
     block->nBits = GetNextWorkRequired(pindex, block.get(), mConfig);
     block->nNonce = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 (v3.3.0): Free helpers relocated from the deleted mining/legacy.{h,cpp}.
+// These are non-LegacyBlockAssembler-specific block-construction utilities used by
+// JournalingBlockAssembler::FillBlockHeader, RPC mining endpoints, and tests.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Local cap on coinbase scriptSig length (used by IncrementExtraNonce). Was previously
+// `static const int MAX_COINBASE_SCRIPTSIG_SIZE = 100;` in mining/legacy.cpp.
+constexpr int MAX_COINBASE_SCRIPTSIG_SIZE = 100;
+} // namespace
+
+// Phase 4 (v3.3.0): nLastBlockTx / nLastBlockSize globals removed. Previously updated by
+// LegacyBlockAssembler (deleted in Phase 3) and exposed by getmininginfo RPC as
+// currentblocksize / currentblocktx. JournalingBlockAssembler does not maintain equivalent
+// counters; the RPC fields were removed in the same release.
+
+int64_t UpdateTime(CBlockHeader *pblock, const Config &config,
+                   const CBlockIndex *pindexPrev) {
+    int64_t nOldTime = pblock->nTime;
+    int64_t nNewTime =
+        std::max(pindexPrev->GetMedianTimePast() + 1, GetAdjustedTime());
+
+    if (nOldTime < nNewTime) {
+        pblock->nTime = nNewTime;
+    }
+
+    const Consensus::Params &consensusParams =
+        config.GetChainParams().GetConsensus();
+
+    // Updating time can change work required on testnet:
+    if (consensusParams.fPowAllowMinDifficultyBlocks) {
+        pblock->nBits = GetNextWorkRequired(pindexPrev, pblock, config);
+    }
+
+    return nNewTime - nOldTime;
+}
+
+void IncrementExtraNonce(CBlock *pblock,
+                         const CBlockIndex *pindexPrev,
+                         unsigned int &nExtraNonce) {
+    // Update nExtraNonce
+    static uint256 hashPrevBlock;
+    if (hashPrevBlock != pblock->hashPrevBlock) {
+        nExtraNonce = 0;
+        hashPrevBlock = pblock->hashPrevBlock;
+    }
+    ++nExtraNonce;
+    // Height first in coinbase required for block.version=2
+    unsigned int nHeight = pindexPrev->nHeight + 1;
+    CMutableTransaction txCoinbase(*pblock->vtx[0]);
+    txCoinbase.vin[0].scriptSig =
+        (CScript() << nHeight << CScriptNum(nExtraNonce)) + COINBASE_FLAGS;
+    assert(txCoinbase.vin[0].scriptSig.size() <= MAX_COINBASE_SCRIPTSIG_SIZE);
+
+    pblock->vtx[0] = MakeTransactionRef(std::move(txCoinbase));
+    pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
 }
 

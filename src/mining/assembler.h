@@ -63,3 +63,18 @@ using BlockAssemblerRef = std::shared_ptr<BlockAssembler>;
 
 }
 
+// Free helpers shared by RPC + assembler. Phase 3 (v3.3.0) relocated these from the now-deleted
+// mining/legacy.{h,cpp} into assembler.{h,cpp} since they are non-LegacyBlockAssembler-specific
+// block-construction utilities.
+class CBlockHeader;
+class CBlock;
+
+/** Refresh nTime / nBits on a candidate block header from the chain tip. Returns delta in seconds. */
+int64_t UpdateTime(CBlockHeader *pblock, const Config &config,
+                   const CBlockIndex *pindexPrev);
+
+/** Bump the coinbase extra-nonce field and recompute the coinbase + merkle root. */
+void IncrementExtraNonce(CBlock *pblock,
+                         const CBlockIndex *pindexPrev,
+                         unsigned int &nExtraNonce);
+

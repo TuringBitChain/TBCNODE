@@ -153,6 +153,26 @@ void CheckSort(CTxMemPool &pool, std::vector<std::string> &sortedOrder) {
     }
 }
 
+// Phase 5 (v3.3.0): descendant_score boost multi_index removed. Helper below replicates
+// the original sorted-by-descendant-score iteration via linear scan + std::sort using the
+// preserved CompareTxMemPoolEntryByDescendantScore comparator (same semantics as boost
+// ordered_non_unique used previously).
+template <>
+void CheckSort<descendant_score>(CTxMemPool &pool, std::vector<std::string> &sortedOrder) {
+    BOOST_CHECK_EQUAL(pool.Size(), sortedOrder.size());
+    std::vector<CTxMemPool::txiter> entries;
+    entries.reserve(pool.mapTx.size());
+    for (auto it = pool.mapTx.begin(); it != pool.mapTx.end(); ++it) {
+        entries.push_back(it);
+    }
+    CompareTxMemPoolEntryByDescendantScore cmp;
+    std::sort(entries.begin(), entries.end(),
+              [&cmp](CTxMemPool::txiter a, CTxMemPool::txiter b) { return cmp(*a, *b); });
+    for (size_t i = 0; i < entries.size(); ++i) {
+        BOOST_CHECK_EQUAL(entries[i]->GetTx().GetId().ToString(), sortedOrder[i]);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(MempoolIndexingTest) {
     CTxMemPool pool;
     TestMemPoolEntryHelper entry;
@@ -341,136 +361,10 @@ BOOST_AUTO_TEST_CASE(MempoolIndexingTest) {
     pool.RemoveRecursive(pool.mapTx.find(tx8.GetId())->GetTx(), nullChangeSet);
 }
 
-BOOST_AUTO_TEST_CASE(MempoolAncestorIndexingTest) {
-    CTxMemPool pool;
-    TestMemPoolEntryHelper entry;
+// Phase 1+2 (v3.3.0): MempoolAncestorIndexingTest deleted — depended on the
+// ancestor_score multi_index which was removed along with the 4 cached ancestor
+// aggregates (only LegacyBlockAssembler used that index).
 
-    /* 3rd highest fee */
-    CMutableTransaction tx1 = CMutableTransaction();
-    tx1.vout.resize(1);
-    tx1.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx1.vout[0].nValue = 10 * COIN;
-    pool.AddUnchecked(tx1.GetId(),
-                      entry.Fee(Amount(10000LL)).Priority(10.0).FromTx(tx1), nullChangeSet);
-
-    /* highest fee */
-    CMutableTransaction tx2 = CMutableTransaction();
-    tx2.vout.resize(1);
-    tx2.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx2.vout[0].nValue = 2 * COIN;
-    pool.AddUnchecked(tx2.GetId(),
-                      entry.Fee(Amount(20000LL)).Priority(9.0).FromTx(tx2), nullChangeSet);
-    uint64_t tx2Size = CTransaction(tx2).GetTotalSize();
-
-    /* lowest fee */
-    CMutableTransaction tx3 = CMutableTransaction();
-    tx3.vout.resize(1);
-    tx3.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx3.vout[0].nValue = 5 * COIN;
-    pool.AddUnchecked(tx3.GetId(),
-                      entry.Fee(Amount(0LL)).Priority(100.0).FromTx(tx3), nullChangeSet);
-
-    /* 2nd highest fee */
-    CMutableTransaction tx4 = CMutableTransaction();
-    tx4.vout.resize(1);
-    tx4.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx4.vout[0].nValue = 6 * COIN;
-    pool.AddUnchecked(tx4.GetId(),
-                      entry.Fee(Amount(15000LL)).Priority(1.0).FromTx(tx4), nullChangeSet);
-
-    /* equal fee rate to tx1, but newer */
-    CMutableTransaction tx5 = CMutableTransaction();
-    tx5.vout.resize(1);
-    tx5.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx5.vout[0].nValue = 11 * COIN;
-    pool.AddUnchecked(tx5.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx5), nullChangeSet);
-    BOOST_CHECK_EQUAL(pool.Size(), 5UL);
-
-    std::vector<std::string> sortedOrder;
-    sortedOrder.resize(5);
-    sortedOrder[0] = tx2.GetId().ToString(); // 20000
-    sortedOrder[1] = tx4.GetId().ToString(); // 15000
-    // tx1 and tx5 are both 10000
-    // Ties are broken by hash, not timestamp, so determine which hash comes
-    // first.
-    if (tx1.GetId() < tx5.GetId()) {
-        sortedOrder[2] = tx1.GetId().ToString();
-        sortedOrder[3] = tx5.GetId().ToString();
-    } else {
-        sortedOrder[2] = tx5.GetId().ToString();
-        sortedOrder[3] = tx1.GetId().ToString();
-    }
-    sortedOrder[4] = tx3.GetId().ToString(); // 0
-
-    CheckSort<ancestor_score>(pool, sortedOrder);
-
-    /* low fee parent with high fee child */
-    /* tx6 (0) -> tx7 (high) */
-    CMutableTransaction tx6 = CMutableTransaction();
-    tx6.vout.resize(1);
-    tx6.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx6.vout[0].nValue = 20 * COIN;
-    uint64_t tx6Size = CTransaction(tx6).GetTotalSize();
-
-    pool.AddUnchecked(tx6.GetId(), entry.Fee(Amount(0LL)).FromTx(tx6), nullChangeSet);
-    BOOST_CHECK_EQUAL(pool.Size(), 6UL);
-    // Ties are broken by hash
-    if (tx3.GetId() < tx6.GetId()) {
-        sortedOrder.push_back(tx6.GetId().ToString());
-    } else {
-        sortedOrder.insert(sortedOrder.end() - 1, tx6.GetId().ToString());
-    }
-
-    CheckSort<ancestor_score>(pool, sortedOrder);
-
-    CMutableTransaction tx7 = CMutableTransaction();
-    tx7.vin.resize(1);
-    tx7.vin[0].prevout = COutPoint(tx6.GetId(), 0);
-    tx7.vin[0].scriptSig = CScript() << OP_11;
-    tx7.vout.resize(1);
-    tx7.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-    tx7.vout[0].nValue = 10 * COIN;
-    uint64_t tx7Size = CTransaction(tx7).GetTotalSize();
-
-    /* set the fee to just below tx2's feerate when including ancestor */
-    Amount fee((20000 / tx2Size) * (tx7Size + tx6Size) - 1);
-
-    // CTxMemPoolEntry entry7(tx7, fee, 2, 10.0, 1, true);
-    pool.AddUnchecked(tx7.GetId(), entry.Fee(Amount(fee)).FromTx(tx7), nullChangeSet);
-    BOOST_CHECK_EQUAL(pool.Size(), 7UL);
-    sortedOrder.insert(sortedOrder.begin() + 1, tx7.GetId().ToString());
-    CheckSort<ancestor_score>(pool, sortedOrder);
-
-    /* after tx6 is mined: v2.6.1 issue #12 fix (RemoveForBlockNL 减 descendants
-     * 的 nCountWithAncestors / nSizeWithAncestors / nModFeesWithAncestors /
-     * nSigOpCountWithAncestors) 让 tx7 的 cached ancestor stats 正确减去 tx6 的
-     * size/fee/sigops。fee 公式 (20000 / tx2Size) * (tx7Size + tx6Size) - 1 让 tx7
-     * 单独 feerate（去 tx6 后）严格高于 tx2，所以 tx7 升到 ancestor_score 第一位。
-     * 老测试假设 cache 不刷新（旧 BSV 残留 bug），现在 fix 后 expected 调整为新行为。
-     * 旧问题记录见 docs/plans/test-rot-bugs.md。
-     */
-    std::vector<CTransactionRef> vtx;
-    vtx.push_back(MakeTransactionRef(tx6));
-    std::vector<CTransactionRef> txNew;
-    pool.RemoveForBlock(vtx, nullChangeSet, txNew);
-
-    // 删 tx6（在 sortedOrder 中可能是 last 或 second-last 取决于跟 tx3 hash 比较）
-    if (tx3.GetId() < tx6.GetId())
-        sortedOrder.pop_back();
-    else
-        sortedOrder.erase(sortedOrder.end() - 2);
-    // issue #12 fix 后：tx7 单独 feerate > tx2 → tx7 升到 ancestor_score 第一位
-    //   原 sortedOrder[1]=tx7 → 移到 [0]；tx2 从 [0] 退到 [1]
-    {
-        auto it = std::find(sortedOrder.begin(), sortedOrder.end(),
-                            tx7.GetId().ToString());
-        if (it != sortedOrder.end() && it != sortedOrder.begin()) {
-            sortedOrder.erase(it);
-            sortedOrder.insert(sortedOrder.begin(), tx7.GetId().ToString());
-        }
-    }
-    CheckSort<ancestor_score>(pool, sortedOrder);
-}
 
 BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest) {
     CTxMemPool pool;
@@ -681,6 +575,313 @@ BOOST_AUTO_TEST_CASE(CTxPrioritizerTest) {
     }
     // During txPrioritizer's destruction txid should be removed from mapDeltas.
     BOOST_CHECK(!testPool.mapDeltas.count(txid));
+}
+
+/*
+ * Phase 0 — Site 0 fix verification
+ *
+ * 验证 DisconnectBlock 回流后 UpdateTransactionsFromBlock 正确刷新 children 的
+ * ancestorsHeight。
+ *
+ * 场景：
+ *   1. tx_parent 加进 mempool 后通过 RemoveForBlock 模拟 confirm 进 block
+ *   2. tx_child（依赖 tx_parent）加进 mempool — 此时父在 block 不在 mempool，
+ *      tx_child.ancestorsHeight = 0
+ *   3. tx_grandchild（依赖 tx_child）加进 mempool — tx_grandchild.ancestorsHeight = 1
+ *   4. 模拟 DisconnectBlock：AddUnchecked(tx_parent) 回流
+ *   5. UpdateTransactionsFromBlock([tx_parent]) 触发 Site 0 fix
+ *
+ * Site 0 fix 前（不修）：
+ *   - tx_child.ancestorsHeight = 0 (stale)
+ *   - tx_grandchild.ancestorsHeight = 1 (stale)
+ *
+ * Site 0 fix 后（应修复）：
+ *   - tx_parent.ancestorsHeight = 0
+ *   - tx_child.ancestorsHeight = 1
+ *   - tx_grandchild.ancestorsHeight = 2 (BFS 递归刷新)
+ */
+BOOST_AUTO_TEST_CASE(MempoolReorgHeightRefresh) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    // 1. Create tx_parent (no inputs from mempool)
+    CMutableTransaction tx_parent;
+    tx_parent.vin.resize(1);
+    tx_parent.vin[0].scriptSig = CScript() << OP_11;
+    tx_parent.vout.resize(1);
+    tx_parent.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_parent.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_parent.GetId(),
+                      entry.Fee(Amount(10000LL)).FromTx(tx_parent),
+                      nullChangeSet);
+    BOOST_CHECK_EQUAL(pool.Size(), 1UL);
+
+    // tx_parent should have height 0 (no in-mempool parents)
+    {
+        auto it = pool.mapTx.find(tx_parent.GetId());
+        BOOST_REQUIRE(it != pool.mapTx.end());
+        BOOST_CHECK_EQUAL(it->GetAncestorsHeight(), 0U);
+    }
+
+    // 2. RemoveForBlock(tx_parent) — simulate confirm into block
+    {
+        std::vector<CTransactionRef> vtx { MakeTransactionRef(tx_parent) };
+        std::vector<CTransactionRef> txNew;
+        pool.RemoveForBlock(vtx, nullChangeSet, txNew);
+    }
+    BOOST_CHECK_EQUAL(pool.Size(), 0UL);
+
+    // 3. Add tx_child (依赖 tx_parent，但 tx_parent 在 block 不在 mempool)
+    CMutableTransaction tx_child;
+    tx_child.vin.resize(1);
+    tx_child.vin[0].prevout = COutPoint(tx_parent.GetId(), 0);
+    tx_child.vin[0].scriptSig = CScript() << OP_11;
+    tx_child.vout.resize(1);
+    tx_child.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_child.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_child.GetId(),
+                      entry.Fee(Amount(10000LL)).FromTx(tx_child),
+                      nullChangeSet);
+
+    // tx_child.ancestorsHeight = 0 because tx_parent is not in mempool
+    {
+        auto it = pool.mapTx.find(tx_child.GetId());
+        BOOST_REQUIRE(it != pool.mapTx.end());
+        BOOST_CHECK_EQUAL(it->GetAncestorsHeight(), 0U);
+    }
+
+    // 4. Add tx_grandchild (依赖 tx_child，tx_child 在 mempool)
+    CMutableTransaction tx_grandchild;
+    tx_grandchild.vin.resize(1);
+    tx_grandchild.vin[0].prevout = COutPoint(tx_child.GetId(), 0);
+    tx_grandchild.vin[0].scriptSig = CScript() << OP_11;
+    tx_grandchild.vout.resize(1);
+    tx_grandchild.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_grandchild.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_grandchild.GetId(),
+                      entry.Fee(Amount(10000LL)).FromTx(tx_grandchild),
+                      nullChangeSet);
+
+    // tx_grandchild.ancestorsHeight = 1 (tx_child is in mempool with height 0)
+    {
+        auto it = pool.mapTx.find(tx_grandchild.GetId());
+        BOOST_REQUIRE(it != pool.mapTx.end());
+        BOOST_CHECK_EQUAL(it->GetAncestorsHeight(), 1U);
+    }
+
+    // 5. Simulate DisconnectBlock: 回流 tx_parent via AddUnchecked
+    pool.AddUnchecked(tx_parent.GetId(),
+                      entry.Fee(Amount(10000LL)).FromTx(tx_parent),
+                      nullChangeSet);
+
+    // tx_parent.ancestorsHeight = 0 (no in-mempool parents)
+    {
+        auto it = pool.mapTx.find(tx_parent.GetId());
+        BOOST_REQUIRE(it != pool.mapTx.end());
+        BOOST_CHECK_EQUAL(it->GetAncestorsHeight(), 0U);
+    }
+
+    // 6. Call UpdateTransactionsFromBlock to trigger Site 0 fix
+    std::vector<uint256> vHashUpdate { tx_parent.GetId() };
+    pool.UpdateTransactionsFromBlock(vHashUpdate, nullChangeSet);
+
+    // 7. Site 0 fix verification: tx_child + tx_grandchild heights refreshed
+    {
+        auto it_parent = pool.mapTx.find(tx_parent.GetId());
+        BOOST_REQUIRE(it_parent != pool.mapTx.end());
+        BOOST_CHECK_EQUAL(it_parent->GetAncestorsHeight(), 0U);
+
+        auto it_child = pool.mapTx.find(tx_child.GetId());
+        BOOST_REQUIRE(it_child != pool.mapTx.end());
+        // Site 0 fix: tx_child.height refreshed from 0 to 1 after tx_parent reflowed
+        BOOST_CHECK_EQUAL(it_child->GetAncestorsHeight(), 1U);
+
+        auto it_gc = pool.mapTx.find(tx_grandchild.GetId());
+        BOOST_REQUIRE(it_gc != pool.mapTx.end());
+        // Site 0 fix BFS recursive: tx_grandchild.height refreshed from 1 to 2
+        BOOST_CHECK_EQUAL(it_gc->GetAncestorsHeight(), 2U);
+    }
+}
+
+/*
+ * Phase 0 — Site 0 fix verification (diamond topology)
+ *
+ * 验证 reflow 多个 parent + 共同 deep descendant 的 diamond 场景下 ancestorsHeight
+ * BFS 刷新正确。InsertionOrderComparator 由 mempool 入池规则数学保证拓扑序
+ * （父.insertion_index < 子.insertion_index），所以 BFS 处理 deep descendant 时
+ * 它的所有父都已 fresh。
+ *
+ * 拓扑：
+ *   A      B          (将进 block 后 reflow)
+ *   |      |
+ *   C      D          (mempool 中存在，A/B 在 block 时 height 偏小)
+ *    \    /
+ *     E              (依赖 C + D 的 diamond child)
+ *
+ * 期望（Site 0 fix 后）：A.h=0, B.h=0, C.h=1, D.h=1, E.h=2
+ */
+BOOST_AUTO_TEST_CASE(MempoolReorgHeightRefreshDiamond) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    // Build A (no inputs)
+    CMutableTransaction tx_a;
+    tx_a.vin.resize(1);
+    tx_a.vin[0].scriptSig = CScript() << OP_11;
+    tx_a.vout.resize(1);
+    tx_a.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_a.vout[0].nValue = 10 * COIN;
+
+    // Build B (no inputs, distinct from A via different scriptSig)
+    CMutableTransaction tx_b;
+    tx_b.vin.resize(1);
+    tx_b.vin[0].scriptSig = CScript() << OP_11 << OP_11;  // 跟 A 区分
+    tx_b.vout.resize(1);
+    tx_b.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_b.vout[0].nValue = 10 * COIN;
+
+    pool.AddUnchecked(tx_a.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_a), nullChangeSet);
+    pool.AddUnchecked(tx_b.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_b), nullChangeSet);
+    BOOST_CHECK_EQUAL(pool.Size(), 2UL);
+
+    // RemoveForBlock(A, B) — 模拟 confirm 进 block
+    {
+        std::vector<CTransactionRef> vtx { MakeTransactionRef(tx_a), MakeTransactionRef(tx_b) };
+        std::vector<CTransactionRef> txNew;
+        pool.RemoveForBlock(vtx, nullChangeSet, txNew);
+    }
+    BOOST_CHECK_EQUAL(pool.Size(), 0UL);
+
+    // Add C (依赖 A，A 在 block 不在 mempool → C.height = 0)
+    CMutableTransaction tx_c;
+    tx_c.vin.resize(1);
+    tx_c.vin[0].prevout = COutPoint(tx_a.GetId(), 0);
+    tx_c.vin[0].scriptSig = CScript() << OP_11;
+    tx_c.vout.resize(1);
+    tx_c.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_c.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_c.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_c), nullChangeSet);
+
+    // Add D (依赖 B，B 在 block 不在 mempool → D.height = 0)
+    CMutableTransaction tx_d;
+    tx_d.vin.resize(1);
+    tx_d.vin[0].prevout = COutPoint(tx_b.GetId(), 0);
+    tx_d.vin[0].scriptSig = CScript() << OP_11;
+    tx_d.vout.resize(1);
+    tx_d.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_d.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_d.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_d), nullChangeSet);
+
+    // Add E (依赖 C + D，diamond child → E.height = max(C.h=0, D.h=0) + 1 = 1，stale)
+    CMutableTransaction tx_e;
+    tx_e.vin.resize(2);
+    tx_e.vin[0].prevout = COutPoint(tx_c.GetId(), 0);
+    tx_e.vin[0].scriptSig = CScript() << OP_11;
+    tx_e.vin[1].prevout = COutPoint(tx_d.GetId(), 0);
+    tx_e.vin[1].scriptSig = CScript() << OP_11;
+    tx_e.vout.resize(1);
+    tx_e.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    tx_e.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(tx_e.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_e), nullChangeSet);
+
+    // Verify stale heights before fix:
+    // C.h=0 (A 不在), D.h=0 (B 不在), E.h=1 (max(C, D)+1 = 1)
+    {
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_c.GetId())->GetAncestorsHeight(), 0U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_d.GetId())->GetAncestorsHeight(), 0U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_e.GetId())->GetAncestorsHeight(), 1U);
+    }
+
+    // Reflow A and B (DisconnectBlock 模拟)
+    pool.AddUnchecked(tx_a.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_a), nullChangeSet);
+    pool.AddUnchecked(tx_b.GetId(), entry.Fee(Amount(10000LL)).FromTx(tx_b), nullChangeSet);
+
+    // Trigger Site 0 fix
+    std::vector<uint256> vHashUpdate { tx_a.GetId(), tx_b.GetId() };
+    pool.UpdateTransactionsFromBlock(vHashUpdate, nullChangeSet);
+
+    // Verify diamond BFS refresh:
+    // A.h=0, B.h=0, C.h=1 (parent A=0), D.h=1 (parent B=0), E.h=2 (max(C,D)+1)
+    {
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_a.GetId())->GetAncestorsHeight(), 0U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_b.GetId())->GetAncestorsHeight(), 0U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_c.GetId())->GetAncestorsHeight(), 1U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_d.GetId())->GetAncestorsHeight(), 1U);
+        BOOST_CHECK_EQUAL(pool.mapTx.find(tx_e.GetId())->GetAncestorsHeight(), 2U);
+    }
+}
+
+/*
+ * Phase 5 (v3.3.0) C1 fix verification — strict-weak-ordering safety of
+ * CompareTxMemPoolEntryByDescendantScore.
+ *
+ * Constructs two entries with identical fee-rate AND identical nTime, plus a self-comparison.
+ * Pre-fix `cmp(a, b) == cmp(b, a) == true` (asymmetry violation) and `cmp(x, x) == true`
+ * (irreflexivity violation) made std::sort UB. Post-fix tie-break is by txid (unique +
+ * immutable) so the comparator is a valid SWO and sort is deterministic.
+ *
+ * Runs std::sort over a small range that includes the tied pair to verify no infinite loop /
+ * crash and that ordering is repeatable. Also exercises TrimToSize selection determinism.
+ */
+BOOST_AUTO_TEST_CASE(DescendantScoreComparatorSWO) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+    SetMockTime(1234567);  // make GetTime() deterministic across nodes constructed below
+
+    auto makeTx = [](uint8_t marker) {
+        CMutableTransaction tx;
+        tx.vin.resize(1);
+        tx.vin[0].scriptSig = CScript() << marker;
+        tx.vout.resize(1);
+        tx.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+        tx.vout[0].nValue = 10 * COIN;
+        return tx;
+    };
+
+    // tx_a / tx_b — distinct txid, identical fee, identical entry time → fee-rate AND nTime tie.
+    CMutableTransaction tx_a = makeTx(0xa1);
+    CMutableTransaction tx_b = makeTx(0xb2);
+    BOOST_REQUIRE(tx_a.GetId() != tx_b.GetId());
+
+    pool.AddUnchecked(tx_a.GetId(), entry.Fee(Amount(10000LL)).Time(1234567).FromTx(tx_a),
+                      nullChangeSet);
+    pool.AddUnchecked(tx_b.GetId(), entry.Fee(Amount(10000LL)).Time(1234567).FromTx(tx_b),
+                      nullChangeSet);
+    BOOST_CHECK_EQUAL(pool.Size(), 2UL);
+
+    auto it_a = pool.mapTx.find(tx_a.GetId());
+    auto it_b = pool.mapTx.find(tx_b.GetId());
+    BOOST_REQUIRE(it_a != pool.mapTx.end());
+    BOOST_REQUIRE(it_b != pool.mapTx.end());
+
+    CompareTxMemPoolEntryByDescendantScore cmp;
+
+    // C1 — irreflexivity: cmp(x, x) must be false (not true).
+    BOOST_CHECK(!cmp(*it_a, *it_a));
+    BOOST_CHECK(!cmp(*it_b, *it_b));
+
+    // C1 — asymmetry: cmp(a, b) and cmp(b, a) cannot both be true.
+    bool ab = cmp(*it_a, *it_b);
+    bool ba = cmp(*it_b, *it_a);
+    BOOST_CHECK(!(ab && ba));
+    // Total order on tied entries: exactly one direction is true (txid tiebreaker is unique).
+    BOOST_CHECK(ab != ba);
+
+    // std::sort over the tied pair must not crash / infinite-loop and must be deterministic.
+    std::vector<CTxMemPool::indexed_transaction_set::const_iterator> entries { it_a, it_b };
+    std::sort(entries.begin(), entries.end(),
+              [&cmp](auto a, auto b) { return cmp(*a, *b); });
+    // Deterministic: smaller txid wins (since fee+time tied, txid breaks tie).
+    auto expected_first = (tx_a.GetId() < tx_b.GetId()) ? it_a : it_b;
+    BOOST_CHECK(entries[0] == expected_first);
+
+    // Repeat sort on shuffled input — same result.
+    std::vector<CTxMemPool::indexed_transaction_set::const_iterator> entries2 { it_b, it_a };
+    std::sort(entries2.begin(), entries2.end(),
+              [&cmp](auto a, auto b) { return cmp(*a, *b); });
+    BOOST_CHECK(entries2[0] == expected_first);
+
+    SetMockTime(0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

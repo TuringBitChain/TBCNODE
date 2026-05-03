@@ -98,18 +98,22 @@ class MempoolPackagesTest(BitcoinTestFramework):
             assert_equal(mempool[x], v_descendants[x])
         assert(chain[0] not in v_descendants.keys())
 
-        # Check that ancestor modified fees includes fee deltas from
-        # prioritisetransaction
-        self.nodes[0].prioritisetransaction(chain[0], 0, 1000)
-        mempool = self.nodes[0].getrawmempool(True)
-        ancestor_fees = 0
-        for x in chain:
-            ancestor_fees += mempool[x]['fee']
-            assert_equal(mempool[x]['ancestorfees'],
-                         ancestor_fees * COIN + 1000)
-
-        # Undo the prioritisetransaction for later tests
-        self.nodes[0].prioritisetransaction(chain[0], 0, -1000)
+        # Phase 4 (TBC v3.3.0): "ancestor modified fees" assertion removed.
+        # The 4 cached ancestor aggregates (ancestorcount/ancestorsize/ancestorfees) +
+        # nModFeesWithAncestors maintenance were removed in Phase 1+2; the corresponding
+        # RPC fields are no longer emitted by entryToJSONNL (rpc/blockchain.cpp).
+        # prioritisetransaction's effect on the entry's own modified fee is still
+        # exercised by the descendant-fee block below.
+        #
+        # Regression guard: assert the 3 ancestor fields really are absent from RPC output.
+        # Catches accidental re-introduction in future refactors.
+        sample_entry = mempool[chain[0]]
+        assert 'ancestorcount' not in sample_entry, \
+            "ancestorcount should be removed from getrawmempool verbose output (Phase 4 v3.3.0)"
+        assert 'ancestorsize' not in sample_entry, \
+            "ancestorsize should be removed from getrawmempool verbose output (Phase 4 v3.3.0)"
+        assert 'ancestorfees' not in sample_entry, \
+            "ancestorfees should be removed from getrawmempool verbose output (Phase 4 v3.3.0)"
 
         # Check that descendant modified fees includes fee deltas from
         # prioritisetransaction

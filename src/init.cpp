@@ -24,7 +24,6 @@
 #include "key.h"
 #include "mining/journal_builder.h"
 #include "mining/journaling_block_assembler.h"
-#include "mining/legacy.h"
 #include "net/net.h"
 #include "net/net_processing.h"
 #include "net/netbase.h"
@@ -890,12 +889,7 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage += HelpMessageOpt(
         "-printtoconsole",
         _("Send trace/debug info to console instead of bitcoind.log file"));
-    if (showDebug) {
-        strUsage += HelpMessageOpt(
-            "-printpriority", strprintf("Log transaction priority and fee per "
-                                        "kB when mining blocks (default: %d)",
-                                        DEFAULT_PRINTPRIORITY));
-    }
+    // Phase 3 (v3.3.0): -printpriority removed with LegacyBlockAssembler (was Legacy-only).
     strUsage += HelpMessageOpt("-shrinkdebugfile",
                                _("Shrink bitcoind.log file on client startup "
                                  "(default: 1 when no -debug)"));
@@ -1071,8 +1065,8 @@ std::string HelpMessage(HelpMessageMode mode) {
     /** Block assembler */
     strUsage += HelpMessageOpt(
         "-blockassembler=<type>",
-        strprintf(_("Set the type of block assembler to use for mining. Supported options are "
-                    "LEGACY or JOURNALING. (default: %s)"),
+        strprintf(_("Set the type of block assembler to use for mining. Supported option is "
+                    "JOURNALING. (default: %s)"),
                   enum_cast<std::string>(mining::DEFAULT_BLOCK_ASSEMBLER_TYPE).c_str()));
     strUsage += HelpMessageOpt( 
         "-jbamaxtxnbatch=<max batch size>",

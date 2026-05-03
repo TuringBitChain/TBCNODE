@@ -110,16 +110,36 @@ void CJournalChangeSet::applyNL()
         // from the mempool with no attempt to put things in the correct order.
         if(mUpdateReason == JournalUpdateReason::REORG || mUpdateReason == JournalUpdateReason::RESET)
         {
-            // FIXME: Once C++17 parallel algorithms are widely supported, make this
-            // use them.
-            std::stable_sort(mChangeSet.begin(), mChangeSet.end(),
-                [](const Change& change1, const Change& change2)
-                {
-                    const AncestorDescendantCountsPtr& count1 { change1.second.getAncestorCount() };
-                    const AncestorDescendantCountsPtr& count2 { change2.second.getAncestorCount() };
-                    return count1->nCountWithAncestors < count2->nCountWithAncestors;
-                }
-            );
+            // Phase 1+2 (v3.3.0): two-phase snapshot-based sort.
+            //
+            // Sort key changed from nCountWithAncestors (deleted) to ancestorsHeight (TBC
+            // ccf31423c chain-depth field, exposed via shared AncestorDescendantCounts struct).
+            // Topological order is preserved (parent.height < child.height strictly because
+            // height(child) = max(parents.height) + 1).
+            //
+            // Snapshot pattern:
+            //   Phase 1 — atomic.load() each entry's ancestorsHeight into a local immutable
+            //             vector indexed by the change-set position. mempool.smtx writers can
+            //             still mutate the shared struct concurrently (we only hold our own
+            //             mMtx, not mempool.smtx), but the snapshot is decoupled.
+            //   Phase 2 — std::stable_sort on the local snapshot guarantees `<` transitivity
+            //             (required for sort correctness) since values are immutable.
+            //   Phase 3 — rebuild mChangeSet by snap[i].orig_idx in sorted order.
+            struct Indexed { size_t height; size_t orig_idx; };
+            std::vector<Indexed> snap;
+            snap.reserve(mChangeSet.size());
+            for (size_t i = 0; i < mChangeSet.size(); ++i) {
+                const AncestorDescendantCountsPtr& count = mChangeSet[i].second.getAncestorCount();
+                snap.push_back({count->ancestorsHeight.load(std::memory_order_acquire), i});
+            }
+            std::stable_sort(snap.begin(), snap.end(),
+                [](const Indexed& a, const Indexed& b) { return a.height < b.height; });
+            ChangeSet sorted;
+            sorted.reserve(mChangeSet.size());
+            for (const auto& s : snap) {
+                sorted.emplace_back(std::move(mChangeSet[s.orig_idx]));
+            }
+            mChangeSet = std::move(sorted);
         }
 
         mBuilder.applyChangeSet(*this);

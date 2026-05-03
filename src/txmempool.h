@@ -69,16 +69,21 @@ class CTxMemPool;
 
 /**
  * Shared ancestor/descendant count information.
+ *
+ * Phase 1+2 (v3.3.0): replaced `nCountWithAncestors` with `ancestorsHeight` (TBC ccf31423c
+ * chain-depth field) so journal_change_set REORG sort can read it via the cross-module
+ * shared_ptr without needing an independent mempool entry pointer. nCountWithDescendants
+ * preserved for getrawmempool / eviction paths.
  */
 struct AncestorDescendantCounts
 {
-    AncestorDescendantCounts(uint64_t ancestors, uint64_t descendants)
-    : nCountWithAncestors{ancestors}, nCountWithDescendants{descendants}
+    AncestorDescendantCounts(size_t height, uint64_t descendants)
+    : ancestorsHeight{height}, nCountWithDescendants{descendants}
     {}
 
-    // These don't actually need to be atomic currently, but there's no cost
-    // if they are and we might want to access them across threads in the future.
-    std::atomic_uint64_t nCountWithAncestors   {0};
+    // Atomic so the cross-module shared_ptr (held by both mempool entry + journal entry) is
+    // race-free between mempool.smtx writers and journal mMtx readers.
+    std::atomic<size_t>  ancestorsHeight       {0};
     std::atomic_uint64_t nCountWithDescendants {0};
 };
 using AncestorDescendantCountsPtr = std::shared_ptr<AncestorDescendantCounts>;
@@ -154,17 +159,21 @@ private:
     // descendants as well.  if nCountWithDescendants is 0, treat this entry as
     // dirty, and nSizeWithDescendants and nModFeesWithDescendants will not be
     // correct.
-    //!< number of descendant transactions
-    AncestorDescendantCountsPtr ancestorDescendantCounts;
+    //!< shared count info (descendantCount + ancestorsHeight) — also held by CJournalEntry
+    //!< Phase 5 (v3.3.0): mutable so cached descendant aggregates can be updated through
+    //!< boost::multi_index iterators (which return const&) without invoking mapTx.modify.
+    //!< This is safe because descendant cached fields are NO LONGER any multi_index key
+    //!< (descendant_score index removed in Phase 5). Mempool.smtx exclusive lock provides
+    //!< write/read serialization with non-mempool readers.
+    mutable AncestorDescendantCountsPtr ancestorDescendantCounts;
     //!< ... and size
-    uint64_t nSizeWithDescendants;
+    mutable uint64_t nSizeWithDescendants;
     //!< ... and total fees (all including us)
-    Amount nModFeesWithDescendants;
+    mutable Amount nModFeesWithDescendants;
 
-    // Analogous statistics for ancestor transactions
-    uint64_t nSizeWithAncestors;
-    Amount nModFeesWithAncestors;
-    int64_t nSigOpCountWithAncestors;
+    // Phase 1+2 (v3.3.0): nSizeWithAncestors / nModFeesWithAncestors / nSigOpCountWithAncestors
+    // deleted along with nCountWithAncestors. Maintained O(ancestor set) per insert previously;
+    // replaced by ancestorsHeight which is O(direct parents).
 
     //!< Chain height when entering the mempool
     unsigned int entryHeight;
@@ -172,8 +181,8 @@ private:
     bool spendsCoinbase;
     // index of insertion to mempool, entry with smaller index is inserted before the one with larger
     uint64_t insertionIndex;
-    // ancestors count
-    size_t ancestorsHeight;
+    // Phase 1+2: ancestorsHeight relocated into shared AncestorDescendantCounts struct
+    // (read via GetAncestorsHeight/SetAncestorsHeight which delegate to ancestorDescendantCounts).
 
 public:
     CTxMemPoolEntry(const CTransactionRef &_tx, const Amount _nFee,
@@ -201,11 +210,15 @@ public:
     const LockPoints &GetLockPoints() const { return lockPoints; }
 
     // Adjusts the descendant state, if this entry is not dirty.
+    // Phase 5 (v3.3.0): const + mutable fields — direct update without mapTx.modify.
+    // Safe because descendant_score multi_index removed; cached fields are not any
+    // index key, so no boost reindex needed. Mempool.smtx caller-side serialization.
     void UpdateDescendantState(int64_t modifySize, Amount modifyFee,
-                               int64_t modifyCount);
-    // Adjusts the ancestor state
-    void UpdateAncestorState(int64_t modifySize, Amount modifyFee,
-                             int64_t modifyCount, int modifySigOps);
+                               int64_t modifyCount) const;
+    // Phase 1+2 (v3.3.0): UpdateAncestorState method deleted along with the 4 cached ancestor
+    // aggregates (nCountWithAncestors / nSizeWithAncestors / nModFeesWithAncestors /
+    // nSigOpCountWithAncestors). Use SetAncestorsHeight for the chain-depth field.
+
     // Updates the fee delta used for mining priority score, and the
     // modified fees with descendants.
     void UpdateFeeDelta(Amount feeDelta);
@@ -219,14 +232,14 @@ public:
 
     bool GetSpendsCoinbase() const { return spendsCoinbase; }
 
-    uint64_t GetCountWithAncestors() const { return ancestorDescendantCounts->nCountWithAncestors; }
-    uint64_t GetSizeWithAncestors() const { return nSizeWithAncestors; }
-    Amount GetModFeesWithAncestors() const { return nModFeesWithAncestors; }
-    int64_t GetSigOpCountWithAncestors() const {
-        return nSigOpCountWithAncestors;
+    // Phase 1+2 (v3.3.0): 4 ancestor cached getters (Get{Count,Size,ModFees,SigOpCount}WithAncestors)
+    // deleted along with the cached aggregates. Use GetAncestorsHeight for chain-depth queries.
+    size_t GetAncestorsHeight() const {
+        return ancestorDescendantCounts->ancestorsHeight.load(std::memory_order_acquire);
     }
-    size_t GetAncestorsHeight() const { return ancestorsHeight; }
-    void SetAncestorsHeight(size_t n) { ancestorsHeight = n; }
+    void SetAncestorsHeight(size_t n) {
+        ancestorDescendantCounts->ancestorsHeight.store(n, std::memory_order_release);
+    }
     void SetInsertionIndex(uint64_t ndx) { insertionIndex = ndx; }
     uint64_t GetInsertionIndex() const { return insertionIndex; }
 
@@ -235,39 +248,11 @@ public:
 };
 
 // Helpers for modifying CTxMemPool::mapTx, which is a boost multi_index.
-struct update_descendant_state {
-    update_descendant_state(int64_t _modifySize, Amount _modifyFee,
-                            int64_t _modifyCount)
-        : modifySize(_modifySize), modifyFee(_modifyFee),
-          modifyCount(_modifyCount) {}
+// Phase 5 (v3.3.0): update_descendant_state struct removed (no callers — direct const-method
+// call replaces it everywhere now that descendant_score multi_index is gone).
 
-    void operator()(CTxMemPoolEntry &e) {
-        e.UpdateDescendantState(modifySize, modifyFee, modifyCount);
-    }
-
-private:
-    int64_t modifySize;
-    Amount modifyFee;
-    int64_t modifyCount;
-};
-
-struct update_ancestor_state {
-    update_ancestor_state(int64_t _modifySize, Amount _modifyFee,
-                          int64_t _modifyCount, int64_t _modifySigOpsCost)
-        : modifySize(_modifySize), modifyFee(_modifyFee),
-          modifyCount(_modifyCount), modifySigOpsCost(_modifySigOpsCost) {}
-
-    void operator()(CTxMemPoolEntry &e) {
-        e.UpdateAncestorState(modifySize, modifyFee, modifyCount,
-                              modifySigOpsCost);
-    }
-
-private:
-    int64_t modifySize;
-    Amount modifyFee;
-    int64_t modifyCount;
-    int64_t modifySigOpsCost;
-};
+// Phase 1+2 (v3.3.0): update_ancestor_state struct deleted along with the 4 cached
+// ancestor aggregates and UpdateAncestorState method.
 
 struct update_fee_delta {
     update_fee_delta(Amount _feeDelta) : feeDelta(_feeDelta) {}
@@ -327,7 +312,25 @@ public:
         double f2 = aSize * bModFee;
 
         if (f1 == f2) {
-            return a.GetTime() >= b.GetTime();
+            // Phase 5 (v3.3.0) C1 fix: previous tie-break was `a.GetTime() >= b.GetTime()`
+            // which violates std::strict_weak_ordering — cmp(x, x) returns true (irreflexivity
+            // violation), and any two entries with equal fee-rate AND equal nTime would yield
+            // cmp(a, b) == cmp(b, a) == true (asymmetry violation). std::sort + std::stable_sort
+            // contract requires SWO; violation is undefined behavior (libstdc++ introsort can
+            // infinite-loop or out-of-bounds read on certain partition paths).
+            //
+            // Boost ordered_non_unique was lenient internally (B+ tree rarely calls cmp(x, x))
+            // so the prior bug stayed latent. Phase 5 exposes the comparator to std::sort via
+            // the new TrimToSize linear-scan + test CheckSort<descendant_score>, so the SWO fix
+            // is required.
+            //
+            // Fix: tie-break by GetTime first (prefer newer = "less" = evicted first, preserving
+            // legacy semantics for non-equal times), then by txid as the final unique tiebreaker
+            // since txid is unique and immutable for a given mempool entry.
+            if (a.GetTime() != b.GetTime()) {
+                return a.GetTime() > b.GetTime();
+            }
+            return a.GetTx().GetId() < b.GetTx().GetId();
         }
         return f1 < f2;
     }
@@ -365,31 +368,19 @@ public:
     }
 };
 
-class CompareTxMemPoolEntryByAncestorFee {
-public:
-    bool operator()(const CTxMemPoolEntry &a, const CTxMemPoolEntry &b) const {
-        double aFees = double(a.GetModFeesWithAncestors().GetSatoshis());
-        double aSize = a.GetSizeWithAncestors();
-
-        double bFees = double(b.GetModFeesWithAncestors().GetSatoshis());
-        double bSize = b.GetSizeWithAncestors();
-
-        // Avoid division by rewriting (a/b > c/d) as (a*d > c*b).
-        double f1 = aFees * bSize;
-        double f2 = aSize * bFees;
-
-        if (f1 == f2) {
-            return a.GetTx().GetId() < b.GetTx().GetId();
-        }
-
-        return f1 > f2;
-    }
-};
+// Phase 1+2 (v3.3.0): CompareTxMemPoolEntryByAncestorFee + ancestor_score multi_index
+// tag/index deleted with the 4 cached ancestor aggregates. Only LegacyBlockAssembler used
+// the ancestor_score index, and Phase 3 already removed Legacy.
 
 // Multi_index tag names
+// Phase 5 (v3.3.0): the `descendant_score` tag is **not** an active multi_index tag any more —
+// the corresponding ordered_non_unique index was removed (TrimToSize switched to linear scan).
+// The tag struct is retained only as a compile-time identifier for the unit-test template
+// specialization `CheckSort<descendant_score>` in src/test/mempool_tests.cpp, which now
+// performs an explicit std::sort using CompareTxMemPoolEntryByDescendantScore. Do not add the
+// tag back to mapTx's index list — see Phase 5 design notes in this file.
 struct descendant_score {};
 struct entry_time {};
-struct ancestor_score {};
 
 
 /**
@@ -547,21 +538,16 @@ public:
                              // sorted by txid
                              boost::multi_index::hashed_unique<
                                  mempoolentry_txid, SaltedTxidHasher>,
-                             // sorted by fee rate
-                             boost::multi_index::ordered_non_unique<
-                                 boost::multi_index::tag<descendant_score>,
-                                 boost::multi_index::identity<CTxMemPoolEntry>,
-                                 CompareTxMemPoolEntryByDescendantScore>,
                              // sorted by entry time
                              boost::multi_index::ordered_non_unique<
                                  boost::multi_index::tag<entry_time>,
                                  boost::multi_index::identity<CTxMemPoolEntry>,
-                                 CompareTxMemPoolEntryByEntryTime>,
-                             // sorted by fee rate with ancestors
-                             boost::multi_index::ordered_non_unique<
-                                 boost::multi_index::tag<ancestor_score>,
-                                 boost::multi_index::identity<CTxMemPoolEntry>,
-                                 CompareTxMemPoolEntryByAncestorFee>>>
+                                 CompareTxMemPoolEntryByEntryTime>>>
+        // Phase 1+2 (v3.3.0): ancestor_score index removed (LegacyBlockAssembler-only).
+        // Phase 5 (v3.3.0): descendant_score index removed — TrimToSize now does linear scan
+        // using CompareTxMemPoolEntryByDescendantScore (preserved for the comparator semantics).
+        // Eliminates per-insert boost::multi_index reindex on each ancestor's update_descendant_state
+        // — was the dominant entry-pool latency source after Phase 1+2 (~50% of ~10ms).
         indexed_transaction_set;
 
     // DEPRECATED - this will become private and ultimately changed or removed
@@ -721,14 +707,8 @@ public:
 
     void Clear();
 
-    bool CompareDepthAndScore(
-            const uint256 &hasha,
-            const uint256 &hashb);
-    // A non-locking version of CompareDepthAndScore
-    // DEPRECATED - this will become private and ultimately changed or removed
-    bool CompareDepthAndScoreNL(
-            const uint256 &hasha,
-            const uint256 &hashb);
+    // Phase 1+2 (v3.3.0): CompareDepthAndScore + CompareDepthAndScoreNL removed (dead code,
+    // 0 external callers).
 
     void QueryHashes(std::vector<uint256> &vtxid);
     bool IsSpent(const COutPoint &outpoint);
@@ -963,22 +943,17 @@ private:
             txiter hash,
             setEntries &setAncestors);
 
-    /**
-     * Set ancestor state for an entry
-     */
-    void updateEntryForAncestorsNL(
-            txiter it,
-            const setEntries &setAncestors);
+    // Phase 1+2 (v3.3.0): updateEntryForAncestorsNL declaration removed (function deleted).
 
     /**
      * For each transaction being removed, update ancestors and any direct
-     * children. If updateDescendants is true, then also update in-mempool
-     * descendants' ancestor state.
+     * children.
      */
 
+    // Phase 1+2 (v3.3.0): `bool updateDescendants` parameter removed (5 callers all passed
+    // false; the if-true branch only mutated the now-deleted 4 cached ancestor aggregates).
     void updateForRemoveFromMempoolNL(
             const setEntries &entriesToRemove,
-            bool updateDescendants,
             bool isBlockRemove = false);
 
     /**
@@ -1012,13 +987,13 @@ private:
     /**
      * Remove a set of transactions from the mempool. If a transaction is in
      * this set, then all in-mempool descendants must also be in the set, unless
-     * this transaction is being removed for being in a block. Set
-     * updateDescendants to true when removing a tx that was in a block, so that
-     * any in-mempool descendants have their ancestor state updated.
+     * this transaction is being removed for being in a block.
+     *
+     * Phase 1+2 (v3.3.0): `bool updateDescendants` parameter removed (was always false from
+     * caller, only flipped the 4 cached ancestor aggregate maintenance which is now deleted).
      */
     void removeStagedNL(
             setEntries &stage,
-            bool updateDescendants,
             const mining::CJournalChangeSetPtr& changeSet,
             MemPoolRemovalReason reason = MemPoolRemovalReason::UNKNOWN,
             bool updateJournal = true,

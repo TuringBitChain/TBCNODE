@@ -26,7 +26,11 @@ BlockAssemblerRef CMiningFactory::GetAssembler() const
     switch(mConfig.GetMiningCandidateBuilder())
     {
         case(CMiningFactory::BlockAssemblerType::LEGACY):
-            return std::make_shared<LegacyBlockAssembler>(mConfig);
+            // Phase 3 (v3.3.0): LegacyBlockAssembler removed. Explicit throw on startup so
+            // operators still configuring -blockassembler=LEGACY get a loud failure instead
+            // of silent fall-through.
+            throw std::runtime_error(
+                "LEGACY assembler removed since v3.3.0; use -blockassembler=JOURNALING");
         case(CMiningFactory::BlockAssemblerType::JOURNALING):
 			return mJournalingAssembler;
         default:

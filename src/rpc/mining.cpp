@@ -238,9 +238,6 @@ static UniValue getmininginfo(const Config &config,
             "\nResult:\n"
             "{\n"
             "  \"blocks\": nnn,             (numeric) The current block\n"
-            "  \"currentblocksize\": nnn,   (numeric) The last block size\n"
-            "  \"currentblocktx\": nnn,     (numeric) The last block "
-            "transaction\n"
             "  \"difficulty\": xxx.xxxxx    (numeric) The current difficulty\n"
             "  \"errors\": \"...\"            (string) Current errors\n"
             "  \"networkhashps\": nnn,      (numeric) The network hashes per "
@@ -258,8 +255,10 @@ static UniValue getmininginfo(const Config &config,
 
     UniValue obj(UniValue::VOBJ);
     obj.push_back(Pair("blocks", int(chainActive.Height())));
-    obj.push_back(Pair("currentblocksize", uint64_t(nLastBlockSize)));
-    obj.push_back(Pair("currentblocktx", uint64_t(nLastBlockTx)));
+    // Phase 4 (TBC v3.3.0): currentblocksize / currentblocktx fields removed. They were
+    // maintained by LegacyBlockAssembler (deleted in Phase 3) and would have always been 0
+    // under JournalingBlockAssembler. Removing the fields rather than emitting a permanent
+    // 0 stub avoids misleading external monitors.
     obj.push_back(Pair("difficulty", double(GetDifficulty(chainActive.Tip()))));
     obj.push_back(
         Pair("blockprioritypercentage",

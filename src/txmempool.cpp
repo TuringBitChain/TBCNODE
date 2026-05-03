@@ -66,13 +66,15 @@ CTxMemPoolEntry::CTxMemPoolEntry(const CTransactionRef& _tx,
     : tx(_tx), nFee(_nFee), nTime(_nTime), entryPriority(_entryPriority),
       inChainInputValue(_inChainInputValue), sigOpCount(_sigOpsCount),
       lockPoints(lp), entryHeight(_entryHeight), spendsCoinbase(_spendsCoinbase),
-      insertionIndex(0), ancestorsHeight(0)
+      insertionIndex(0)
 {
     nTxSize = tx->GetTotalSize();
     nModSize = tx->CalculateModifiedSize(GetTxSize());
     nUsageSize = RecursiveDynamicUsage(tx);
 
-    ancestorDescendantCounts = std::make_shared<AncestorDescendantCounts>(1, 1);
+    // Phase 1+2 (v3.3.0): shared struct now holds (ancestorsHeight, descendantCount).
+    // Initial: height=0 (no in-mempool ancestors at insert), descendantCount=1 (self).
+    ancestorDescendantCounts = std::make_shared<AncestorDescendantCounts>(0, 1);
     nSizeWithDescendants = GetTxSize();
     nModFeesWithDescendants = nFee;
     Amount nValueIn = tx->GetValueOut() + nFee;
@@ -80,9 +82,8 @@ CTxMemPoolEntry::CTxMemPoolEntry(const CTransactionRef& _tx,
 
     feeDelta = Amount(0);
 
-    nSizeWithAncestors = GetTxSize();
-    nModFeesWithAncestors = nFee;
-    nSigOpCountWithAncestors = sigOpCount;
+    // Phase 1+2: 4 cached ancestor aggregates (nSize/nModFees/nSigOpCount/nCount WithAncestors)
+    // deleted; replaced by ancestorsHeight (TBC ccf31423c) which is set in addUnchecked.
 }
 
 double CTxMemPoolEntry::GetPriority(unsigned int currentHeight) const {
@@ -99,7 +100,7 @@ double CTxMemPoolEntry::GetPriority(unsigned int currentHeight) const {
 
 void CTxMemPoolEntry::UpdateFeeDelta(Amount newFeeDelta) {
     nModFeesWithDescendants += newFeeDelta - feeDelta;
-    nModFeesWithAncestors += newFeeDelta - feeDelta;
+    // Phase 1+2 (v3.3.0): nModFeesWithAncestors += line removed (cached aggregate deleted).
     feeDelta = newFeeDelta;
 }
 
@@ -146,15 +147,14 @@ void CTxMemPool::updateForDescendantsNL(txiter updateIt,
             modifyFee += cit->GetModifiedFee();
             modifyCount++;
             cachedDescendants[updateIt].insert(cit);
-            // Update ancestor state for each descendant
-            mapTx.modify(cit,
-                         update_ancestor_state(updateIt->GetTxSize(),
-                                               updateIt->GetModifiedFee(), 1,
-                                               updateIt->GetSigOpCount()));
+            // Phase 1+2 (v3.3.0): update_ancestor_state call removed — 4 cached ancestor
+            // aggregates deleted. ancestorsHeight refresh handled by Phase 0 Site 0 fix in
+            // UpdateTransactionsFromBlock end-of-function via UpdateAncestorsHeightNL.
         }
     }
-    mapTx.modify(updateIt,
-                 update_descendant_state(modifySize, modifyFee, modifyCount));
+    // Phase 5 (v3.3.0): direct const-method call instead of mapTx.modify (descendant_score
+    // index removed, cached fields are mutable, mempool.smtx serialization in caller).
+    updateIt->UpdateDescendantState(modifySize, modifyFee, modifyCount);
 }
 
 namespace {
@@ -227,6 +227,23 @@ void CTxMemPool::UpdateTransactionsFromBlock(
         updateForDescendantsNL(it, mapMemPoolDescendantsToUpdate,
                              setAlreadyIncluded);
     }
+
+    // Phase 0 — Site 0 fix: refresh ancestorsHeight for children of disconnect-block-reflowed
+    // tx. When DisconnectBlock 回流 tx via addUnchecked, those tx's children (already in
+    // mempool but当时父在 block) had their ancestorsHeight computed without the now-reflowed
+    // parent, leaving stale (offset 偏小) values. Without this refresh, subsequent
+    // sort/limit-check paths reading ancestorsHeight see偏小 values.
+    // Walk children of vHashesToUpdate via UpdateAncestorsHeightNL (BFS, O(direct parents) per
+    // entry, bounded by mempool capacity).
+    setEntriesTopoSorted heightsToRefresh;
+    for (const uint256 &hash : vHashesToUpdate) {
+        txiter it = mapTx.find(hash);
+        if (it == mapTx.end()) continue;
+        for (txiter child : GetMemPoolChildrenNL(it)) {
+            heightsToRefresh.insert(child);
+        }
+    }
+    UpdateAncestorsHeightNL(heightsToRefresh);
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
 
@@ -338,26 +355,17 @@ void CTxMemPool::updateAncestorsOfNL(bool add,
     const int64_t updateCount = (add ? 1 : -1);
     const int64_t updateSize = updateCount * it->GetTxSize();
     const Amount updateFee = updateCount * it->GetModifiedFee();
+    // Phase 5 (v3.3.0): direct const-method call eliminates per-ancestor boost::multi_index
+    // reindex. This was the dominant insert-path cost — N modify calls × multi_index framework
+    // each triggered descendant_score reindex (deleted in Phase 5). Now O(1) per ancestor.
     for (txiter ancestorIt : setAncestors) {
-        mapTx.modify(ancestorIt, update_descendant_state(updateSize, updateFee,
-                                                         updateCount));
+        ancestorIt->UpdateDescendantState(updateSize, updateFee, updateCount);
     }
 }
 
-void CTxMemPool::updateEntryForAncestorsNL(txiter it,
-                                           const setEntries &setAncestors) {
-    int64_t updateCount = setAncestors.size();
-    int64_t updateSize = 0;
-    Amount updateFee(0);
-    int64_t updateSigOpsCount = 0;
-    for (txiter ancestorIt : setAncestors) {
-        updateSize += ancestorIt->GetTxSize();
-        updateFee += ancestorIt->GetModifiedFee();
-        updateSigOpsCount += ancestorIt->GetSigOpCount();
-    }
-    mapTx.modify(it, update_ancestor_state(updateSize, updateFee, updateCount,
-                                           updateSigOpsCount));
-}
+// Phase 1+2 (v3.3.0): updateEntryForAncestorsNL removed — only updated 4 cached ancestor
+// aggregates which were O(ancestor set) on every insert. The chain depth field
+// (ancestorsHeight) is now O(direct parents) and set inline in addUnchecked.
 
 void CTxMemPool::updateChildrenForRemovalNL(txiter it) {
     const setEntries &setMemPoolChildren = GetMemPoolChildrenNL(it);
@@ -367,32 +375,16 @@ void CTxMemPool::updateChildrenForRemovalNL(txiter it) {
 }
 
 void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
-                                            bool updateDescendants,
                                             bool isBlockRemove) {
     // Timing stats for block removal (Async RemoveForBlock thread)
     int64_t nStartTime = isBlockRemove ? GetTimeMicros() : 0;
     // For each entry, walk back all ancestors and decrement size associated
     // with this transaction.
     const uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
-    if (updateDescendants) {
-        // updateDescendants should be true whenever we're not recursively
-        // removing a tx and all its descendants, eg when a transaction is
-        // confirmed in a block. Here we only update statistics and not data in
-        // mapLinks (which we need to preserve until we're finished with all
-        // operations that need to traverse the mempool).
-        for (txiter removeIt : entriesToRemove) {
-            setEntries setDescendants;
-            CalculateDescendantsNL(removeIt, setDescendants);
-            setDescendants.erase(removeIt); // don't update state for self
-            int64_t modifySize = -((int64_t)removeIt->GetTxSize());
-            Amount modifyFee = -1 * removeIt->GetModifiedFee();
-            int modifySigOps = -removeIt->GetSigOpCount();
-            for (txiter dit : setDescendants) {
-                mapTx.modify(dit, update_ancestor_state(modifySize, modifyFee,
-                                                        -1, modifySigOps));
-            }
-        }
-    }
+    // Phase 1+2 (v3.3.0): `bool updateDescendants` parameter + the entire `if (updateDescendants)`
+    // block deleted. All 5 callers (removeRecursive / RemoveForReorg / removeConflicts / Expire /
+    // TrimToSize) passed `false` so the if-true branch was unreachable in practice; in addition
+    // the branch only mutated the now-deleted 4 cached ancestor aggregates.
 
     for (txiter removeIt : entriesToRemove) {
         setEntries setAncestors;
@@ -440,16 +432,17 @@ void CTxMemPool::updateForRemoveFromMempoolNL(const setEntries &entriesToRemove,
     if (isBlockRemove) {
         int64_t nDuration = GetTimeMicros() - nStartTime;
         LogPrint(BCLog::MEMPOOL, "MempoolUpdateForRemove-Block: entries=%zu, "
-                "updateDescendants=%s, time=%.3fms\n",
+                "time=%.3fms\n",
                 entriesToRemove.size(),
-                updateDescendants ? "true" : "false",
                 nDuration * 0.001);
     }
 }
 
 void CTxMemPoolEntry::UpdateDescendantState(int64_t modifySize,
                                             Amount modifyFee,
-                                            int64_t modifyCount) {
+                                            int64_t modifyCount) const {
+    // Phase 5 (v3.3.0): const + mutable fields. Direct mutation, no mapTx.modify needed
+    // because descendant_score multi_index removed (cached fields not any boost key).
     nSizeWithDescendants += modifySize;
     assert(int64_t(nSizeWithDescendants) > 0);
     nModFeesWithDescendants += modifyFee;
@@ -457,17 +450,10 @@ void CTxMemPoolEntry::UpdateDescendantState(int64_t modifySize,
     assert(int64_t(ancestorDescendantCounts->nCountWithDescendants) > 0);
 }
 
-void CTxMemPoolEntry::UpdateAncestorState(int64_t modifySize, Amount modifyFee,
-                                          int64_t modifyCount,
-                                          int modifySigOps) {
-    nSizeWithAncestors += modifySize;
-    assert(int64_t(nSizeWithAncestors) > 0);
-    nModFeesWithAncestors += modifyFee;
-    ancestorDescendantCounts->nCountWithAncestors += modifyCount;
-    assert(int64_t(ancestorDescendantCounts->nCountWithAncestors) > 0);
-    nSigOpCountWithAncestors += modifySigOps;
-    assert(int(nSigOpCountWithAncestors) >= 0);
-}
+// Phase 1+2 (v3.3.0): UpdateAncestorState method removed. The 4 cached aggregates it maintained
+// (nSizeWithAncestors / nModFeesWithAncestors / nSigOpCountWithAncestors / nCountWithAncestors)
+// were O(ancestor set) per insert and only consumed by RPC verbose output + LegacyBlockAssembler.
+// The chain-depth field (ancestorsHeight) is set inline in addUnchecked / UpdateAncestorsHeightNL.
 
 CTxMemPool::CTxMemPool() : nTransactionsUpdated(0) {
     // lock free clear
@@ -588,12 +574,14 @@ void CTxMemPool::AddUncheckedNL(
             updateParentNL(newit, pit, true);
         }
     }
-    mapTx.modify(newit, [ancestorsHeight](CTxMemPoolEntry& entry) {
-        entry.SetAncestorsHeight(ancestorsHeight);
-    });
+    // Phase 5 (v3.3.0): direct const-method call (ancestorsHeight is in the shared
+    // AncestorDescendantCounts struct now, accessed via mutable atomic — no boost framework
+    // round-trip needed).
+    newit->SetAncestorsHeight(ancestorsHeight);
 
     updateAncestorsOfNL(true, newit, setAncestors);
-    updateEntryForAncestorsNL(newit, setAncestors);
+    // Phase 1+2 (v3.3.0): updateEntryForAncestorsNL call removed — function deleted along
+    // with the 4 cached ancestor aggregates it was the sole writer of.
 
     nTransactionsUpdated++;
     totalTxSize += entry.GetTxSize();
@@ -781,7 +769,7 @@ void CTxMemPool::removeRecursiveNL(
         CalculateDescendantsNL(it, setAllRemoves);
     }
 
-    removeStagedNL(setAllRemoves, false, changeSet, reason, true, conflictedWith);
+    removeStagedNL(setAllRemoves, changeSet, reason, true, conflictedWith);
 }
 
 void CTxMemPool::RemoveForReorg(
@@ -852,7 +840,7 @@ void CTxMemPool::RemoveForReorg(
     for (txiter it : txToRemove) {
         CalculateDescendantsNL(it, setAllRemoves);
     }
-    removeStagedNL(setAllRemoves, false, changeSet, MemPoolRemovalReason::REORG);
+    removeStagedNL(setAllRemoves, changeSet, MemPoolRemovalReason::REORG);
 }
 
 void CTxMemPool::removeConflictsNL(
@@ -981,7 +969,7 @@ void CTxMemPool::RemoveForBlockNL(
                         }
 
                         // Remove the conflict and all its descendants
-                        removeStagedNL(setDescendants, false, changeSet, MemPoolRemovalReason::CONFLICT, true, tx.get());
+                        removeStagedNL(setDescendants, changeSet, MemPoolRemovalReason::CONFLICT, true, tx.get());
                     }
                 }
             }
@@ -990,34 +978,9 @@ void CTxMemPool::RemoveForBlockNL(
         }
     }
 
-    // ★★★ issue #12 fix (Required #1) — 减 descendants 的 ancestor cached aggregates ★★★
-    //
-    // 问题：原 RemoveForBlockNL 只切 mapLinks 不减 descendants 的 nCountWithAncestors /
-    //   nSizeWithAncestors / nModFeesWithAncestors / nSigOpCountWithAncestors。脏 cache
-    //   永久残留 → journal 按 nCountWithAncestors 排序后续新加 tx 让父子序错乱 →
-    //   矿工出 block 自家 ConnectBlock reject "bad-txns-inputs-missingorspent"。
-    //
-    // 修法：在切 mapLinks 之前用 mapLinks 算 descendants，per-removed entry 减 4 个
-    //   cached aggregates。跟 removeStagedNL 路径的 updateForRemoveFromMempoolNL
-    //   (updateDescendants=true) 做的事一致，只是 RemoveForBlockNL 之前漏了这一步。
-    //
-    // 顺序约束：必须在下面 updateParentNL(child, parentToRemove, false) 切链接之前调，
-    //   否则 CalculateDescendantsNL 走不到 children。
-    for (txiter removeIt : toBeRemoved)
-    {
-        setEntries setDescendants;
-        CalculateDescendantsNL(removeIt, setDescendants);
-        setDescendants.erase(removeIt);  // don't update state for self
-        int64_t modifySize = -static_cast<int64_t>(removeIt->GetTxSize());
-        Amount modifyFee = -1 * removeIt->GetModifiedFee();
-        int modifySigOps = -removeIt->GetSigOpCount();
-        for (txiter dit : setDescendants)
-        {
-            // skip 也在 toBeRemoved 里的 descendant（被一起删，无需修状态）
-            if (toBeRemoved.find(dit) != toBeRemoved.end()) continue;
-            mapTx.modify(dit, update_ancestor_state(modifySize, modifyFee, -1, modifySigOps));
-        }
-    }
+    // Phase 1+2 (v3.3.0): issue #12 fix descendant cached-aggregate decrement loop removed
+    // along with the 4 ancestor cached fields. ancestorsHeight refresh for descendants on
+    // RemoveForBlock is still done below via UpdateAncestorsHeightNL(childrenOfToRemove).
 
     // Disconnect children from soon-to-be-removed parents before removal
     // This ensures mapLinks stays consistent during removal
@@ -1060,10 +1023,17 @@ void CTxMemPool::RemoveForBlockNL(
     setEntries affectedStillInMempool = getConnectedNL(toBeRemoved, isTxOutsideJournal);
 
     // Remove block transactions from mempool
-    for (txiter entry : toBeRemoved)                                                                                     
-    {                                                                                                                    
-        removeUncheckedNL(entry, changeSet, MemPoolRemovalReason::BLOCK, nullptr);                                       
+    for (txiter entry : toBeRemoved)
+    {
+        removeUncheckedNL(entry, changeSet, MemPoolRemovalReason::BLOCK, nullptr);
     }
+
+    // H-1 fix (v3.3.0): refresh ancestorsHeight for descendants of removed block tx
+    // BEFORE checkJournalAcceptanceNL so journal CPFP-debt sort sees fresh heights.
+    // Without this, topoSortedTxFromSet snapshots stale (parent-removed-but-still-set)
+    // height values, breaking CPFP debt propagation order. Aligns ordering with the
+    // UpdateTransactionsFromBlock / Phase 0 Site 0 fix path (refresh-then-check).
+    UpdateAncestorsHeightNL(childrenOfToRemove);
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
@@ -1072,8 +1042,6 @@ void CTxMemPool::RemoveForBlockNL(
     for (const auto &tx : vtx) {
         clearPrioritisationNL(tx->GetId());
     }
-
-    UpdateAncestorsHeightNL(childrenOfToRemove);
 
     // Debug: Print mempool tree after removal
     if (gDebugMempoolTree) {
@@ -1185,32 +1153,15 @@ void CTxMemPool::CheckMempool(
             i++;
         }
         assert(setParentCheck == GetMemPoolParentsNL(it));
+        // Phase 0 — Site 0 fix dependency: this invariant requires reorg paths
+        // (UpdateTransactionsFromBlock + RemoveForBlock) to refresh ancestorsHeight for children
+        // of reflowed/removed tx. Without that refresh, stale heights here would assert-fire in
+        // -checkmempool=1 mode after reorgs.
         assert(ancestorsHeight == it->GetAncestorsHeight());
-        // Verify ancestor state is correct.
-        setEntries setAncestors;
-        uint64_t nNoLimit = std::numeric_limits<uint64_t>::max();
-        std::string dummy;
-        CalculateMemPoolAncestorsNL(*it,
-                                    setAncestors,
-                                    nNoLimit,
-                                    nNoLimit,
-                                    nNoLimit,
-                                    nNoLimit,
-                                    dummy);
-        uint64_t nCountCheck = setAncestors.size() + 1;
-        uint64_t nSizeCheck = it->GetTxSize();
-        Amount nFeesCheck = it->GetModifiedFee();
-        int64_t nSigOpCheck = it->GetSigOpCount();
-
-        for (txiter ancestorIt : setAncestors) {
-            nSizeCheck += ancestorIt->GetTxSize();
-            nFeesCheck += ancestorIt->GetModifiedFee();
-            nSigOpCheck += ancestorIt->GetSigOpCount();
-        }
-
-        assert(it->GetSizeWithAncestors() == nSizeCheck);
-        assert(it->GetSigOpCountWithAncestors() == nSigOpCheck);
-        assert(it->GetModFeesWithAncestors() == nFeesCheck);
+        // Phase 1+2 (v3.3.0): the 4 cached ancestor aggregate invariants (nSize/nModFees/
+        // nSigOpCount/nCount WithAncestors == BFS-recomputed) removed along with the cached
+        // fields. The BFS body that computed nSizeCheck/nFeesCheck/nSigOpCheck/nCountCheck via
+        // CalculateMemPoolAncestorsNL was deleted because it has no consumer left.
 
         // Check children against mapNextTx
         CTxMemPool::setEntries setChildrenCheck;
@@ -1377,39 +1328,8 @@ void CTxMemPool::SetSanityCheck(double dFrequency) {
     nCheckFrequency = dFrequency * 4294967295.0;
 }
 
-/**
-* Compare 2 transactions to determine their relative priority.
-*/
-bool CTxMemPool::CompareDepthAndScore(const uint256 &hasha,
-                                      const uint256 &hashb)
-{
-    std::shared_lock lock(smtx);
-    return CompareDepthAndScoreNL(hasha, hashb);
-}
-
-/**
-* Compare 2 transactions to determine their relative priority.
-* Does it wothout taking the mutex; it is up to the caller to
-* ensure this is thread safe.
-*/
-bool CTxMemPool::CompareDepthAndScoreNL(const uint256 &hasha,
-                                        const uint256 &hashb)
-{
-    indexed_transaction_set::const_iterator i = mapTx.find(hasha);
-    if (i == mapTx.end()) {
-        return false;
-    }
-    indexed_transaction_set::const_iterator j = mapTx.find(hashb);
-    if (j == mapTx.end()) {
-        return true;
-    }
-    uint64_t counta = i->GetCountWithAncestors();
-    uint64_t countb = j->GetCountWithAncestors();
-    if (counta == countb) {
-        return CompareTxMemPoolEntryByScore()(*i, *j);
-    }
-    return counta < countb;
-}
+// Phase 1+2 (v3.3.0): CompareDepthAndScore + CompareDepthAndScoreNL deleted (dead code,
+// 0 external callers grep-confirmed).
 
 namespace {
 class DepthAndScoreComparator {
@@ -1417,12 +1337,16 @@ public:
     bool
     operator()(const CTxMemPool::indexed_transaction_set::const_iterator &a,
                const CTxMemPool::indexed_transaction_set::const_iterator &b) {
-        uint64_t counta = a->GetCountWithAncestors();
-        uint64_t countb = b->GetCountWithAncestors();
-        if (counta == countb) {
+        // Phase 1+2 (v3.3.0): sort key changed from (nCountWithAncestors, score) to
+        // (ancestorsHeight, score). Topological order preserved (parent.height < child.height
+        // strictly). Snapshot-based sort not needed here — caller holds mempool.smtx
+        // shared_lock so writers are blocked during sort, no atomic-load race possible.
+        size_t ha = a->GetAncestorsHeight();
+        size_t hb = b->GetAncestorsHeight();
+        if (ha == hb) {
             return CompareTxMemPoolEntryByScore()(*a, *b);
         }
-        return counta < countb;
+        return ha < hb;
     }
 };
 } // namespace
@@ -1582,19 +1506,16 @@ void CTxMemPool::prioritiseTransactionNL(
             nNoLimit,
             dummy,
             false);
+        // Phase 5 (v3.3.0): direct const-method call (no mapTx.modify needed).
         for (txiter ancestorIt : setAncestors) {
-            mapTx.modify(ancestorIt,
-                         update_descendant_state(0, nFeeDelta, 0));
+            ancestorIt->UpdateDescendantState(0, nFeeDelta, 0);
         }
 
-        // Now update all descendants' modified fees with ancestors
-        setEntries setDescendants;
-        CalculateDescendantsNL(it, setDescendants);
-        setDescendants.erase(it);
-        for (txiter descendantIt : setDescendants) {
-            mapTx.modify(descendantIt,
-                         update_ancestor_state(0, nFeeDelta, 0, 0));
-        }
+        // Phase 1+2 (v3.3.0): descendants' nModFeesWithAncestors update loop removed
+        // along with the cached aggregate. JournalingBlockAssembler ranks tx by
+        // entry.GetModifiedFee() directly (already updated above via update_fee_delta on
+        // this entry), so prioritise still propagates to mining priority via the entry's
+        // own mModifiedFee, not via the deleted ancestor fee aggregate.
 
         setEntries affectedTxs = getConnectedNL(setEntries{it});
         affectedTxs.insert(it);
@@ -1836,15 +1757,24 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
         }
     };
 
-    // returns topo sorted vector of transactions
+    // returns topo sorted vector of transactions.
+    // Phase 1+2 (v3.3.0): two-phase snapshot-based sort. Snapshot atomic ancestorsHeight into
+    // local immutable values once, then sort. Eliminates atomic-load race window during sort
+    // (stable_sort requires `<` to be transitive, which atomic re-reads cannot guarantee under
+    // concurrent reorg).
     auto topoSortedTxFromSet = [](const setEntries& txSet){
-        std::vector<txiter> txs(txSet.begin(), txSet.end());
-        std::sort(txs.begin(), txs.end(),
-            [](const txiter& entry1, const txiter& entry2)
-            {
-                return entry1->GetCountWithAncestors() < entry2->GetCountWithAncestors();
-            }
-        );
+        std::vector<std::pair<size_t /*height*/, txiter>> snap;
+        snap.reserve(txSet.size());
+        for (const txiter& it : txSet) {
+            snap.emplace_back(it->GetAncestorsHeight(), it);
+        }
+        std::stable_sort(snap.begin(), snap.end(),
+            [](const auto& a, const auto& b) {
+                return a.first < b.first;
+            });
+        std::vector<txiter> txs;
+        txs.reserve(snap.size());
+        for (auto& s : snap) txs.push_back(std::move(s.second));
         return txs;
     };
 
@@ -1958,6 +1888,19 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
     }
 }
 
+// BFS refresh of ancestorsHeight for the given entries and their transitive descendants.
+//
+// Topological-order invariant: entries is `std::set<txiter, InsertionOrderComparator>` ordered
+// by mempool insertion index. The mempool insertion contract (see txmempool.h:599) guarantees
+// child.insertionIndex > parent.insertionIndex (a child cannot enter the mempool before its
+// in-mempool parent), so iterating begin()→end() processes parents before children. When a
+// child is processed, all its in-mempool parents have already been refreshed → reading
+// `parent->GetAncestorsHeight() + 1` sees fresh values. Holds for diamond/multi-parent cases:
+// a tx with multiple in-mempool parents was inserted after each, so its insertionIndex is
+// strictly greater than all parents' indices.
+//
+// Callers (Phase 0 Site 0 fix + RemoveForBlockNL): seed `entries` with direct children of the
+// reflowed/removed parents. The BFS traversal expands to grandchildren, etc.
 void CTxMemPool::UpdateAncestorsHeightNL(CTxMemPool::setEntriesTopoSorted entries)
 {
     while(!entries.empty())
@@ -1965,27 +1908,23 @@ void CTxMemPool::UpdateAncestorsHeightNL(CTxMemPool::setEntriesTopoSorted entrie
         txiter entry = *entries.begin();
         entries.erase(entries.begin());
 
-        // Collect children before checking - they may still need updating even if parent is gone
+        // Phase 5 M2 fix: single mapLinks.find under smtx unique_lock — no concurrent
+        // modification possible, so the result is stable across the whole iteration.
+        const bool entryStillInMempool = mapLinks.find(entry) != mapLinks.end();
         setEntries childrenToProcess;
-        if(mapLinks.find(entry) != mapLinks.end())
-        {
+        if (entryStillInMempool) {
             childrenToProcess = GetMemPoolChildrenNL(entry);
         }
 
-        // Skip further processing if entry has been removed from mempool
-        if(mapLinks.find(entry) == mapLinks.end())
-        {
-            // Still need to process children whose parent was removed
-            for(auto child: childrenToProcess)
-            {
-                entries.insert(child);
-            }
-            continue;
+        // Seed BFS frontier with this entry's mempool children (empty if entry was already
+        // removed — we still continue the loop because other entries in the BFS set may have
+        // their own children to expand).
+        for (auto child : childrenToProcess) {
+            entries.insert(child);
         }
 
-        for(auto child: childrenToProcess)
-        {
-            entries.insert(child);
+        if (!entryStillInMempool) {
+            continue;
         }
         
         size_t ancestorsHeight = 0;
@@ -1993,22 +1932,21 @@ void CTxMemPool::UpdateAncestorsHeightNL(CTxMemPool::setEntriesTopoSorted entrie
         {
             ancestorsHeight = std::max(ancestorsHeight, parent->GetAncestorsHeight() + 1);
         }
-        mapTx.modify(entry, [ancestorsHeight](CTxMemPoolEntry& entry) {
-                                entry.SetAncestorsHeight(ancestorsHeight);
-                             });
+        // Phase 5 (v3.3.0): direct const-method call (ancestorsHeight is mutable atomic
+        // in shared AncestorDescendantCounts).
+        entry->SetAncestorsHeight(ancestorsHeight);
     }
 }
 
 void CTxMemPool::removeStagedNL(
     setEntries &stage,
-    bool updateDescendants,
     const CJournalChangeSetPtr& changeSet,
     MemPoolRemovalReason reason,
     bool updateJournal,
     const CTransaction* conflictedWith,
     bool isBlockRemove) {
 
-    updateForRemoveFromMempoolNL(stage, updateDescendants, isBlockRemove);
+    updateForRemoveFromMempoolNL(stage, isBlockRemove);
 
     if(updateJournal)
     {
@@ -2046,7 +1984,7 @@ int CTxMemPool::Expire(int64_t time, const mining::CJournalChangeSetPtr& changeS
         CalculateDescendantsNL(removeit, stage);
     }
 
-    removeStagedNL(stage, false, changeSet, MemPoolRemovalReason::EXPIRY);
+    removeStagedNL(stage, changeSet, MemPoolRemovalReason::EXPIRY);
     return stage.size();
 }
 
@@ -2171,9 +2109,26 @@ std::vector<TxId> CTxMemPool::TrimToSize(
     unsigned nTxnRemoved = 0;
     CFeeRate maxFeeRateRemoved(Amount(0));
     std::vector<TxId> vRemovedTxIds {};
+    // Phase 5 (v3.3.0): descendant_score multi_index removed. TrimToSize now linearly scans
+    // mapTx to find the entry with the lowest descendant score. Reuses the original
+    // CompareTxMemPoolEntryByDescendantScore comparator for identical eviction semantics
+    // (max(self, descendants) fee/size ratio + GetTime tie-break).
+    //
+    // Trade-off:
+    //   - Per-evict-iteration cost: O(log N) (boost index begin) → O(N) (linear scan)
+    //   - Per-tx-insert cost (entire mempool insert path): O(ancestors × log N) reindex
+    //     → O(ancestors) direct field write — eliminates the dominant insert latency.
+    // Mempool-full TrimToSize is rare; per-tx insert is the hot path.
+    CompareTxMemPoolEntryByDescendantScore cmp;
     while (!mapTx.empty() && DynamicMemoryUsageNL() > sizelimit) {
-        indexed_transaction_set::index<descendant_score>::type::iterator it =
-            mapTx.get<descendant_score>().begin();
+        txiter it = mapTx.end();
+        for (auto cand = mapTx.begin(); cand != mapTx.end(); ++cand) {
+            if (it == mapTx.end() || cmp(*cand, *it)) {
+                it = cand;
+            }
+        }
+        // mapTx not empty was just checked, so it must be a valid iterator now.
+        assert(it != mapTx.end());
 
         // We set the new mempool min fee to the feerate of the removed set,
         // plus the "minimum reasonable fee rate" (ie some value under which we
@@ -2188,7 +2143,7 @@ std::vector<TxId> CTxMemPool::TrimToSize(
         maxFeeRateRemoved = std::max(maxFeeRateRemoved, removed);
 
         setEntries stage;
-        CalculateDescendantsNL(mapTx.project<0>(it), stage);
+        CalculateDescendantsNL(it, stage);
         nTxnRemoved += stage.size();
 
         std::vector<CTransaction> txn;
@@ -2199,7 +2154,7 @@ std::vector<TxId> CTxMemPool::TrimToSize(
                 vRemovedTxIds.emplace_back(iter->GetTx().GetId());
             }
         }
-        removeStagedNL(stage, false, changeSet, MemPoolRemovalReason::SIZELIMIT);
+        removeStagedNL(stage, changeSet, MemPoolRemovalReason::SIZELIMIT);
         if (pvNoSpendsRemaining) {
             for (const CTransaction &tx : txn) {
                 for (const CTxIn &txin : tx.vin) {

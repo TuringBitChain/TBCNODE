@@ -4,8 +4,8 @@
 #pragma once
 
 #include <enum_cast.h>
+#include <mining/assembler.h>
 #include <mining/candidates.h>
-#include <mining/legacy.h>
 
 #include <memory>
 

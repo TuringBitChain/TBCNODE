@@ -20,7 +20,10 @@ namespace
         static uint32_t lockTime {0};
         CMutableTransaction txn {};
         txn.nLockTime = lockTime++;
-        return { MakeTransactionRef(std::move(txn)), std::make_shared<AncestorDescendantCounts>(1, 1), Amount{0}, 0 };
+        // Phase 1+2 (v3.3.0): AncestorDescendantCounts ctor signature changed from
+        // (uint64_t ancestors, uint64_t descendants) to (size_t height, uint64_t descendants).
+        // height=0 (orphan tx, no in-mempool ancestors), descendantCount=1 (self).
+        return { MakeTransactionRef(std::move(txn)), std::make_shared<AncestorDescendantCounts>(0, 1), Amount{0}, 0 };
     }
 }
 
