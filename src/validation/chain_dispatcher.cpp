@@ -231,24 +231,34 @@ void ChainDispatcher::Start(int num_workers, ValidationHandler handler) {
         //   4. 把结果回写到 WorkItem.result_promise（SubmitSync 调用方在 future 上等）
         auto worker_handler = [this, wid](WorkItem&& item) {
             if (!item.tx) {
-                item.SetResult(false, "null tx");
+                CValidationState st;
+                st.Invalid(false, REJECT_INVALID, "null tx");
+                item.SetResult(std::move(st));
                 return;
             }
             const TxId txid = item.tx->GetId();
             MarkRunning(txid);
-            std::string err;
-            bool ok = false;
-            try {
-                if (handler_cb) {
-                    ok = handler_cb(item, err);
+            // v3.4.0 finding 1 修：透传完整 CValidationState（保 IsMissingInputs /
+            // IsResubmittedTx / 真实 reject_code）。worker_handler 现在填 outState 而不是
+            // 返回 (bool, string)。
+            CValidationState state;
+            // v3.4.0 finding 2' 修：no-handler 必须显式标错，否则 state 默认 valid →
+            // 后面 ok=true → MarkCommitted 误认为入池成功（实际啥都没做）。
+            if (!handler_cb) {
+                state.Error("dispatcher validation handler not set");
+            } else {
+                try {
+                    handler_cb(item, state);
+                } catch (const std::exception& e) {
+                    // v3.4.0 finding 2'' 修：handler 异常是节点内部错误不是 tx 永久 invalid。
+                    // 用 Error() 让 RPC 客户端能区分"内部错误可重试"vs"tx 真无效"。
+                    state.Error(std::string("handler exception: ") + e.what());
+                } catch (...) {
+                    state.Error("handler exception (unknown)");
                 }
-            } catch (const std::exception& e) {
-                err = std::string("handler exception: ") + e.what();
-                ok = false;
-            } catch (...) {
-                err = "handler exception (unknown)";
-                ok = false;
             }
+            const bool ok = state.IsValid();
+            const std::string err = state.GetRejectReason();  // 给 metric/log 用
 
             // sub-A4 review M1 (task #235)：失败时检测跨 worker 父子假 missing-inputs
             if (!ok && IsCrossWorkerMissingInputs(err)) {
@@ -267,7 +277,7 @@ void ChainDispatcher::Start(int num_workers, ValidationHandler handler) {
                          "v2.6.1 reorg-resubmit race fail: tx=%s -> ReorgStash (drain will retry)\n",
                          txid.ToString());
                 MarkAborted(txid);
-                item.SetResult(false, std::move(err));
+                item.SetResult(std::move(state));
                 return;
             }
 
@@ -275,7 +285,7 @@ void ChainDispatcher::Start(int num_workers, ValidationHandler handler) {
             //   prod 行为对齐：失败的 tx 该 reject 就 reject，不再背着客户端偷偷 commit。
             if (ok) MarkCommitted(txid);
             else    MarkAborted(txid);
-            item.SetResult(ok, std::move(err));
+            item.SetResult(std::move(state));
         };
         new_workers->emplace_back(
             std::make_unique<PerChainWorker>(wid, std::move(worker_handler)));
@@ -449,11 +459,17 @@ bool ChainDispatcher::SubmitSync(const CTransactionRef& tx, std::string& err,
             fallback_item.nAbsurdFee = absurdFee;
             fallback_item.fLimitFree = fLimitFree;
             fallback_item.accept_time = accept_time;
-            try { return handler_cb(fallback_item, err); }
+            // v3.4.0 finding 1 修：handler_cb 现在返 void 填 CValidationState&
+            // v3.4.0 finding 2'' 修：handler 异常用 Error 表内部错误（非 tx invalid）
+            CValidationState st;
+            try { handler_cb(fallback_item, st); }
             catch (const std::exception& e) {
-                err = std::string("handler exception: ") + e.what();
-                return false;
-            } catch (...) { err = "handler exception"; return false; }
+                st.Error(std::string("handler exception: ") + e.what());
+            } catch (...) {
+                st.Error("handler exception");
+            }
+            if (!st.IsValid()) err = st.GetRejectReason();
+            return st.IsValid();
         }
         err = "dispatcher not started, no fallback handler";
         return false;
@@ -484,7 +500,12 @@ bool ChainDispatcher::SubmitSync(const CTransactionRef& tx, std::string& err,
     item.fLimitFree = fLimitFree;
     item.accept_time = accept_time;
     item.result_promise = promise;
-    (*snap)[wid]->Push(std::move(item));
+    // v3.4.0 finding 2 修：Push 失败时清 inflight QUEUED 状态（防 30s GC 延迟里假父
+    // 误导子交易 first-hit routing）。Push 内部已经 SetResult(false, "queue full"/"stopped")
+    // 完了 promise，这里仅补 inflight cleanup。
+    if (!(*snap)[wid]->Push(std::move(item))) {
+        MarkAborted(txid);
+    }
 
     // 阻塞等 worker 完成（无 budget — 跟 prod 同步 PTV 行为一致）。
     // worker 卡死要从 deadlock / 过载本身查；RPC 层 30s timeout 只让客户端拿到
@@ -590,6 +611,13 @@ ChainDispatcher::SubmitForFuture(const CTransactionRef& tx,
         st.Invalid(false, code, reason);
         promise->set_value(std::move(st));
     };
+    // v3.4.0 finding 2'' 修：内部错误（handler exception / dispatcher not started 等）
+    // 用 Error 而非 Invalid，让 RPC 客户端能区分"内部错误可重试"vs"tx 永久 invalid"。
+    auto setError = [&promise](const std::string& reason) {
+        CValidationState st;
+        st.Error(reason);
+        promise->set_value(std::move(st));
+    };
 
     if (!tx) {
         setInvalid("null tx");
@@ -608,19 +636,20 @@ ChainDispatcher::SubmitForFuture(const CTransactionRef& tx,
             fallback_item.nAbsurdFee = absurdFee;
             fallback_item.fLimitFree = fLimitFree;
             fallback_item.accept_time = accept_time;
-            std::string err;
+            // v3.4.0 finding 1 修：完整 CValidationState 透传
+            CValidationState st;
             try {
-                bool ok = handler_cb(fallback_item, err);
-                CValidationState st;
-                if (!ok) st.Invalid(false, REJECT_INVALID, std::move(err));
+                handler_cb(fallback_item, st);
                 promise->set_value(std::move(st));
             } catch (const std::exception& e) {
-                setInvalid(std::string("handler exception: ") + e.what());
+                // v3.4.0 finding 2'' 修：内部异常用 Error
+                setError(std::string("handler exception: ") + e.what());
             } catch (...) {
-                setInvalid("handler exception");
+                setError("handler exception");
             }
         } else {
-            setInvalid("dispatcher not started, no fallback");
+            // v3.4.0 finding 2'' 修：no-handler 是节点内部状态不是 tx 问题
+            setError("dispatcher not started, no fallback");
         }
         return future;
     }
@@ -643,7 +672,10 @@ ChainDispatcher::SubmitForFuture(const CTransactionRef& tx,
     item.fLimitFree = fLimitFree;
     item.accept_time = accept_time;
     item.result_promise = promise;
-    (*snap)[wid]->Push(std::move(item));
+    // v3.4.0 finding 2 修：Push 失败清 inflight QUEUED
+    if (!(*snap)[wid]->Push(std::move(item))) {
+        MarkAborted(txid);
+    }
     return future;
 }
 
@@ -665,8 +697,9 @@ void ChainDispatcher::SubmitAsync(const CTransactionRef& tx,
             fallback_item.nAbsurdFee = absurdFee;
             fallback_item.fLimitFree = fLimitFree;
             fallback_item.accept_time = accept_time;
-            std::string err;
-            try { (void)handler_cb(fallback_item, err); } catch (...) {}
+            // v3.4.0 finding 1 修：fire-and-forget 路径不需结果，但仍要正确 handler 签名
+            CValidationState st;
+            try { handler_cb(fallback_item, st); } catch (...) {}
         }
         return;
     }
@@ -688,7 +721,10 @@ void ChainDispatcher::SubmitAsync(const CTransactionRef& tx,
     item.nAbsurdFee = absurdFee;
     item.fLimitFree = fLimitFree;
     item.accept_time = accept_time;
-    (*snap)[wid]->Push(std::move(item));
+    // v3.4.0 finding 2 修：fire-and-forget 路径 Push 失败也要清 inflight QUEUED
+    if (!(*snap)[wid]->Push(std::move(item))) {
+        MarkAborted(txid);
+    }
 }
 
 void ChainDispatcher::SubmitAsync(const CTransactionRef& tx) {
@@ -714,8 +750,9 @@ void ChainDispatcher::SubmitAsyncP2P(const CTransactionRef& tx,
             fallback_item.accept_time = accept_time;
             fallback_item.fLimitFree = fLimitFree;
             fallback_item.nAbsurdFee = nAbsurdFee;
-            std::string err;
-            try { (void)handler_cb(fallback_item, err); } catch (...) {}
+            // v3.4.0 finding 1 修：fire-and-forget 路径不需结果，但仍要正确 handler 签名
+            CValidationState st;
+            try { handler_cb(fallback_item, st); } catch (...) {}
         }
         return;
     }
@@ -739,7 +776,10 @@ void ChainDispatcher::SubmitAsyncP2P(const CTransactionRef& tx,
     item.accept_time = accept_time;
     item.fLimitFree = fLimitFree;
     item.nAbsurdFee = nAbsurdFee;
-    (*snap)[wid]->Push(std::move(item));
+    // v3.4.0 finding 2 修：P2P fire-and-forget Push 失败清 inflight QUEUED
+    if (!(*snap)[wid]->Push(std::move(item))) {
+        MarkAborted(txid);
+    }
 }
 
 // P2.7 Watchdog 主循环：每 5s 扫所有 worker.last_progress_us，

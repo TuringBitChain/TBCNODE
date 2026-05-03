@@ -17,14 +17,19 @@
 
 #include <string>
 
+class CValidationState;
+
 namespace tbc {
 namespace validation {
 
 struct WorkItem;
 
-// 处理单个 WorkItem（同步）：返回 true=已进 mempool / chain；false=拒绝（err 含原因）。
+// 处理单个 WorkItem（同步）：填 outState（valid=已进 mempool / chain；invalid=reject + 原因）。
 // thread-safe：可以被多个 worker 并发调用，内部用 PTV cs_main / smtx 加锁。
-bool AcceptToMemoryPoolWorker(const WorkItem& item, std::string& err);
+//
+// v3.4.0 finding 1 修：从返回 (bool, string) 升级到填 CValidationState&，保 IsMissingInputs /
+// IsResubmittedTx / 真实 reject_code 等标志透传到 RPC / wallet / P2P 调用方。
+void AcceptToMemoryPoolWorker(const WorkItem& item, CValidationState& outState);
 
 } // namespace validation
 } // namespace tbc

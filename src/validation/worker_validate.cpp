@@ -21,11 +21,20 @@
 namespace tbc {
 namespace validation {
 
-bool AcceptToMemoryPoolWorker(const WorkItem& item, std::string& err) {
-    if (!item.tx) { err = "null tx"; return false; }
-    if (!g_connman) { err = "no connman"; return false; }
+void AcceptToMemoryPoolWorker(const WorkItem& item, CValidationState& outState) {
+    if (!item.tx) {
+        outState.Invalid(false, REJECT_INVALID, "null tx");
+        return;
+    }
+    if (!g_connman) {
+        outState.Invalid(false, REJECT_INVALID, "no connman");
+        return;
+    }
     const auto& txValidator = g_connman->getTxnValidator();
-    if (!txValidator) { err = "no txValidator"; return false; }
+    if (!txValidator) {
+        outState.Invalid(false, REJECT_INVALID, "no txValidator");
+        return;
+    }
 
     // v2.6.1 trace：worker 真在跑（-debug=txnval 可开）
     const int64_t t0 = GetTimeMicros();
@@ -98,24 +107,27 @@ bool AcceptToMemoryPoolWorker(const WorkItem& item, std::string& err) {
                  snap1.tip_hash.ToString(), snap2.tip_hash.ToString(),
                  snap1.script_flags, snap2.script_flags);
         if (IsRetryableRace(dc)) {
-            err = std::string("race-retry: ") + DoubleCheckResultToString(dc);
-            return false;
+            outState.Invalid(false, REJECT_INVALID,
+                std::string("race-retry: ") + DoubleCheckResultToString(dc));
+            return;
         }
     }
 
     if (!ok) {
-        err = status.GetRejectReason();
+        // v3.4.0 finding 1 修：透传完整 CValidationState（保 IsMissingInputs /
+        // IsResubmittedTx / 真实 reject_code 等标志）。
+        outState = status;
         LogPrint(BCLog::TXNVAL,
                  "v2.6.1 worker: REJECT tx=%s reason=%s elapsed_us=%d\n",
-                 item.tx->GetId().ToString(), err.c_str(),
+                 item.tx->GetId().ToString(), status.GetRejectReason().c_str(),
                  (int)(GetTimeMicros() - t0));
-        return false;
+        return;
     }
     LogPrint(BCLog::TXNVAL,
              "v2.6.1 worker: ACCEPT tx=%s elapsed_us=%d tip_h=%d\n",
              item.tx->GetId().ToString(),
              (int)(GetTimeMicros() - t0), snap2.height);
-    return true;
+    // outState 默认 valid 状态
 }
 
 } // namespace validation

@@ -237,7 +237,9 @@ public:
     size_t GetAncestorsHeight() const {
         return ancestorDescendantCounts->ancestorsHeight.load(std::memory_order_acquire);
     }
-    void SetAncestorsHeight(size_t n) {
+    void SetAncestorsHeight(size_t n) const {
+        // Phase 5 (v3.3.0): const + atomic store on shared struct (mutable). Allows direct
+        // call through boost::multi_index const iterators without mapTx.modify framework cost.
         ancestorDescendantCounts->ancestorsHeight.store(n, std::memory_order_release);
     }
     void SetInsertionIndex(uint64_t ndx) { insertionIndex = ndx; }

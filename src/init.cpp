@@ -1030,9 +1030,9 @@ std::string HelpMessage(HelpMessageMode mode) {
                     ));
     strUsage += HelpMessageOpt(
         "-blockprioritypercentage=<n>",
-        strprintf(_("Set maximum percentage of a block reserved to "
-                    "high-priority/low-fee transactions (default: %d). NOTE: This is supported only by the legacy block assembler which"
-                    " is not default block assembler any more and will be removed in the upcoming release."),
+        strprintf(_("[DEPRECATED — no effect since v3.3.0] Was used by the removed legacy block "
+                    "assembler. JournalingBlockAssembler does not honour priority. Kept only "
+                    "for getmininginfo RPC field compatibility (default: %d)."),
                   DEFAULT_BLOCK_PRIORITY_PERCENTAGE));
     strUsage += HelpMessageOpt(
         "-blockmintxfee=<amt>",
@@ -1888,6 +1888,14 @@ bool AppInitParameterInteraction(Config &config) {
     if(gArgs.IsArgSet("-blockassembler")) {
         std::string assemblerStr { boost::to_upper_copy<std::string>(gArgs.GetArg("-blockassembler", "")) };
         mining::CMiningFactory::BlockAssemblerType assembler { enum_cast<mining::CMiningFactory::BlockAssemblerType>(assemblerStr) };
+        // v3.4.0 finding 5 修：启动阶段直接拒 LEGACY，避免节点起来后到 GetAssembler() RPC
+        // 才 throw（运维体验差，可能晚到客户端报错才发现配置坏了）。LegacyBlockAssembler 在
+        // Phase 3 已删，仅保留 enum value 作为 throw 触发器；此处是更早的拒收点。
+        if(assembler == mining::CMiningFactory::BlockAssemblerType::LEGACY) {
+            return InitError(
+                "-blockassembler=LEGACY no longer supported (LegacyBlockAssembler removed since "
+                "v3.3.0). Use -blockassembler=JOURNALING (default) or remove the option.");
+        }
         if(assembler == mining::CMiningFactory::BlockAssemblerType::UNKNOWN)
             assembler = mining::DEFAULT_BLOCK_ASSEMBLER_TYPE;
         config.SetMiningCandidateBuilder(assembler);

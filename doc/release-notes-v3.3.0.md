@@ -35,9 +35,17 @@ wallet / ZMQ subscriber 各自有 16384 队列。subscriber 消费慢 + ConnectB
 `dispatcherworkers=8` 时总容量 8×16384 = 131072 in-flight tx。当前峰值 ~100 TPS × 30ms
 = ~30 in-flight / worker，离上限 500×。
 
-满了**会真 reject**（RPC 拿 -26 reject + "worker queue full"），不是假接受丢失。客户端
-看见 reject 自己重提交即可。真满的场景一般是 worker 卡死（doubleCheck 死循环 / ConnectBlock
-持锁 > 30s），需查上游问题。
+满了**会真 reject**，不是假接受丢失。**v3.3.0 起 reject 类型为节点内部错误**（CValidationState
+走 `Error()` 路径，reason="worker queue full"），跟"tx 永久 invalid"语义区分：
+
+- RPC 客户端拿到的不是 `REJECT_INVALID` 永久失败，而是节点内部临时拥塞错误
+- 单笔 `sendrawtransaction` → 抛 `RPC_TRANSACTION_ERROR`（不是 `RPC_TRANSACTION_REJECTED`）
+- 批量 `sendrawtransactions` → invalid 数组中 reject_reason 带 `"node-internal: "` 前缀，
+  让客户端能识别节点临时拥塞 vs tx 真无效
+- 节点 / 队列拥塞类同语义：worker stopped / node shutting down / handler exception /
+  dispatcher not started — 都走 `Error()` 路径，客户端可重试
+
+真满的场景一般是 worker 卡死（doubleCheck 死循环 / ConnectBlock 持锁 > 30s），需查上游问题。
 
 ### 已删 RPC
 
@@ -126,6 +134,37 @@ ancestors [limit: N]`。触发条件：reorg + 跨 reorg mempool 长链 + 踩 li
 
 `-checkmempool=1` 模式下原本会偶发 `assert(ancestorsHeight == GetAncestorsHeight())`
 炸的隐患同步修复。
+
+### 重要：祖先策略语义变化（不是 bug，是设计选择）
+
+**`-limitancestorcount` 含义改变**：从 v3.3.0 起，此参数的含义从"祖先**总数**"
+改为"祖先**链深**"（最长 input → ancestor 路径长度）。这是 TBC ccf31423c 引入 +
+v3.3.0 删除 cached aggregates 后**正式生效**的语义：
+
+| 字段 / 限制 | v3.3.0 前 | v3.3.0 起 |
+|---|---|---|
+| `-limitancestorcount=N` 含义 | 祖先集合大小 ≤ N | 祖先链深 ≤ N |
+| `-limitancestorsize=N` | 实际生效（祖先总字节 KB） | **不再校验**（参数保留兼容外部 caller，函数体不用） |
+| `-limitdescendantcount=N` | 实际生效 | **不再校验** |
+| `-limitdescendantsize=N` | 实际生效 | **不再校验** |
+
+**实际策略影响**：
+
+宽扇出场景（一笔 tx 多个 input 来自不同的低深度祖先）下，原先的"祖先总数"限制
+会拒收，现在的"链深"限制可能放过。例：一笔 tx 引用 50 个独立父 tx（每个父 height=0）
+→ 原 count=51 拒收，新 height=1 接受。
+
+**安全考量**：
+
+- 共识层 0 影响（这是 mempool policy）
+- 矿工层有 `-blockmintxfee=500 sat/KB`（默认 0.5 sat/byte）独立屏蔽低 fee tx 上块
+- 攻击者宽扇出灌池：仍受 `-maxmempool=1GB` 总量限制 + `MEMPOOL_FULL_FEE_INCREMENT`
+  fee bumping 防护 + 网络层 `-connect=` / `-whitelist=` / iptables 防 P2P 污染
+- 受影响功能测试：`bsv-mempool_ancestorsizelimit.py` 自 ccf31423c 起已 timeout 失败，
+  v3.3.0 删除（pre-existing 僵尸测试）
+
+**不是技术修复**，是 v3.3.0 ship 时接受的 breaking change。如果业务依赖"祖先总数"
+或 "size/descendant 限制"严格生效，需要在产品 / 矿工配置层做对应防护。
 
 ### Phase 3 — LegacyBlockAssembler 删除
 

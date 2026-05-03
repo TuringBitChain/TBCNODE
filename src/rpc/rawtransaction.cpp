@@ -1682,11 +1682,35 @@ static UniValue sendrawtransactions(const Config &config,
             // 4) 等所有 future 完成（无 budget — 跟 prod BSV 行为一致）。
             //    sub-A12 (task #152)：保留全 reject_code / reject_reason / IsMissingInputs，
             //    不再压平为 REJECT_INVALID 字符串，让上层 RPC 客户端按 prod 等价拿真错误码。
+            //
+            //    v3.4.0 finding 4 修：worker 内 doubleCheck race 失败时 PTV 可能已经 commit
+            //    进 mempool（worker_validate.cpp 上抛 race-retry 但 commit 已发生）。批量路径
+            //    必须复查 mempool.Exists/getNonFinalPool.exists 才决定是否标记 reject —
+            //    跟单笔 sendrawtransaction line 1342 同语义。否则 tx 已入池但 RPC 报 reject。
             for (auto& [txid, fut] : pending) {
                 fut.wait();
                 CValidationState st = fut.get();
                 if (!st.IsValid()) {
-                    rejectedTxns.first.emplace(txid, std::move(st));
+                    // race 兜底：dispatcher 报 reject 但 tx 真在 mempool（doubleCheck race
+                    // 期间 PTV 已 commit）→ 视为成功，不加 rejectedTxns。
+                    if (mempool.Exists(txid) || mempool.getNonFinalPool().exists(txid)) {
+                        // tx 已入池：跟单笔路径行为一致（不报 reject，inv 阶段会推 peer）
+                        continue;
+                    }
+                    // v3.4.0 finding 3''' 修：区分 Error（节点内部错误，可重试）vs Invalid
+                    // （tx 永久无效）。Error 进 invalid 数组时给 reason 加 "node-internal: "
+                    // 前缀，让客户端能识别 queue full / handler exception / shutdown 等
+                    // 临时拥塞，避免误把节点状态当 tx 永久 reject。reject_code 仍用
+                    // REJECT_INVALID 保持 RPC 接口兼容（无 REJECT_INTERNAL 常量），客户端
+                    // 通过 reason 前缀识别即可。
+                    if (st.IsError()) {
+                        CValidationState wrapped;
+                        wrapped.Invalid(false, REJECT_INVALID,
+                                        std::string("node-internal: ") + st.GetRejectReason());
+                        rejectedTxns.first.emplace(txid, std::move(wrapped));
+                    } else {
+                        rejectedTxns.first.emplace(txid, std::move(st));
+                    }
                 }
             }
         }

@@ -102,10 +102,14 @@ public:
     // ============================================================================
     // ValidationHandler：dispatcher 派给 worker 执行的 callback。
     //   入参 item 携带完整上下文：tx / source / pfrom / accept_time / fLimitFree / nAbsurdFee。
-    //   返回 true 表示验证通过（已进 mempool / chain），false 表示拒绝（err 含原因）。
-    //   handler 内部包旧 PTV processValidation，保证语义零回归。
+    //   出参 outState 携带完整 CValidationState（reject_code / reject_reason / nDoS /
+    //   IsMissingInputs() / IsResubmittedTx()），以保留 RPC / wallet / P2P 三个调用方
+    //   按 prod 等价方式取错误信息。
+    //
+    //   v3.4.0 finding 1 修：从 (bool, string) 升级到 CValidationState 透传。
+    //   旧 (bool, string) 压扁会丢 IsMissingInputs / 真实 reject_code / fResubmitTx 等标志。
     using ValidationHandler =
-        std::function<bool(const struct WorkItem&, std::string&)>;
+        std::function<void(const struct WorkItem&, CValidationState&)>;
 
     // Start：创建 num_workers 个 PerChainWorker，注册 handler。
     //   幂等：已 Start 直接返回。

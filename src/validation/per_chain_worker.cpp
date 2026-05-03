@@ -28,7 +28,12 @@ bool PerChainWorker::Push(WorkItem&& item) {
         // review v7 F-14：Stop 后 Push 必须立即拒，否则新 item 进 queue 但 worker
         //   thread 已 join 退出 → caller future.wait 永挂。
         if (!running.load(std::memory_order_acquire)) {
-            item.SetResult(false, "worker stopped");
+            // v3.4.0 finding 1' 修：节点临时状态 (worker stopped) 不是 tx 永久 invalid。
+            // 用 CValidationState::Error 让 RPC 客户端区分"内部错误"vs"tx 真无效"
+            // — 客户端可以重发，不要把这种当成 reject_code=REJECT_INVALID 永久失败。
+            CValidationState st;
+            st.Error("worker stopped");
+            item.SetResult(std::move(st));
             return false;
         }
         if (queue.size() >= capacity_) {
@@ -39,7 +44,10 @@ bool PerChainWorker::Push(WorkItem&& item) {
             g_metrics.worker_queue_push_timeout_total.fetch_add(
                 1, std::memory_order_relaxed);
             // 锁内调 SetResult 没问题：set_value 不取 user mutex。
-            item.SetResult(false, "worker queue full");
+            // v3.4.0 finding 1' 修：queue 拥塞不是 tx 永久 invalid，用 Error 表临时拥塞。
+            CValidationState st;
+            st.Error("worker queue full");
+            item.SetResult(std::move(st));
             return false;
         }
         queue.push_back(std::move(item));
@@ -85,7 +93,10 @@ void PerChainWorker::Stop() {
         //   metrics.h 已防 underflow。
         g_metrics.RecordQueueDepthDelta(-static_cast<int64_t>(n));
         for (auto& it : drained) {
-            it.SetResult(false, "node shutting down");
+            // v3.4.0 finding 1' 修：节点关闭不是 tx 无效，用 Error 而非 REJECT_INVALID。
+            CValidationState st;
+            st.Error("node shutting down");
+            it.SetResult(std::move(st));
         }
         LogPrintf("v2.6.1 worker[%d]: drained %u items on Stop\n",
                   id, static_cast<unsigned>(n));
