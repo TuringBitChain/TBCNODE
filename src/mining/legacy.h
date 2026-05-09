@@ -78,14 +78,15 @@ struct CompareModifiedEntry {
     }
 };
 
-// A comparator that sorts transactions based on number of ancestors.
-// This is sufficient to sort an ancestor package in an order that is valid
-// to appear in a block.
+// Sorts transactions into a topologically valid order for block inclusion.
+// ancestorsHeight is the max depth from a root tx and is kept current by
+// UpdateAncestorsHeightNL, so parents always sort before their children.
 struct CompareTxIterByAncestorCount {
     bool operator()(const CTxMemPool::txiter &a,
                     const CTxMemPool::txiter &b) const {
-        if (a->GetCountWithAncestors() != b->GetCountWithAncestors())
-            return a->GetCountWithAncestors() < b->GetCountWithAncestors();
+        size_t ha = a->GetAncestorsHeight();
+        size_t hb = b->GetAncestorsHeight();
+        if (ha != hb) return ha < hb;
         return CTxMemPool::CompareIteratorByHash()(a, b);
     }
 };

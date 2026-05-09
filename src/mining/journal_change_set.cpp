@@ -115,9 +115,9 @@ void CJournalChangeSet::applyNL()
             std::stable_sort(mChangeSet.begin(), mChangeSet.end(),
                 [](const Change& change1, const Change& change2)
                 {
-                    const AncestorDescendantCountsPtr& count1 { change1.second.getAncestorCount() };
-                    const AncestorDescendantCountsPtr& count2 { change2.second.getAncestorCount() };
-                    return count1->nCountWithAncestors < count2->nCountWithAncestors;
+                    size_t h1 { change1.second.getAncestorsHeight() };
+                    size_t h2 { change2.second.getAncestorsHeight() };
+                    return h1 < h2;
                 }
             );
         }

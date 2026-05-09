@@ -228,6 +228,26 @@ void CTxMemPool::UpdateTransactionsFromBlock(
                              setAlreadyIncluded);
     }
 
+    // During reorg, re-added transactions enter mapTx with their own ancestorsHeight
+    // computed at insertion time (based on their mempool parents, which is empty because
+    // they were previously confirmed UTXOs). Their existing mempool children had
+    // ancestorsHeight=0 when they were added (parents were confirmed, not in mempool).
+    // Now those parents are back in the mempool, so children have stale-low heights.
+    // Stale-low heights can cause children to sort before their parents in
+    // checkJournalAcceptanceNL, breaking CPFP evaluation. Fix by propagating correct
+    // heights down to all descendants before the journal check.
+    // Note: this does NOT trigger the ancestor limit — that check only applies at new
+    // tx admission (CalculateMemPoolAncestors). Existing mempool txs are never evicted
+    // solely because their recalculated height exceeds the limit, mirroring the
+    // original ancestor-count behavior.
+    {
+        setEntriesTopoSorted toUpdate;
+        for (const txiter& entry : addedTransactions) {
+            toUpdate.insert(entry);
+        }
+        UpdateAncestorsHeightNL(std::move(toUpdate));
+    }
+
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
 
     // Now we will check transactions connected with newly added transactions 
@@ -599,13 +619,8 @@ void CTxMemPool::AddUncheckedNL(
         *pnDynamicMemoryUsage = DynamicMemoryUsageNL();
     }
     
-    // Check if the transaction by itself pays enough for mining.
-    // If not it will not enter the journal nor any other transaction will be affected, so
-    // we can skip journal related stuff
-    if (blockMinTxfee.GetFee(newit->GetTxSize()) <= newit->GetModifiedFee())
+    // All transactions enter the journal regardless of fee rate.
     {
-        // transaction pays enough for mining
-        
         CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
 
         auto filterOutAlreadyAccepted = [this, &changeSet](txiter entry)
@@ -615,21 +630,17 @@ void CTxMemPool::AddUncheckedNL(
             {
                 return false;
             }
-                
             if (changeSet && changeSet->checkTxnAdded(txid))
             {
                 return false;
             }
             return true;
         };
-        // we will limit ourself to check limited number of transactions in order 
-        // to prevent possible attacks. 
         constexpr size_t MAX_TX_TO_CONSIDER = 100;
 
-        // transaction connected to newit which did not make to the journal
         setEntries affected = getConnectedNL(setEntries{newit}, filterOutAlreadyAccepted, MAX_TX_TO_CONSIDER);
         affected.insert(newit);
-        
+
         checkJournalAcceptanceNL(affected, nonNullChangeSet.Get());
     }
 }
@@ -1005,6 +1016,8 @@ void CTxMemPool::RemoveForBlock(
         removeUncheckedNL(entry, changeSet, MemPoolRemovalReason::BLOCK, nullptr);                                       
     }
 
+    UpdateAncestorsHeightNL(childrenOfToRemove);
+
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
     checkJournalAcceptanceNL(affectedStillInMempool, nonNullChangeSet.Get());
 
@@ -1012,8 +1025,6 @@ void CTxMemPool::RemoveForBlock(
     for (const auto &tx : vtx) {
         clearPrioritisationNL(tx->GetId());
     }
-
-    UpdateAncestorsHeightNL(childrenOfToRemove);
 
     // Debug: Print mempool tree after removal
     if (gDebugMempoolTree) {
@@ -1341,12 +1352,10 @@ bool CTxMemPool::CompareDepthAndScoreNL(const uint256 &hasha,
     if (j == mapTx.end()) {
         return true;
     }
-    uint64_t counta = i->GetCountWithAncestors();
-    uint64_t countb = j->GetCountWithAncestors();
-    if (counta == countb) {
-        return CompareTxMemPoolEntryByScore()(*i, *j);
-    }
-    return counta < countb;
+    size_t hi = i->GetAncestorsHeight();
+    size_t hj = j->GetAncestorsHeight();
+    if (hi != hj) return hi < hj;
+    return CompareTxMemPoolEntryByScore()(*i, *j);
 }
 
 namespace {
@@ -1355,12 +1364,10 @@ public:
     bool
     operator()(const CTxMemPool::indexed_transaction_set::const_iterator &a,
                const CTxMemPool::indexed_transaction_set::const_iterator &b) {
-        uint64_t counta = a->GetCountWithAncestors();
-        uint64_t countb = b->GetCountWithAncestors();
-        if (counta == countb) {
-            return CompareTxMemPoolEntryByScore()(*a, *b);
-        }
-        return counta < countb;
+        size_t ha = a->GetAncestorsHeight();
+        size_t hb = b->GetAncestorsHeight();
+        if (ha != hb) return ha < hb;
+        return CompareTxMemPoolEntryByScore()(*a, *b);
     }
 };
 } // namespace
@@ -1750,145 +1757,27 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
         }
     };
 
-    // ensures that transaction will be removed from journal if it is inside, and if not inside journal it will not be added
-    auto ensureRemoved = [this, &changeSet](txiter entry){
-        auto txid = entry->GetTx().GetId();
-        bool isInJournal = mJournalBuilder.getCurrentJournal()->checkTxnExists(txid);
-        if(isInJournal)
-        {
-            if(!changeSet.checkTxnRemoved(txid))
-            {
-                changeSet.addOperation(CJournalChangeSet::Operation::REMOVE, { *entry });
-            }
-        }
-        else
-        {
-            if(changeSet.checkTxnAdded(txid))
-            {
-                changeSet.addOperation(CJournalChangeSet::Operation::REMOVE, { *entry });
-            }
-        }
-    };
-
     // returns topo sorted vector of transactions
+    // ancestorsHeight is kept current by UpdateAncestorsHeightNL after RemoveForBlock,
+    // ensuring parents always sort before children without relying on nCountWithAncestors.
     auto topoSortedTxFromSet = [](const setEntries& txSet){
         std::vector<txiter> txs(txSet.begin(), txSet.end());
         std::sort(txs.begin(), txs.end(),
-            [](const txiter& entry1, const txiter& entry2)
-            {
-                return entry1->GetCountWithAncestors() < entry2->GetCountWithAncestors();
-            }
-        );
+            [](const txiter& a, const txiter& b) {
+                size_t ha = a->GetAncestorsHeight();
+                size_t hb = b->GetAncestorsHeight();
+                if (ha != hb) return ha < hb;
+                return a->GetTx().GetId() < b->GetTx().GetId();
+            });
         return txs;
     };
 
-    // returns debt of the transaction, regardless of the parents
-    auto calculateDebt = [this](txiter entry){
-        auto fee = entry->GetModifiedFee();
-        auto neededFee = blockMinTxfee.GetFee(entry->GetTxSize());
-        if(fee < neededFee)
-        {
-            return neededFee - fee;
-        }
-        return Amount(0);
-    };
-
-
-    
-    auto txsToCheck = topoSortedTxFromSet(affectedTransactions);
-    
-    // limit ourself to fixed number of recalculation rounds
-    constexpr int MAX_RECHECK_COUNT = 3;
-
-    for(int round = 0; round < MAX_RECHECK_COUNT; round++)
+    // Fee-rate filtering is disabled: all mempool transactions are accepted into
+    // the journal regardless of fee. Add in topological order so parents always
+    // precede their children in the journal.
+    for(txiter ent: topoSortedTxFromSet(affectedTransactions))
     {
-        // flag that signals that we have detected cpfp (child pays for parent) scenario and we have added
-        // previously visited transactions (parents) to the journal. this can result in not accepting transaction
-        // that could be accepted
-        // for example: we have two transactions (tx1, tx2) that share a common low-paying parent. tx1 does not pay
-        // enough for the parent but pays enough for itself. tx2 pays enough for itself and the parent. 
-        // in this case if we visit tx1 first, we will not add it to the journal. but after tx2 and its parent 
-        // has been moved to the journal, tx1  is now free of it parent's debt and can be moved to the journal. 
-        // so if we accepted transactions through cpfp we will revisit all transactions that did not make it to the journal
-        bool cpfpExecuted = false;
-
-        // keys are entries that do not pay enough, values are sets of the their's ancestors which do not pay enough
-        std::map<txiter, setEntries, CompareIteratorByHash> nonPayingTxWithAncestors;
-
-        for(txiter ent: txsToCheck)
-        {
-            // let's collect all non-paying ancestors
-            setEntries nonpayingAncestors;
-            for(txiter parent: GetMemPoolParentsNL(ent))
-            {
-                // is parent in debt?
-                auto parentDebtIt = nonPayingTxWithAncestors.find(parent);
-                if (parentDebtIt == nonPayingTxWithAncestors.end())
-                {
-                    continue;
-                }
-
-                // our parent is in debt, let's collect theirs non paying ancestors too
-                nonpayingAncestors.insert(parentDebtIt->second.cbegin(), parentDebtIt->second.cend());
-                nonpayingAncestors.insert(parent);
-            }
-
-            // now sum up all ancestor's debt (if any)
-            Amount ancestorsDebt(0);
-            for(txiter ancestor: nonpayingAncestors)
-            {
-                ancestorsDebt += calculateDebt(ancestor);
-            }
-
-            Amount fee = ent->GetModifiedFee();
-            Amount excessFee = fee - blockMinTxfee.GetFee(ent->GetTxSize()); 
-
-            if(excessFee >= ancestorsDebt)
-            {
-                // Great! This transactions pays enough, first remove ancestors from the debt list (if any) 
-                // and add them to the journal (in topo-order)
-                for(auto ancestor: topoSortedTxFromSet(nonpayingAncestors))
-                {
-                    ensureAdded(ancestor);
-                    nonPayingTxWithAncestors.erase(ancestor);
-                    cpfpExecuted = true;
-                }
-                
-                ensureAdded(ent);
-            }
-            else
-            {
-                // Lets put the tx on the debt list
-                nonPayingTxWithAncestors.insert(std::make_pair(ent, nonpayingAncestors));
-            }
-        }
-
-        bool lastRound = (round + 1) >= MAX_RECHECK_COUNT;
-
-        if(cpfpExecuted && !lastRound)
-        {
-            // we have executed cpfp (child pays for parent) so we should revisit all transaction
-            // that did not make it to the journal, see explanation in comment at the beginning of the outer loop
-            // optimization suggestion: we could limit re-check on the transaction that are connected with transactions in the cpfp groups
-            setEntries nonPayingTxs;
-            for(const auto& nonPaying: nonPayingTxWithAncestors)
-            {
-                nonPayingTxs.insert(nonPaying.first);
-            }
-            txsToCheck = topoSortedTxFromSet(nonPayingTxs);
-        }
-        else
-        {
-            // cpfp is not executed in this round or this is the last round, 
-            // transactions that do not pay enough
-            // have no more chance to enter the journal (and be mined)
-            // so lets ensure that they are out of the journal
-            for(const auto& nonPaying: nonPayingTxWithAncestors)
-            {
-                ensureRemoved(nonPaying.first);
-            }
-            break;
-        }
+        ensureAdded(ent);
     }
 }
 
