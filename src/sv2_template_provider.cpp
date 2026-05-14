@@ -59,7 +59,7 @@ static double CalcCapReleaseInterval(double capInterval)
     double U = static_cast<double>(GetRand(std::numeric_limits<uint64_t>::max())) /
                static_cast<double>(std::numeric_limits<uint64_t>::max());
 
-    if (U < 0.75) {
+    if (0.75 > U) {
         // 75 %: uniform in [CAP_MIN_SEC, capInterval]
         double V = static_cast<double>(GetRand(std::numeric_limits<uint64_t>::max())) /
                    static_cast<double>(std::numeric_limits<uint64_t>::max());
