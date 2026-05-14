@@ -4,11 +4,13 @@
 #include <iostream>
 #include <thread>
 #include <sstream>
+#include <limits>
 #include "util.h"
 
 #include "net/netbase.h"
 #include "util/check.h"
 #include "fs.h"
+#include "random.h"
 #include "utilstrencodings.h"
 using node::Sv2CoinbaseOutputDataSizeMsg;
 using node::Sv2MsgType;
@@ -36,6 +38,39 @@ static constexpr double SV2_CAP_DELTA =
     ? (SV2_CAP_INITIAL_INTERVAL * SV2_CAP_INITIAL_INTERVAL) / SV2_CAP_CONVERGENCE_SECS
     : 0.0;
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Compute the actual release interval from the current capacitor decay value.
+ *  @param capInterval  current decay interval (seconds), monotonically decreases
+ *  @return sleep duration for the capacitor thread:
+ *          - capInterval          when capInterval <= 3 min (direct use)
+ *          - biased random in [1 min, 15 min] when capInterval > 3 min,
+ *            with 75 % probability below capInterval and 25 % above it.
+ */
+static double CalcCapReleaseInterval(double capInterval)
+{
+    constexpr double CAP_MIN_SEC = 60.0;     // 1 minute
+    constexpr double CAP_MAX_SEC = 900.0;    // 15 minutes
+    constexpr double CAP_THRESHOLD = 180.0;  // 3 minutes
+
+    if (capInterval <= CAP_THRESHOLD) {
+        return capInterval;
+    }
+
+    double U = static_cast<double>(GetRand(std::numeric_limits<uint64_t>::max())) /
+               static_cast<double>(std::numeric_limits<uint64_t>::max());
+
+    if (U < 0.75) {
+        // 75 %: uniform in [CAP_MIN_SEC, capInterval]
+        double V = static_cast<double>(GetRand(std::numeric_limits<uint64_t>::max())) /
+                   static_cast<double>(std::numeric_limits<uint64_t>::max());
+        return CAP_MIN_SEC + (capInterval - CAP_MIN_SEC) * V;
+    } else {
+        // 25 %: uniform in [capInterval, CAP_MAX_SEC]
+        double V = static_cast<double>(GetRand(std::numeric_limits<uint64_t>::max())) /
+                   static_cast<double>(std::numeric_limits<uint64_t>::max());
+        return capInterval + (CAP_MAX_SEC - capInterval) * V;
+    }
+}
 
 Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemPool& mempool) 
     : m_config{config}, m_mining{mining}, m_mempool{mempool}
@@ -526,9 +561,16 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
         double interval;
         {
             LOCKMt(m_tp_mutex);
-            interval = m_cap_current_interval;
+            interval = CalcCapReleaseInterval(m_cap_current_interval);
         }
-        if (interval <= 0.0) continue;
+        if (interval <= 0.0) {
+            // Defensive: decay already at zero but thread is still running.
+            // Clear pending state and exit cleanly to avoid hanging SV2 dispatch.
+            LOCKMt(m_tp_mutex);
+            m_cap_pending = false;
+            LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs, exiting handler\n", interval);
+            break;
+        }
 
         // Sleep for the interval; wake early only on interrupt
         {
