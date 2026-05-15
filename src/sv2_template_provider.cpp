@@ -120,6 +120,8 @@ Sv2TemplateProvider::Sv2TemplateProvider(Config &config, Mining& mining, CTxMemP
     version_pubkey_bytes[1] = 0;
     XOnlyPubKey authority_pub_key = XOnlyPubKey(authority_key.GetPubKey());
     std::copy(authority_pub_key.begin(), authority_pub_key.end(), version_pubkey_bytes.begin() + 2);
+    LogPrint(BCLog::SV2, "SV2 authority public key (set as tp_authority_public_key in pool config): %s\n",
+             EncodeBase58Check(std::vector<uint8_t>(version_pubkey_bytes.begin(), version_pubkey_bytes.end())));
 
     // Generate and sign certificate
     auto now{GetTime<std::chrono::seconds>()};
