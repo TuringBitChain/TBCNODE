@@ -120,17 +120,6 @@ void Sv2Transport::SendHandshakeReply() noexcept
     SetReceiveState(RecvState::APP);
 }
 
-Transport::BytesToSend Sv2Transport::GetBytesToSend(bool have_next_message) const noexcept
-{
-    AssertLockNotHeld(m_send_mutex);
-    assert(false);
-
-    return {
-        bsv::span{m_send_buffer}.subspan(0,0),
-        false,
-        m_send_type
-    };
-}
 
 Sv2Transport::Sv2BytesToSend Sv2Transport::GetBytesToSendSv2(bool have_next_message) const noexcept
 {
@@ -164,62 +153,6 @@ void Sv2Transport::MarkBytesSent(size_t bytes_sent) noexcept
     }
 }
 
-bool Sv2Transport::SetMessageToSend(SerializedNetMsg& msg) noexcept
-{
-    LogPrint(BCLog::SV2, "call deprecated SetMessageToSend (SerializedNetMsg)\n");
-    // AssertLockNotHeld(m_send_mutex);
-    // LOCKMt(m_send_mutex);
-
-    // // We only allow adding a new message to be sent when in the READY state (so the packet cipher
-    // // is available) and the send buffer is empty. This limits the number of messages in the send
-    // // buffer to just one, and leaves the responsibility for queueing them up to the caller.
-    // if (m_send_state != SendState::READY) {
-    //     //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "SendState is not READY\n");
-    //     LogPrintf("SendState is not READY\n");
-    //     return false;
-    // }
-
-    // if (!m_send_buffer.empty()) {
-    //     //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Send buffer is not empty\n");
-    //     LogPrintf("Send buffer is not empty\n");
-    //     return false;
-    // }
-
-    // // The Sv2NetMsg is wrapped inside a dummy CSerializedNetMsg, extract it:
-    // Sv2NetMsg sv2_msg(std::move(msg));
-    // // Reconstruct the header:
-    // Sv2NetHeader hdr(sv2_msg.m_sv2_header.m_msg_type, sv2_msg.size());
-
-    // // Construct ciphertext in send buffer.
-    // const size_t encrypted_msg_size = Sv2Cipher::EncryptedMessageSize(sv2_msg.size());
-    // m_send_buffer.resize(SV2_HEADER_ENCRYPTED_SIZE + encrypted_msg_size);
-    // bsv::span<std::byte> buffer_span{bsv::MakeWritableByteSpan(m_send_buffer)};
-
-    // // Header
-    // DataStream ss_header_plain{};
-    // ss_header_plain << hdr;
-    // //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Header: %s\n", HexStr(ss_header_plain));
-    // LogPrintf("Header: %s\n", HexStr(ss_header_plain));
-    // bsv::span<std::byte> header_encrypted{buffer_span.subspan(0, SV2_HEADER_ENCRYPTED_SIZE)};
-    // if (!m_cipher.EncryptMessage(ss_header_plain, header_encrypted)) {
-    //     return false;
-    // }
-
-    // // Payload
-    // bsv::span<const std::byte> payload_plain = bsv::MakeByteSpan(sv2_msg);
-    // // TODO: truncate very long messages, about 100 bytes at the start and end
-    // //       is probably enough for most debugging.
-    // // LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "Payload: %s\n", HexStr(payload_plain));
-    // bsv::span<std::byte> payload_encrypted{buffer_span.subspan(SV2_HEADER_ENCRYPTED_SIZE, encrypted_msg_size)};
-    // if (!m_cipher.EncryptMessage(payload_plain, payload_encrypted)) {
-    //     return false;
-    // }
-
-    // // Release memory (not needed with std::move above)
-    // // ClearShrink(msg.data);
-
-    return true;
-}
 
 bool Sv2Transport::SetMessageToSend(Sv2NetMsg& msg) noexcept
 {

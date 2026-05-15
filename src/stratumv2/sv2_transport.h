@@ -164,23 +164,12 @@ public:
     Sv2NetMsg& GetReceivedMessage() noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
 
     // Send side functions.
-    // Override not implemented
-    bool SetMessageToSend(SerializedNetMsg& msg) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
     bool SetMessageToSend(Sv2NetMsg& msg) noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
 
-
-    /** Return type for GetBytesToSend, consisting of:
-     *  - Span<const uint8_t> to_send: span of bytes to be sent over the wire (possibly empty).
-     *  - bool more: whether there will be more bytes to be sent after the ones in to_send are
-     *    all sent (as signaled by MarkBytesSent()).
-     */
     using Sv2BytesToSend = std::tuple<
         bsv::span<const uint8_t> /*to_send*/,
         bool /*more*/
     >;
-
-    // Override not implemented
-    BytesToSend GetBytesToSend(bool have_next_message) const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
     Sv2BytesToSend GetBytesToSendSv2(bool have_next_message) const noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
 
     void MarkBytesSent(size_t bytes_sent) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);

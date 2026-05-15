@@ -172,11 +172,10 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
                     }
                 }
 
-                //const auto& [data, more, _m_message_type] = client->m_transport->GetBytesToSend(/*have_next_message=*/it != client->m_send_messages.end());
                 const auto& [data, more] = client->m_transport->GetBytesToSendSv2(/*have_next_message=*/it != client->m_send_messages.end());
                 size_t total_sent = 0;
 
-                // We rely on the 'more' value returned by GetBytesToSend to correctly predict whether more
+                // We rely on the 'more' value returned by GetBytesToSendSv2 to correctly predict whether more
                 // bytes are still to be sent, to correctly set the MSG_MORE flag. As a sanity check,
                 // verify that the previously returned 'more' was correct.
                 if (expected_more.has_value()) Assume(!data.empty() == *expected_more);
