@@ -214,6 +214,7 @@ public:
             ClearKeyData();
             throw std::ios_base::failure("invalid key");
         }
+        fValid = true;
     }
 };
 
