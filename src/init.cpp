@@ -104,6 +104,11 @@ static CZMQNotificationInterface *pzmqNotificationInterface = nullptr;
 #define MIN_CORE_FILEDESCRIPTORS 150
 #endif
 
+// fd slots reserved for the SV2 template provider (1 listen socket + client sockets).
+// Subtracted from the connection budget when -sv2 is enabled so that SV2 sockets
+// cannot push a new outbound P2P socket's fd number above FD_SETSIZE.
+static const int SV2_RESERVED_FDS = 8;
+
 /** Used to pass flags to the Bind() function */
 enum BindFlags {
     BF_NONE = 0,
@@ -723,6 +728,11 @@ std::string HelpMessage(HelpMessageMode mode) {
         strprintf(_("Template update interval in seconds "
                     "(default: %u)"),
                   DEFAULT_SV2_INTERVAL));
+    strUsage += HelpMessageOpt(
+        "-sv2maxconn=<n>",
+        strprintf(_("Maximum number of simultaneous Stratum v2 client connections "
+                    "(default: %u)"),
+                  DEFAULT_SV2_MAX_CLIENTS));
 
 #ifdef ENABLE_WALLET
     strUsage += CWallet::GetWalletHelpString(showDebug);
@@ -1680,18 +1690,22 @@ bool AppInitParameterInteraction(Config &config) {
         gArgs.GetArg("-maxconnections", DEFAULT_MAX_PEER_CONNECTIONS);
     nMaxConnections = std::max(nUserMaxConnections, 0);
 
-    // Trim requested connection counts, to fit into system limitations
+    // Trim requested connection counts, to fit into system limitations.
+    // Reserve additional fd slots for the SV2 template provider when enabled,
+    // because its sockets are opened after this budget is calculated and are
+    // not otherwise accounted for.
+    const int nSv2Reserved = gArgs.GetBoolArg("-sv2", false) ? SV2_RESERVED_FDS : 0;
     nMaxConnections =
         std::max(std::min(nMaxConnections,
                           (int)(FD_SETSIZE - nBind - MIN_CORE_FILEDESCRIPTORS -
-                                MAX_ADDNODE_CONNECTIONS)),
+                                MAX_ADDNODE_CONNECTIONS - nSv2Reserved)),
                  0);
     nFD = RaiseFileDescriptorLimit(nMaxConnections + MIN_CORE_FILEDESCRIPTORS +
-                                   MAX_ADDNODE_CONNECTIONS);
+                                   MAX_ADDNODE_CONNECTIONS + nSv2Reserved);
     if (nFD < MIN_CORE_FILEDESCRIPTORS)
         return InitError(_("Not enough file descriptors available."));
     nMaxConnections =
-        std::min(nFD - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS,
+        std::min(nFD - MIN_CORE_FILEDESCRIPTORS - MAX_ADDNODE_CONNECTIONS - nSv2Reserved,
                  nMaxConnections);
 
     if (nMaxConnections < nUserMaxConnections) {
@@ -2988,10 +3002,16 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         options.fee_delta = gArgs.GetArg("-sv2feedelta", DEFAULT_SV2_FEE_DELTA);
 
         int64_t sv2interval = gArgs.GetArg("-sv2interval", DEFAULT_SV2_INTERVAL);
-        if (sv2interval < 1) {                                                   
+        if (sv2interval < 1) {
             return InitError(_("-sv2interval must be at least one second"));
-        }                                                                   
+        }
         options.fee_check_interval = std::chrono::seconds(sv2interval);
+
+        int64_t sv2maxconn = gArgs.GetArg("-sv2maxconn", (int64_t)DEFAULT_SV2_MAX_CLIENTS);
+        if (sv2maxconn < 1 || sv2maxconn > 1024) {
+            return InitError(_("-sv2maxconn must be between 1 and 1024"));
+        }
+        options.max_clients = static_cast<size_t>(sv2maxconn);
 
         if (!NodeContext::GetInstance().sv2_template_provider->Start(options)) {
             return InitError(_("Unable to start Stratum v2 Template Provider"));

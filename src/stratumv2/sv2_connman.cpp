@@ -31,9 +31,10 @@ Sv2Connman::~Sv2Connman()
     StopThreads();
 }
 
-bool Sv2Connman::Start(Sv2EventsInterface* msgproc, std::string host, uint16_t port)
+bool Sv2Connman::Start(Sv2EventsInterface* msgproc, std::string host, uint16_t port, size_t max_clients)
 {
     m_msgproc = msgproc;
+    m_max_clients = max_clients;
 
     try {
         auto sock = BindListenPort(host, port);
@@ -123,14 +124,20 @@ void Sv2Connman::ThreadSv2Handler() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
 
             auto sock = m_listening_socket->Accept(reinterpret_cast<struct sockaddr*>(&sockaddr), &sockaddr_len);
             if (sock) {
-                Assume(m_certificate);
                 LOCKMt(m_clients_mutex);
-                std::unique_ptr transport = std::make_unique<Sv2Transport>(m_static_key, m_certificate.value());
-                size_t id{m_next_client_id++};
-                auto client = std::make_unique<Sv2Client>(id, std::move(sock), std::move(transport));
-                //LogPrintLevel(BCLog::SV2, BCLog::Level::Trace, "New client id=%zu connected\n", client->m_id);
-                LogPrint(BCLog::SV2, "New client id=%zu connected\n", client->m_id);
-                m_sv2_clients.emplace_back(std::move(client));
+                if (m_sv2_clients.size() >= m_max_clients) {
+                    LogPrint(BCLog::SV2, "SV2 client limit reached (%zu/%zu), rejecting new connection\n",
+                             m_sv2_clients.size(), m_max_clients);
+                    // sock goes out of scope here, closing the fd immediately
+                } else {
+                    Assume(m_certificate);
+                    std::unique_ptr transport = std::make_unique<Sv2Transport>(m_static_key, m_certificate.value());
+                    size_t id{m_next_client_id++};
+                    auto client = std::make_unique<Sv2Client>(id, std::move(sock), std::move(transport));
+                    LogPrint(BCLog::SV2, "New client id=%zu connected (%zu/%zu)\n",
+                             client->m_id, m_sv2_clients.size() + 1, m_max_clients);
+                    m_sv2_clients.emplace_back(std::move(client));
+                }
             }
         }
 

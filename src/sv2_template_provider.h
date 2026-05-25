@@ -62,6 +62,12 @@ struct Sv2TemplateProviderOptions
      * Block template update interval (to check for increased fees)
      */
     std::chrono::seconds fee_check_interval{30};
+
+    /**
+     * Maximum number of SV2 clients (pool/translator) allowed to connect simultaneously.
+     * Excess connections are rejected immediately after TCP accept.
+     */
+    size_t max_clients{DEFAULT_SV2_MAX_CLIENTS};
 };
 
 /**

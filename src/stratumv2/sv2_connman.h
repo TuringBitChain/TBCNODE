@@ -116,6 +116,9 @@ public:
     virtual ~Sv2EventsInterface() = default;
 };
 
+/** Default maximum number of simultaneously connected SV2 clients. */
+static constexpr size_t DEFAULT_SV2_MAX_CLIENTS{8};
+
 /*
  * Handle Stratum v2 connections, similar to CConnman.
  * Currently only supports inbound connections.
@@ -125,6 +128,9 @@ class Sv2Connman
 private:
     /** Interface to pass events up */
     Sv2EventsInterface* m_msgproc;
+
+    /** Maximum number of SV2 clients allowed simultaneously. */
+    size_t m_max_clients{DEFAULT_SV2_MAX_CLIENTS};
 
     /**
      * The current protocol version of stratum v2 supported by the server. Not to be confused
@@ -215,8 +221,10 @@ public:
     /**
      * Starts the Stratum v2 server and thread.
      * returns false if port is unable to bind.
+     * max_clients caps simultaneous SV2 connections; excess connections are rejected.
      */
-    [[nodiscard]] bool Start(Sv2EventsInterface* msgproc, std::string host, uint16_t port);
+    [[nodiscard]] bool Start(Sv2EventsInterface* msgproc, std::string host, uint16_t port,
+                             size_t max_clients = DEFAULT_SV2_MAX_CLIENTS);
 
     /**
      * Triggered on interrupt signals to stop the main event loop in ThreadSv2Handler().

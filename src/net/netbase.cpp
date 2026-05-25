@@ -22,6 +22,10 @@
 #include <fcntl.h>
 #endif
 
+#ifdef USE_POLL
+#include <poll.h>
+#endif
+
 #include <boost/algorithm/string/case_conv.hpp> // for to_lower()
 #include <boost/algorithm/string/predicate.hpp> // for startswith() and endswith()
 
@@ -445,11 +449,18 @@ static bool ConnectSocketDirectly(const CService &addrConnect,
         // WSAEINVAL is here because some legacy version of winsock uses it
         if (nErr == WSAEINPROGRESS || nErr == WSAEWOULDBLOCK ||
             nErr == WSAEINVAL) {
+#ifdef USE_POLL
+            struct pollfd pfd;
+            pfd.fd = hSocket;
+            pfd.events = POLLOUT;
+            int nRet = poll(&pfd, 1, nTimeout);
+#else
             struct timeval timeout = MillisToTimeval(nTimeout);
             fd_set fdset;
             FD_ZERO(&fdset);
             FD_SET(hSocket, &fdset);
             int nRet = select(hSocket + 1, nullptr, &fdset, nullptr, &timeout);
+#endif
             if (nRet == 0) {
                 LogPrint(BCLog::NET, "connection to %s timeout\n",
                          addrConnect.ToString());
@@ -457,7 +468,7 @@ static bool ConnectSocketDirectly(const CService &addrConnect,
                 return false;
             }
             if (nRet == SOCKET_ERROR) {
-                LogPrintf("select() for %s failed: %s\n",
+                LogPrintf("connect wait for %s failed: %s\n",
                           addrConnect.ToString(),
                           NetworkErrorString(WSAGetLastError()));
                 CloseSocket(hSocket);
