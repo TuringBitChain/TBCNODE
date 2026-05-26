@@ -166,6 +166,13 @@ bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
             , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2CapacitorHandler, this)));
     }
 
+    // C2: background builder pre-warms m_cached_workset so handler / capacitor
+    // can serve from cache instead of synchronously calling createNewBlock.
+    m_builder_thread = std::thread(&TraceThread<std::function<void()>>
+        , "sv2builder"
+        , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadBuilder, this)));
+    RequestRebuild();   // kick an initial build so first client connect can serve from cache
+
     return true;
 }
 
@@ -209,7 +216,8 @@ void Sv2TemplateProvider::Interrupt()
 {
     LogPrint(BCLog::SV2, "Sv2TemplateProvider interrupted\n");
     m_flag_interrupt_sv2 = true;
-    m_cap_cv.notify_all();  // wake capacitor thread so it exits cleanly
+    m_cap_cv.notify_all();      // wake capacitor thread so it exits cleanly
+    m_builder_cv.notify_all();  // C2: wake builder thread
 }
 
 void Sv2TemplateProvider::StopThreads()
@@ -222,6 +230,9 @@ void Sv2TemplateProvider::StopThreads()
     }
     if (m_thread_sv2_capacitor.joinable()) {
         m_thread_sv2_capacitor.join();
+    }
+    if (m_builder_thread.joinable()) {
+        m_builder_thread.join();   // C2
     }
 }
 
@@ -294,11 +305,17 @@ void Sv2TemplateProvider::ThreadSv2Handler()
                 m_best_prev_hash = tip->hash;
                 m_last_block_time = GetTime<std::chrono::seconds>();
                 m_template_last_update = GetTime<std::chrono::seconds>();
+                m_cached_workset.reset();   // C1: tip moved, old template stale
                 if (m_cap_current_interval > 0.0 && !m_cap_pending) {
                     m_cap_pending = true;
                     signal_cap = true;  // first arm: need to wake capacitor thread
                 }
             }
+        }
+
+        // C2: tip moved -> ask builder to refresh immediately (outside m_tp_mutex)
+        if (best_block_changed) {
+            RequestRebuild();
         }
 
         m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
@@ -425,29 +442,33 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
     }
 }
 
-bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coinbase_output_max_additional_size, NewWorkSet &newWorkSet)
+bool Sv2TemplateProvider::BuildNewWorkSetWithId(bool future_template,
+                                                 uint64_t template_id,
+                                                 NewWorkSet& newWorkSet)
 {
-    AssertLockHeld(m_tp_mutex);
-
-    // Create new block
+    // No m_tp_mutex required — only touches the mining interface and a
+    // throwaway BlockTemplate. createNewBlock takes its own cs_main / mempool
+    // locks internally.
     CScript scriptDummy = CScript() << OP_TRUE;
     std::shared_ptr<BlockTemplate> pblocktemplate{m_mining.createNewBlock(scriptDummy)};
     if (!pblocktemplate) {
-        LogPrint(BCLog::SV2, "BuildNewWorkSet: out of memory or no mining factory\n");
+        LogPrint(BCLog::SV2, "BuildNewWorkSetWithId: createNewBlock returned null\n");
         return false;
     }
-
-    // nTime and nBits are already set correctly by createNewBlock internals (FillBlockHeader).
-    // Zero out nNonce so miners start from a clean state.
     pblocktemplate->getBlockRef()->nNonce = 0;
     LogPrint(BCLog::SV2, "BuildNewWorkSet: nTime=%u nBits=%08x\n",
         pblocktemplate->getBlockRef()->nTime, pblocktemplate->getBlockRef()->nBits);
 
-    Sv2NewTemplateMsg new_template{*pblocktemplate, m_template_id, future_template};
-    Sv2SetNewPrevHashMsg set_new_prev_hash{*pblocktemplate, m_template_id};
-
-    newWorkSet = { new_template, pblocktemplate, set_new_prev_hash};
+    Sv2NewTemplateMsg new_template{*pblocktemplate, template_id, future_template};
+    Sv2SetNewPrevHashMsg set_new_prev_hash{*pblocktemplate, template_id};
+    newWorkSet = {new_template, pblocktemplate, set_new_prev_hash};
     return true;
+}
+
+bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coinbase_output_max_additional_size, NewWorkSet &newWorkSet)
+{
+    AssertLockHeld(m_tp_mutex);
+    return BuildNewWorkSetWithId(future_template, m_template_id, newWorkSet);
 }
 
 void Sv2TemplateProvider::PruneBlockTemplateCache()
@@ -490,9 +511,44 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     // TODO: reuse template_id for clients with the same m_default_coinbase_tx_additional_output_size
     ++m_template_id;
     NewWorkSet new_work_set;
-    if (!BuildNewWorkSet(/*future_template=*/send_new_prevhash, client.m_coinbase_tx_outputs_size, new_work_set)) {
-        return false;
+
+    // ── C1: template reuse cache ───────────────────────────────────────────
+    // For fee-update style sends (send_new_prevhash=false) we can serve the
+    // previously built NewWorkSet as long as:
+    //   - it was built recently (CACHE_TTL)
+    //   - mempool hasn't churned past CACHE_MEMPOOL_DELTA txs
+    //   - chain tip hasn't changed
+    // The block template (shared_ptr) is reused verbatim; we bump m_template_id
+    // so SubmitSolution lookups remain monotonic.
+    bool cache_hit = false;
+    if (!send_new_prevhash && m_cached_workset.has_value()) {
+        const auto now = std::chrono::steady_clock::now();
+        const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
+        const bool ttl_ok   = (now - m_cache_built_at) < CACHE_TTL;
+        const bool delta_ok = (cur_seq - m_cache_mempool_seq) < CACHE_MEMPOOL_DELTA;
+        const bool prev_ok  = (m_cached_workset->block_template->getBlockRef()->hashPrevBlock
+                               == m_best_prev_hash);
+        if (ttl_ok && delta_ok && prev_ok) {
+            new_work_set = *m_cached_workset;
+            new_work_set.new_template.m_template_id = m_template_id;
+            cache_hit = true;
+            LogPrint(BCLog::SV2,
+                "SendWork: cache hit (age=%llds, dseq=%u, txs=%zu) -> reuse as id=%lu\n",
+                std::chrono::duration_cast<std::chrono::seconds>(now - m_cache_built_at).count(),
+                cur_seq - m_cache_mempool_seq,
+                new_work_set.block_template->getBlockRef()->vtx.size() - 1,
+                m_template_id);
+        }
     }
+    if (!cache_hit) {
+        if (!BuildNewWorkSet(/*future_template=*/send_new_prevhash, client.m_coinbase_tx_outputs_size, new_work_set)) {
+            return false;
+        }
+        m_cached_workset    = new_work_set;
+        m_cache_built_at    = std::chrono::steady_clock::now();
+        m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+    }
+    // ───────────────────────────────────────────────────────────────────────
 
     if (m_best_prev_hash == uint256{}) {
         // g_best_block is set UpdateTip(), so will be 0 when the node starts
@@ -602,6 +658,12 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
                 return;
             }
 
+            // C1: capacitor produced a fresh template — feed it back into the
+            // reuse cache so the next fee-tick can serve it without rebuilding.
+            m_cached_workset    = new_work_set;
+            m_cache_built_at    = std::chrono::steady_clock::now();
+            m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+
             if (m_block_template_cache.size() >= MAX_BLOCK_TEMPLATE_CACHE_SIZE) {
                 m_block_template_cache.erase(m_block_template_cache.begin());
             }
@@ -631,6 +693,74 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
             break;
         }
     }
+}
+
+void Sv2TemplateProvider::RequestRebuild()
+{
+    {
+        std::lock_guard<std::mutex> lk(m_builder_mutex);
+        m_builder_request_pending = true;
+    }
+    m_builder_cv.notify_one();
+}
+
+void Sv2TemplateProvider::ThreadBuilder()
+{
+    LogPrint(BCLog::SV2, "Builder thread start\n");
+    while (!m_flag_interrupt_sv2) {
+        // Wait for explicit request or periodic tick.
+        {
+            std::unique_lock<std::mutex> lk(m_builder_mutex);
+            m_builder_cv.wait_for(lk, BUILDER_TICK, [this]{
+                return m_builder_request_pending || m_flag_interrupt_sv2.load();
+            });
+            if (m_flag_interrupt_sv2) break;
+            m_builder_request_pending = false;
+        }
+
+        // Decide whether a rebuild is warranted; grab a placeholder id.
+        bool need_rebuild = false;
+        uint64_t placeholder_id = 0;
+        {
+            LOCKMt(m_tp_mutex);
+            if (!m_cached_workset.has_value()) {
+                need_rebuild = true;
+            } else {
+                const auto now = std::chrono::steady_clock::now();
+                const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
+                const bool age_stale   = (now - m_cache_built_at) > (CACHE_TTL / 2);
+                const bool delta_stale = (cur_seq - m_cache_mempool_seq) > (CACHE_MEMPOOL_DELTA / 2);
+                need_rebuild = age_stale || delta_stale;
+            }
+            placeholder_id = m_template_id + 1; // non-binding tag; SendWork overrides
+        }
+        if (!need_rebuild) continue;
+
+        // Heavy build OUTSIDE m_tp_mutex. createNewBlock still grabs cs_main /
+        // mempool internally — that contention with RPC remains, but SV2
+        // handler / capacitor threads stay responsive.
+        NewWorkSet new_work_set;
+        if (!BuildNewWorkSetWithId(/*future_template=*/true, placeholder_id, new_work_set)) {
+            continue;
+        }
+
+        // Commit to cache.
+        {
+            LOCKMt(m_tp_mutex);
+            // Guard against tip having moved while we were building outside the
+            // lock: if our build is already stale (prevhash mismatch), drop it.
+            if (m_best_prev_hash != uint256{} &&
+                new_work_set.block_template->getBlockRef()->hashPrevBlock != m_best_prev_hash) {
+                LogPrint(BCLog::SV2, "Builder: tip moved during build, discard\n");
+                continue;
+            }
+            m_cached_workset    = std::move(new_work_set);
+            m_cache_built_at    = std::chrono::steady_clock::now();
+            m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+            LogPrint(BCLog::SV2, "Builder: cache refreshed (placeholder_id=%lu)\n", placeholder_id);
+        }
+    }
+    LogPrint(BCLog::SV2, "Builder thread exit\n");
 }
 
 void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2RequestTransactionDataMsg msg)

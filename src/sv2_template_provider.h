@@ -277,6 +277,17 @@ private:
      */
     [[nodiscard]] bool BuildNewWorkSet(bool future_template, unsigned int coinbase_output_max_additional_size, NewWorkSet& newWorkSet) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
 
+    /**
+     * Lock-free helper used by ThreadBuilder. Does not touch m_tp_mutex-guarded
+     * state; the caller supplies a template_id placeholder (the real id is
+     * assigned later by SendWork). createNewBlock internally acquires cs_main
+     * and mempool locks — that contention with RPC is unavoidable, but the
+     * SV2 handler / capacitor threads stay free during the build.
+     */
+    [[nodiscard]] bool BuildNewWorkSetWithId(bool future_template,
+                                              uint64_t template_id,
+                                              NewWorkSet& newWorkSet);
+
     /* Forget templates from before the last block, but with a few seconds margin. */
     void PruneBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
 
@@ -329,6 +340,38 @@ private:
      * Last time we created a new template
      */
     std::chrono::milliseconds m_template_last_update{0};
+
+    // ── C1: template reuse cache ──────────────────────────────────────────
+    // Skip expensive createNewBlock when the previous template is still
+    // representative of mempool state. TTL caps staleness; mempool-update
+    // delta caps how much tx churn we tolerate before a rebuild; prevhash
+    // gating forces invalidation on tip change.
+    static constexpr std::chrono::seconds CACHE_TTL{15};
+    static constexpr unsigned int CACHE_MEMPOOL_DELTA{200};
+
+    std::chrono::steady_clock::time_point m_cache_built_at GUARDED_BY(m_tp_mutex){};
+    unsigned int m_cache_mempool_seq GUARDED_BY(m_tp_mutex){0};
+    std::optional<NewWorkSet> m_cached_workset GUARDED_BY(m_tp_mutex);
+    // ──────────────────────────────────────────────────────────────────────
+
+    // ── C2: async builder thread ─────────────────────────────────────────
+    // A dedicated background thread keeps m_cached_workset warm so handler
+    // / capacitor paths almost never need a synchronous BuildNewWorkSet.
+    // The builder takes m_tp_mutex only briefly to read inputs and commit
+    // results; the expensive createNewBlock call runs outside m_tp_mutex.
+    // (cs_main / mempool locks are still acquired inside createNewBlock —
+    //  that lock contention with RPC remains, but is now decoupled from
+    //  SV2 event-loop responsiveness.)
+    static constexpr std::chrono::seconds BUILDER_TICK{7};
+
+    std::thread m_builder_thread;
+    std::mutex m_builder_mutex;
+    std::condition_variable m_builder_cv;
+    bool m_builder_request_pending{false};   // guarded by m_builder_mutex
+
+    void ThreadBuilder() EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex);
+    void RequestRebuild();
+    // ─────────────────────────────────────────────────────────────────────
 
     // ── Dispatch Rate Limiter ("Capacitor") ───────────────────────────────
     /** Current remaining dispatch delay (seconds). Starts at S, converges to 0. */
