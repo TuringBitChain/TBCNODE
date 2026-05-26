@@ -267,6 +267,14 @@ public:
         });
     }
 
+    /** Lock-taking wrapper: true iff at least one fully connected client exists.
+     *  Used by the SV2 template builder to skip work when no pool is attached. */
+    bool HasActiveClient() EXCLUSIVE_LOCKS_REQUIRED(!m_clients_mutex)
+    {
+        LOCKMt(m_clients_mutex);
+        return FullyConnectedClients() > 0;
+    }
+
 };
 
 #endif // BITCOIN_COMMON_SV2_CONNMAN_H

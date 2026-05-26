@@ -343,11 +343,13 @@ private:
 
     // ── C1: template reuse cache ──────────────────────────────────────────
     // Skip expensive createNewBlock when the previous template is still
-    // representative of mempool state. TTL caps staleness; mempool-update
-    // delta caps how much tx churn we tolerate before a rebuild; prevhash
-    // gating forces invalidation on tip change.
-    static constexpr std::chrono::seconds CACHE_TTL{15};
+    // representative of mempool state. Effective TTL is derived from
+    // m_options.fee_check_interval (one builder cycle + safety margin);
+    // mempool-update delta caps how much tx churn we tolerate before a
+    // forced sync rebuild in SendWork; prevhash gating forces invalidation
+    // on tip change.
     static constexpr unsigned int CACHE_MEMPOOL_DELTA{200};
+    static constexpr unsigned int CACHE_TTL_MULTIPLIER{2};   // CACHE_TTL = fee_check_interval × N
 
     std::chrono::steady_clock::time_point m_cache_built_at GUARDED_BY(m_tp_mutex){};
     unsigned int m_cache_mempool_seq GUARDED_BY(m_tp_mutex){0};
@@ -362,7 +364,10 @@ private:
     // (cs_main / mempool locks are still acquired inside createNewBlock —
     //  that lock contention with RPC remains, but is now decoupled from
     //  SV2 event-loop responsiveness.)
-    static constexpr std::chrono::seconds BUILDER_TICK{7};
+    //
+    // Builder cadence = m_options.fee_check_interval (-sv2interval, default
+    // 30s). On each wake it rebuilds only when the mempool actually changed
+    // since the last build; an idle mempool produces zero rebuilds.
 
     std::thread m_builder_thread;
     std::mutex m_builder_mutex;

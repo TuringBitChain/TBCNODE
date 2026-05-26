@@ -524,7 +524,8 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     if (!send_new_prevhash && m_cached_workset.has_value()) {
         const auto now = std::chrono::steady_clock::now();
         const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
-        const bool ttl_ok   = (now - m_cache_built_at) < CACHE_TTL;
+        const auto ttl = m_options.fee_check_interval * CACHE_TTL_MULTIPLIER;
+        const bool ttl_ok   = (now - m_cache_built_at) < ttl;
         const bool delta_ok = (cur_seq - m_cache_mempool_seq) < CACHE_MEMPOOL_DELTA;
         const bool prev_ok  = (m_cached_workset->block_template->getBlockRef()->hashPrevBlock
                                == m_best_prev_hash);
@@ -706,33 +707,53 @@ void Sv2TemplateProvider::RequestRebuild()
 
 void Sv2TemplateProvider::ThreadBuilder()
 {
-    LogPrint(BCLog::SV2, "Builder thread start\n");
+    LogPrint(BCLog::SV2, "Builder thread start (tick=%llds)\n",
+        static_cast<long long>(m_options.fee_check_interval.count()));
     while (!m_flag_interrupt_sv2) {
-        // Wait for explicit request or periodic tick.
+        // Wait for explicit request or one fee_check_interval tick.
         {
             std::unique_lock<std::mutex> lk(m_builder_mutex);
-            m_builder_cv.wait_for(lk, BUILDER_TICK, [this]{
+            m_builder_cv.wait_for(lk, m_options.fee_check_interval, [this]{
                 return m_builder_request_pending || m_flag_interrupt_sv2.load();
             });
             if (m_flag_interrupt_sv2) break;
             m_builder_request_pending = false;
         }
 
+        // No SV2 client attached -> the cache would never be consumed.
+        // Skip the entire build and let the next tick / RequestRebuild
+        // retry. This keeps the node idle (zero createNewBlock, zero
+        // cs_main contention with RPC) when no pool is connected.
+        if (!m_connman->HasActiveClient()) {
+            continue;
+        }
+
         // Decide whether a rebuild is warranted; grab a placeholder id.
+        // Three independent triggers:
+        //   - cold start: nothing in cache yet
+        //   - delta:      mempool churn since last build crossed CACHE_MEMPOOL_DELTA
+        //                 (same threshold SendWork uses for its sync-rebuild
+        //                  fallback, so the two checks agree on "fresh enough")
+        //   - age:        cache is about to age out from SendWork's POV
+        //                 (TTL = fee_check_interval × CACHE_TTL_MULTIPLIER).
+        //                 Refreshing here keeps the next SendWork on the cache
+        //                 hit path instead of falling back to sync rebuild on
+        //                 the sv2 handler thread.
         bool need_rebuild = false;
         uint64_t placeholder_id = 0;
+        unsigned int cur_seq = 0;
         {
             LOCKMt(m_tp_mutex);
+            cur_seq = m_mempool.GetTransactionsUpdated();
+            const auto now = std::chrono::steady_clock::now();
             if (!m_cached_workset.has_value()) {
-                need_rebuild = true;
-            } else {
-                const auto now = std::chrono::steady_clock::now();
-                const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
-                const bool age_stale   = (now - m_cache_built_at) > (CACHE_TTL / 2);
-                const bool delta_stale = (cur_seq - m_cache_mempool_seq) > (CACHE_MEMPOOL_DELTA / 2);
-                need_rebuild = age_stale || delta_stale;
+                need_rebuild = true;                       // cold start
+            } else if ((cur_seq - m_cache_mempool_seq) >= CACHE_MEMPOOL_DELTA) {
+                need_rebuild = true;                       // mempool churn crossed threshold
+            } else if ((now - m_cache_built_at) > m_options.fee_check_interval) {
+                need_rebuild = true;                       // cache about to age out
             }
-            placeholder_id = m_template_id + 1; // non-binding tag; SendWork overrides
+            placeholder_id = m_template_id + 1;            // non-binding tag; SendWork overrides
         }
         if (!need_rebuild) continue;
 
