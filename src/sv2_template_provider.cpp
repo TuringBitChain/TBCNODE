@@ -12,6 +12,7 @@
 #include "fs.h"
 #include "random.h"
 #include "utilstrencodings.h"
+#include "timedata.h"
 using node::Sv2CoinbaseOutputDataSizeMsg;
 using node::Sv2MsgType;
 using node::Sv2SetupConnectionMsg;
@@ -189,6 +190,19 @@ void Sv2TemplateProvider::Init(const Sv2TemplateProviderOptions& options)
         LogPrint(BCLog::SV2, "Capacitor enabled: initial_interval=%.3fs convergence_secs=%.1f delta=%.6fs\n",
             SV2_CAP_INITIAL_INTERVAL, SV2_CAP_CONVERGENCE_SECS, SV2_CAP_DELTA);
     }
+
+    // Size the block template cache against max_clients. Each connected
+    // client may keep up to ~CACHE_SLOTS_PER_CLIENT generations of templates
+    // alive simultaneously (initial NewTemplate + periodic fee-update sends
+    // + capacitor discharges, before the miner moves off the old id).
+    // Without scaling, max_clients=1024 would burn the 96-entry default in
+    // a single tip-change fan-out and start dropping live work.
+    m_max_block_template_cache_size = std::max<size_t>(
+        MIN_BLOCK_TEMPLATE_CACHE_SIZE,
+        options.max_clients * CACHE_SLOTS_PER_CLIENT);
+    LogPrint(BCLog::SV2, "Block template cache cap=%zu (max_clients=%zu × %zu, floor=%zu)\n",
+        m_max_block_template_cache_size, options.max_clients,
+        CACHE_SLOTS_PER_CLIENT, MIN_BLOCK_TEMPLATE_CACHE_SIZE);
 }
 
 Sv2TemplateProvider::~Sv2TemplateProvider()
@@ -532,12 +546,32 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         if (ttl_ok && delta_ok && prev_ok) {
             new_work_set = *m_cached_workset;
             new_work_set.new_template.m_template_id = m_template_id;
+
+            // "Selection time" on cache hit: only updates the local
+            // prev_hash copy. We deliberately do NOT mutate
+            // block_template->getBlockRef()->nTime — that BlockTemplate is
+            // shared via shared_ptr with m_block_template_cache, and
+            // SubmitSolution writes to block->nTime under m_submit_mutex
+            // (after m_tp_mutex is released). Writing nTime here would race
+            // with that path and could overwrite the miner's submitted
+            // timestamp, causing PoW hash mismatch and a dropped solution.
+            //
+            // In this branch send_new_prevhash=false, so prev_hash is not
+            // emitted on the wire anyway; the local update keeps the field
+            // coherent in case this path ever extends to send_new_prevhash.
+            const uint32_t now_sec = static_cast<uint32_t>(GetAdjustedTime());
+            const uint32_t built_ntime = new_work_set.block_template->getBlockRef()->nTime;
+            if (now_sec > built_ntime) {
+                new_work_set.prev_hash.m_header_timestamp = now_sec;
+            }
+
             cache_hit = true;
             LogPrint(BCLog::SV2,
-                "SendWork: cache hit (age=%llds, dseq=%u, txs=%zu) -> reuse as id=%lu\n",
+                "SendWork: cache hit (age=%llds, dseq=%u, txs=%zu, nTime built=%u sel=%u) -> reuse as id=%lu\n",
                 std::chrono::duration_cast<std::chrono::seconds>(now - m_cache_built_at).count(),
                 cur_seq - m_cache_mempool_seq,
                 new_work_set.block_template->getBlockRef()->vtx.size() - 1,
+                built_ntime, now_sec,
                 m_template_id);
         }
     }
@@ -595,12 +629,22 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         client.m_send_messages.emplace_back(new_work_set.prev_hash);
     }
 
-    // Evict oldest entry when cache is full to prevent unbounded memory growth
-    if (m_block_template_cache.size() >= MAX_BLOCK_TEMPLATE_CACHE_SIZE) {
+    // Drop stale-prevhash entries first (cheap, prevhash-keyed). Then, only
+    // if the current-tip set itself exceeds the cap, fall back to evicting
+    // the lowest template_id. This minimizes the risk of evicting a
+    // template a miner is still working on.
+    PruneBlockTemplateCache();
+    if (m_block_template_cache.size() >= m_max_block_template_cache_size) {
         m_block_template_cache.erase(m_block_template_cache.begin());
-        LogPrint(BCLog::SV2, "Block template cache full, evicted oldest entry\n");
+        LogPrint(BCLog::SV2, "Block template cache full (cap=%zu), evicted oldest entry\n",
+            m_max_block_template_cache_size);
     }
-    m_block_template_cache.insert({m_template_id, std::move(new_work_set.block_template)});
+    // Deep-copy per template_id so SubmitSolution's in-place mutation of
+    // vtx[0]/nTime/hashMerkleRoot on one id can't corrupt the state another
+    // id is still pointed at. m_cached_workset also keeps its own copy
+    // because new_work_set.block_template is now a clone, not the shared
+    // pointer from the cache.
+    m_block_template_cache.insert({m_template_id, new_work_set.block_template->clone()});
 
     return true;
 }
@@ -640,44 +684,136 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
         }
         if (m_flag_interrupt_sv2) break;
 
-        // Discharge: build a fresh template so it captures all mempool changes
-        // that accumulated during the delay window.
-        LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs elapsed, discharging fresh template + 0x72\n", interval);
-        m_connman->ForEachClient([this](Sv2Client& client) {
-            if (!client.m_coinbase_output_data_size_recv) return;
-            LOCKMt(this->m_tp_mutex);
+        // Discharge: get ONE shared workset (cache-hit if possible, else a
+        // single sync build OUTSIDE m_tp_mutex) and fan it out to all clients
+        // that still need discharge. The previous per-client BuildNewWorkSet
+        // inside ForEachClient (a) duplicated builder's work — logs showed
+        // sv2cap producing byte-identical templates seconds after sv2builder —
+        // and (b) held m_tp_mutex through createNewBlock, which the builder
+        // thread was explicitly designed to avoid.
+        LogPrint(BCLog::SV2, "Capacitor: interval=%.3fs elapsed, preparing discharge workset\n", interval);
 
-            if (!client.m_cap_needs_discharge) return;
-            client.m_cap_needs_discharge = false;
+        NewWorkSet shared_work_set;
+        bool have_workset = false;
+        bool cache_hit    = false;
 
-            ++m_template_id;
-            NewWorkSet new_work_set;
-            if (!BuildNewWorkSet(/*future_template=*/true, client.m_coinbase_tx_outputs_size, new_work_set)) {
-                LogPrint(BCLog::SV2, "Capacitor: failed to build fresh template for client id=%zu, skip discharge\n",
-                    client.m_id);
-                client.m_disconnect_flag = true;
-                return;
+        // Step 1: try the C1 cache (same gates as SendWork).
+        {
+            LOCKMt(m_tp_mutex);
+            if (m_cached_workset.has_value()) {
+                const auto now = std::chrono::steady_clock::now();
+                const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
+                const auto ttl = m_options.fee_check_interval * CACHE_TTL_MULTIPLIER;
+                const bool ttl_ok   = (now - m_cache_built_at) < ttl;
+                const bool delta_ok = (cur_seq - m_cache_mempool_seq) < CACHE_MEMPOOL_DELTA;
+                const bool prev_ok  = (m_cached_workset->block_template->getBlockRef()->hashPrevBlock
+                                       == m_best_prev_hash);
+                if (ttl_ok && delta_ok && prev_ok) {
+                    shared_work_set = *m_cached_workset;
+                    // Only update the local prev_hash copy with selection
+                    // time. Do NOT write block_template->getBlockRef()->nTime:
+                    // that BlockTemplate is shared with m_block_template_cache
+                    // and SubmitSolution mutates block->nTime under
+                    // m_submit_mutex (with m_tp_mutex released). A write here
+                    // would race with that path and could corrupt the
+                    // miner-submitted timestamp.
+                    //
+                    // The prev_hash field IS sent on the wire by capacitor
+                    // discharge (send_new_prevhash semantics), so updating
+                    // m_header_timestamp here is what actually delivers the
+                    // selection-time hint to the miner.
+                    const uint32_t now_sec = static_cast<uint32_t>(GetAdjustedTime());
+                    const uint32_t built_ntime = shared_work_set.block_template->getBlockRef()->nTime;
+                    if (now_sec > built_ntime) {
+                        shared_work_set.prev_hash.m_header_timestamp = now_sec;
+                    }
+                    have_workset = true;
+                    cache_hit    = true;
+                    LogPrint(BCLog::SV2,
+                        "Capacitor: cache hit (age=%llds, dseq=%u, nTime built=%u sel=%u) -> reuse for discharge\n",
+                        std::chrono::duration_cast<std::chrono::seconds>(now - m_cache_built_at).count(),
+                        cur_seq - m_cache_mempool_seq,
+                        built_ntime, now_sec);
+                }
             }
+        }
 
-            // C1: capacitor produced a fresh template — feed it back into the
-            // reuse cache so the next fee-tick can serve it without rebuilding.
-            m_cached_workset    = new_work_set;
-            m_cache_built_at    = std::chrono::steady_clock::now();
-            m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
-
-            if (m_block_template_cache.size() >= MAX_BLOCK_TEMPLATE_CACHE_SIZE) {
-                m_block_template_cache.erase(m_block_template_cache.begin());
+        // Step 2: cache miss → one sync build OUTSIDE m_tp_mutex.
+        if (!have_workset) {
+            LogPrint(BCLog::SV2, "Capacitor: cache miss, building fresh template\n");
+            // template_id is a placeholder; per-client id is assigned below.
+            if (BuildNewWorkSetWithId(/*future_template=*/true, /*template_id=*/0, shared_work_set)) {
+                LOCKMt(m_tp_mutex);
+                // Guard against tip moving during the unlocked build.
+                if (m_best_prev_hash != uint256{} &&
+                    shared_work_set.block_template->getBlockRef()->hashPrevBlock != m_best_prev_hash) {
+                    LogPrint(BCLog::SV2, "Capacitor: tip moved during build, discard discharge\n");
+                } else {
+                    m_cached_workset    = shared_work_set;
+                    m_cache_built_at    = std::chrono::steady_clock::now();
+                    m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+                    have_workset = true;
+                }
+            } else {
+                LogPrint(BCLog::SV2, "Capacitor: BuildNewWorkSetWithId failed, skip discharge\n");
             }
-            m_block_template_cache.insert({m_template_id, std::move(new_work_set.block_template)});
+        }
 
-            LogPrint(BCLog::SV2, "Capacitor: discharge fresh 0x71 template_id=%lu to client id=%zu\n",
-                m_template_id, client.m_id);
-            client.m_send_messages.emplace_back(new_work_set.new_template);
+        // Step 3: dispatch the shared workset to each client that needs it.
+        // Each client gets its own m_template_id (and a per-id entry in
+        // m_block_template_cache for SubmitSolution lookups), but the
+        // underlying BlockTemplate is shared via shared_ptr — submitSolution
+        // overrides nTime/nonce/coinbase per submission, so the share is safe.
+        if (have_workset) {
+            m_connman->ForEachClient([this, &shared_work_set, cache_hit](Sv2Client& client) {
+                if (!client.m_coinbase_output_data_size_recv) return;
+                LOCKMt(this->m_tp_mutex);
 
-            LogPrint(BCLog::SV2, "Capacitor: discharge 0x72 template_id=%lu to client id=%zu\n",
-                new_work_set.prev_hash.m_template_id, client.m_id);
-            client.m_send_messages.emplace_back(new_work_set.prev_hash);
-        });
+                if (!client.m_cap_needs_discharge) return;
+                client.m_cap_needs_discharge = false;
+
+                ++m_template_id;
+                NewWorkSet client_work_set = shared_work_set;  // copies shared_ptr (refcount)
+                client_work_set.new_template.m_template_id = m_template_id;
+                client_work_set.prev_hash.m_template_id    = m_template_id;
+
+                PruneBlockTemplateCache();
+                if (m_block_template_cache.size() >= m_max_block_template_cache_size) {
+                    m_block_template_cache.erase(m_block_template_cache.begin());
+                }
+                // Per-id deep copy — see SendWork insert site for rationale.
+                // Each client's template_id owns an isolated BlockTemplate,
+                // so SubmitSolution can mutate without affecting sibling ids
+                // built off the same shared_work_set.
+                m_block_template_cache.insert({m_template_id, client_work_set.block_template->clone()});
+
+                // Human-readable discharge summary — mirrors SendWork's
+                // NewTemplate log so the per-id audit trail (time / txs /
+                // prevhash) is uniform regardless of dispatch path. Lets you
+                // grep `template_id=N` and recover the assembled block state
+                // we believed at send time, to cross-check against the
+                // miner's later SubmitSolution timestamp/coinbase.
+                {
+                    auto* block = client_work_set.block_template->getBlockRef().get();
+                    int tx_count = static_cast<int>(block->vtx.size()) - 1;
+                    int64_t coinbase_sat = block->vtx[0]->vout[0].nValue.GetSatoshis();
+                    LogPrint(BCLog::SV2,
+                        "Capacitor: discharge 0x71 template_id=%lu [%s] time=%u sel=%u bits=%08x"
+                        "  coinbase=%lld sat  txs=%d"
+                        "  prevhash=%s  client=%zu\n",
+                        m_template_id, cache_hit ? "cache-hit" : "fresh-build",
+                        block->nTime, client_work_set.prev_hash.m_header_timestamp,
+                        block->nBits, coinbase_sat, tx_count,
+                        HexStr(bsv::span(block->hashPrevBlock)),
+                        client.m_id);
+                }
+                client.m_send_messages.emplace_back(client_work_set.new_template);
+
+                LogPrint(BCLog::SV2, "Capacitor: discharge 0x72 template_id=%lu to client id=%zu\n",
+                    m_template_id, client.m_id);
+                client.m_send_messages.emplace_back(client_work_set.prev_hash);
+            });
+        }
 
         // Advance convergence: reduce interval by delta, then clear pending flag
         bool converged = false;
@@ -846,6 +982,22 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                     m_best_prev_hash.ToString());
                 return;
             }
+
+            // Audit trail for miner-side nTime rolling. tpl_ntime is what the
+            // assembler set when this template was built (or, for cache-hit
+            // dispatches, the original build's time — the cached value is the
+            // same shared BlockTemplate). rolled is the miner's chosen
+            // timestamp minus that. Cross-reference vs the corresponding
+            // "NewTemplate id=N" / "Capacitor: discharge ... id=N" log entry
+            // and the prev-tip's UpdateTip date to see whether the miner
+            // rolled forward, backward, or beyond the SetNewPrevHash window.
+            int tpl_txs = static_cast<int>(block_template->getBlockRef()->vtx.size()) - 1;
+            uint32_t tpl_ntime = block_template->getBlockRef()->nTime;
+            int64_t rolled = static_cast<int64_t>(solution.m_header_timestamp) - static_cast<int64_t>(tpl_ntime);
+            LogPrint(BCLog::SV2,
+                "SubmitSolution audit id=%lu tpl_ntime=%u submit_ntime=%u rolled=%+lld s  txs=%d  prevhash=%s\n",
+                solution.m_template_id, tpl_ntime, solution.m_header_timestamp, (long long)rolled,
+                tpl_txs, block_template->getBlockRef()->hashPrevBlock.ToString());
         }
 
         LOCKMt(m_submit_mutex);

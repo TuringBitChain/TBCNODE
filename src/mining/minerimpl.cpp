@@ -71,6 +71,18 @@ public:
         return ProcessNewBlock(m_config, block, true, nullptr);
     }
 
+    std::shared_ptr<BlockTemplate> clone() override
+    {
+        // Deep-copy the inner CBlockTemplate: a fresh CBlock (header fields
+        // value-copied, vtx vector copied — its CTransactionRefs alias to
+        // immutable transactions, which is safe), plus the fee/sigop arrays.
+        auto cloned_inner = std::make_unique<mining::CBlockTemplate>();
+        *cloned_inner->GetBlockRef()    = *m_block_template->GetBlockRef();
+        cloned_inner->vTxFees           = m_block_template->vTxFees;
+        cloned_inner->vTxSigOpsCount    = m_block_template->vTxSigOpsCount;
+        return std::make_shared<BlockTemplateImpl>(std::move(cloned_inner), m_config);
+    }
+
 private:
     const std::unique_ptr<mining::CBlockTemplate> m_block_template;
     const Config& m_config;

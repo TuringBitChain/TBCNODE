@@ -66,6 +66,18 @@ public:
      * @returns if the block was processed, independent of block validity
      */
     virtual bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) = 0;
+
+    /**
+     * Deep-copy this template (header + transaction list + fee/sigop arrays).
+     *
+     * Used by the SV2 path so that each entry in m_block_template_cache owns
+     * its own underlying CBlock; submitSolution() mutates header/coinbase
+     * in-place, so without this clone, multiple template_id entries built
+     * from the same source would alias and corrupt each other on submit.
+     * Transactions themselves are immutable (CTransactionRef = shared_ptr to
+     * const), so the vtx vector is copied but its elements remain shared.
+     */
+    virtual std::shared_ptr<BlockTemplate> clone() = 0;
 };
 
 //! Interface giving clients (RPC, Stratum v2 Template Provider in the future)

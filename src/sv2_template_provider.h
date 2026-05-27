@@ -84,10 +84,22 @@ private:
     static constexpr uint8_t TP_SUBPROTOCOL{0x02};
 
     /**
-     * Maximum number of block templates retained in the cache.
-     * Each entry holds a full block (txs in memory). Prune oldest on overflow.
+     * Minimum cache size for low-client configurations. Each entry holds a
+     * deep-copied CBlock (vtx vector + fee/sigop arrays — transactions
+     * themselves are immutable shared_ptr so are NOT duplicated). Default
+     * config (max_clients=8) keeps this floor; high-client configs scale
+     * to `max_clients × CACHE_SLOTS_PER_CLIENT`.
      */
-    static constexpr size_t MAX_BLOCK_TEMPLATE_CACHE_SIZE{96};
+    static constexpr size_t MIN_BLOCK_TEMPLATE_CACHE_SIZE{128};
+    static constexpr size_t CACHE_SLOTS_PER_CLIENT{16};
+
+    /**
+     * Runtime cap derived from options.max_clients in Init(). Sized so each
+     * connected client can keep ~16 generations of templates alive (~8 min
+     * of churn at fee_check_interval=30s) before older ids start getting
+     * evicted out from under in-flight miner submissions.
+     */
+    size_t m_max_block_template_cache_size{MIN_BLOCK_TEMPLATE_CACHE_SIZE};
 
     CKey m_static_key;
 
