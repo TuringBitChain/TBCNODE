@@ -13,7 +13,6 @@
 #include "random.h"
 #include "utilstrencodings.h"
 #include "timedata.h"
-#include "chain.h"
 using node::Sv2CoinbaseOutputDataSizeMsg;
 using node::Sv2MsgType;
 using node::Sv2SetupConnectionMsg;
@@ -955,31 +954,11 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
     }
 }
 
-bool Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
+void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 {
         LogPrint(BCLog::SV2, "SubmitSolution id=%lu version=%d timestamp=%d nonce=%08x\n",
             solution.m_template_id, solution.m_version,
             solution.m_header_timestamp, solution.m_header_nonce);
-
-        // (B) Time-too-new pre-check. ContextualCheckBlockHeader will reject
-        // any block whose nTime exceeds GetAdjustedTime() + MAX_FUTURE_BLOCK_TIME
-        // (1200s on this chain). Detecting it here gives a clearly-tagged WARN
-        // log (so operations can immediately attribute mining stalls to miner
-        // clock drift) and lets us return false WITHOUT calling ProcessNewBlock
-        // — which would consume cs_main and log via the validation engine, less
-        // obvious in operational dashboards. Returning false also triggers the
-        // (A) force-disconnect path in the connman caller.
-        const int64_t now_adjusted = GetAdjustedTime();
-        const int64_t future_skew =
-            static_cast<int64_t>(solution.m_header_timestamp) - now_adjusted;
-        if (future_skew > MAX_FUTURE_BLOCK_TIME) {
-            LogPrintf("SV2 SubmitSolution WARN: id=%lu submit_ntime=%u is %+lld s ahead of "
-                      "adjusted wallclock (limit=%lld s, MAX_FUTURE_BLOCK_TIME). "
-                      "Miner / translator nTime drift; rejecting and signaling disconnect.\n",
-                solution.m_template_id, solution.m_header_timestamp,
-                (long long)future_skew, (long long)MAX_FUTURE_BLOCK_TIME);
-            return false;
-        }
 
         auto cb = MakeTransactionRef(std::move(solution.m_coinbase_tx));
 
@@ -992,7 +971,7 @@ bool Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             auto cached_block_template = m_block_template_cache.find(solution.m_template_id);
             if (cached_block_template == m_block_template_cache.end()) {
                 LogPrintf("SV2 SubmitSolution: template id=%lu not in cache, solution dropped\n", solution.m_template_id);
-                return false;
+                return;
             }
             block_template = cached_block_template->second; // shared ownership — safe after lock release
 
@@ -1001,7 +980,7 @@ bool Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                     solution.m_template_id,
                     block_template->getBlockRef()->hashPrevBlock.ToString(),
                     m_best_prev_hash.ToString());
-                return false;
+                return;
             }
 
             // Audit trail for miner-side nTime rolling. tpl_ntime is what the
@@ -1029,7 +1008,7 @@ bool Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                 solution.m_template_id,
                 block_template->getBlockRef()->hashPrevBlock.ToString(),
                 current_tip ? current_tip->hash.ToString() : "none");
-            return false;
+            return;
         }
 
         LogPrint(BCLog::SV2, "SubmitSolution: template_id=%lu prevhash=%s\n",
@@ -1037,9 +1016,7 @@ bool Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 
         if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
             LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
-            return false;
         }
-        return true;
 }
 
 void Sv2TemplateProvider::CoinbaseOutputDataSize(Sv2Client& client, node::Sv2CoinbaseOutputDataSizeMsg coinbase_tx_outputs_size)

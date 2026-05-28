@@ -409,18 +409,8 @@ void Sv2Connman::ProcessSv2Message(const Sv2NetMsg& sv2_net_msg, Sv2Client& clie
             return;
         }
 
-        // (A) If SubmitSolution returns false (stale template / time-too-new
-        // pre-check / ProcessNewBlock failure), drop the connection. SV2 TDP
-        // has no SubmitSolutionError message, so disconnect is the only
-        // back-channel that forces the pool to rebuild its state machine
-        // (replicates the manual remediation that broke the 833652 stall).
-        const bool accepted = m_msgproc->SubmitSolution(submit_solution);
-        LogPrint(BCLog::SV2, "call SubmitSolution over (accepted=%d)\n", accepted);
-        if (!accepted) {
-            LogPrintf("SV2 SubmitSolution rejected for client id=%zu; forcing disconnect to "
-                      "unstick upstream state machine\n", client.m_id);
-            client.m_disconnect_flag = true;
-        }
+        m_msgproc->SubmitSolution(submit_solution);
+        LogPrint(BCLog::SV2, "call SubmitSolution over\n");
 
         break;
     }
