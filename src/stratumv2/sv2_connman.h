@@ -102,8 +102,16 @@ public:
 
     /**
      * We received and successfully parsed a SubmitSolution message.
+     *
+     * @returns true if the solution was accepted (ProcessNewBlock succeeded
+     *          or returned valid-but-not-best). false on any rejection —
+     *          stale template, time-too-new pre-check, or ProcessNewBlock
+     *          failure. The caller MUST disconnect the client on false to
+     *          force a fresh state machine on the upstream side; the SV2
+     *          TDP has no error-response message for SubmitSolution, so
+     *          dropping the connection is the only feedback mechanism.
      */
-    virtual void SubmitSolution(node::Sv2SubmitSolutionMsg solution) = 0;
+    virtual bool SubmitSolution(node::Sv2SubmitSolutionMsg solution) = 0;
 
     virtual void CoinbaseOutputDataSize(Sv2Client& client, node::Sv2CoinbaseOutputDataSizeMsg coinbase_tx_outputs_size) = 0;
 
