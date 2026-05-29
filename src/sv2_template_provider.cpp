@@ -546,6 +546,10 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         if (ttl_ok && delta_ok && prev_ok) {
             new_work_set = *m_cached_workset;
             new_work_set.new_template.m_template_id = m_template_id;
+            // Override future_template to reflect the actual send context: a cache hit
+            // on a fee-update path (send_new_prevhash=false) must NOT inherit true from
+            // the originally-built workset (which was built for a new-block context).
+            new_work_set.new_template.m_future_template = send_new_prevhash;
 
             // "Selection time" on cache hit: only updates the local
             // prev_hash copy. We deliberately do NOT mutate
@@ -610,10 +614,12 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         int64_t coinbase_sat = block->vtx[0]->vout[0].nValue.GetSatoshis();
         int tx_count = static_cast<int>(block->vtx.size()) - 1;
         std::string reason = send_new_prevhash ? "new block" : "fee update";
-        LogPrint(BCLog::SV2, "NewTemplate id=%lu [%s]  height=%d  time=%u  bits=%08x"
+        LogPrint(BCLog::SV2, "NewTemplate id=%lu [%s]  future=%s  height=%d  time=%u  bits=%08x"
             "  target=%s  coinbase=%lld sat  txs=%d"
             "  prevhash=%s  client=%zu\n",
-            m_template_id, reason, height,
+            m_template_id, reason,
+            new_work_set.new_template.m_future_template ? "true" : "false",
+            height,
             block->nTime, block->nBits, bnTarget.GetHex(),
             coinbase_sat, tx_count,
             HexStr(bsv::span(block->hashPrevBlock)),
@@ -897,7 +903,7 @@ void Sv2TemplateProvider::ThreadBuilder()
         // mempool internally — that contention with RPC remains, but SV2
         // handler / capacitor threads stay responsive.
         NewWorkSet new_work_set;
-        if (!BuildNewWorkSetWithId(/*future_template=*/true, placeholder_id, new_work_set)) {
+        if (!BuildNewWorkSetWithId(/*future_template=*/false, placeholder_id, new_work_set)) {
             continue;
         }
 
