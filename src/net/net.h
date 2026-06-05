@@ -867,6 +867,8 @@ public:
 
     // Last time a "MEMPOOL" request was serviced.
     std::atomic<int64_t> timeLastMempoolReq {0};
+    // Last time we sent a "MEMPOOL" request to this peer (BIP35 active pull).
+    std::atomic<int64_t> timeLastMempoolReqSent {0};
 
     // Block and TXN accept times
     std::atomic<int64_t> nLastBlockTime {0};

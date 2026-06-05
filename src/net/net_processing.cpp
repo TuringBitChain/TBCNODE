@@ -729,6 +729,10 @@ void UnregisterNodeSignals(CNodeSignals &nodeSignals) {
 }
 
 static int64_t Fixed_delay_microsecs = DEFAULT_INV_BROADCAST_DELAY * 1000;
+// Global timestamp for BIP35 active pull: ensures at most one peer is asked
+// per cooldown window across all connections, preventing simultaneous pulls
+// to every stalled peer in a multi-peer network.
+static std::atomic<int64_t> g_mempoolPullLastTime{0};
 bool SetInvBroadcastDelay(const int64_t& nDelayMillisecs) {
     if ( nDelayMillisecs < 0 || nDelayMillisecs > MAX_INV_BROADCAST_DELAY)
         return false;
@@ -3512,8 +3516,18 @@ static bool ProcessMessage(const Config& config, const CNodePtr& pfrom,
     }
 
     else if (strCommand == NetMsgType::NOTFOUND) {
-        // We do not care about the NOTFOUND message, but logging an Unknown
-        // Command message would be undesirable as we transmit it ourselves.
+        // Logging as Unknown Command is undesirable since we send NOTFOUND
+        // ourselves. Additionally, release setAskFor entries for txids the peer
+        // cannot serve so they can be re-requested in the next pull cycle rather
+        // than occupying slots indefinitely.
+        std::vector<CInv> vInv;
+        vRecv >> vInv;
+        LOCK(cs_invQueries);
+        for (const CInv& inv : vInv) {
+            if (inv.type == MSG_TX) {
+                pfrom->setAskFor.erase(inv.hash);
+            }
+        }
     }
 
     else {
@@ -4391,6 +4405,65 @@ bool SendMessages(const Config &config, const CNodePtr& pto, CConnman &connman,
 
     // Try sending block announcements via headers
     SendBlockHeaders(config, pto, connman, msgMaker, state);
+
+    // Message: mempool request (BIP35 active pull, stall recovery)
+    // The trickle mechanism marks txids in filterInventoryKnown when an INV
+    // is queued, but does not verify that the peer issued a GETDATA. If the
+    // peer drops INVs under load, those transactions are permanently stuck:
+    // removed from mInvList yet blocked from re-queuing by filterInventoryKnown.
+    // Detect the stall via nLastTXTime: if the peer was previously delivering
+    // transactions but has gone quiet, issue a mempool request so the peer
+    // re-announces everything we are missing. The 120-second cooldown prevents
+    // flooding; filterInventoryKnown on the responder's side further limits the
+    // response to only transactions the peer believes we lack.
+    if (!fReindex && !fImporting && !IsInitialBlockDownload() &&
+        gArgs.GetBoolArg("-mempoolpull", DEFAULT_MEMPOOL_PULL) &&
+        (pto->nServices & NODE_BLOOM) &&
+        !pto->fDisconnect)
+    {
+        static const int64_t TX_STALL_SECS    = 30;   // seconds without a TX before declaring stall
+        static const int64_t PULL_COOLDOWN     = 120;  // minimum seconds between pull requests
+        int64_t nNow   = GetTime();
+        int64_t lastTx = pto->nLastTXTime.load();
+        // Two stall patterns:
+        //   (a) peer was pushing TXs and stopped
+        //   (b) connected long enough but never pushed anything (cold start / initial flood)
+        bool stalled = (lastTx > 0 && nNow - lastTx > TX_STALL_SECS) ||
+                       (lastTx == 0 && nNow - pto->nTimeConnected > TX_STALL_SECS * 2);
+        // Global cooldown: only one peer is pulled at a time across all
+        // connections. This prevents simultaneous mempool requests to every
+        // stalled peer in a multi-peer network. The first peer whose per-peer
+        // cooldown expires wins; others wait until the next global window.
+        if (stalled &&
+            pto->timeLastMempoolReqSent + PULL_COOLDOWN < nNow &&
+            g_mempoolPullLastTime.load() + PULL_COOLDOWN < nNow)
+        {
+            // Before requesting, evict zombie state that blocks re-requesting:
+            //   setAskFor: GETDATAs sent but never answered accumulate indefinitely;
+            //              duplicate check in AskFor() silently drops re-requests.
+            //   filterInventoryKnown: bulk BIP35 INVs overflow the 50k rolling filter,
+            //              causing subsequent INVs for unseen txids to be skipped.
+            // Clearing both gives the fresh mempool response a clean slate.
+            // AlreadyHave() in SendGetDataNonBlocks still prevents re-fetching txids
+            // already validated into our mempool.
+            {
+                LOCK(cs_invQueries);
+                pto->setAskFor.clear();
+                pto->mapAskFor.clear();
+            }
+            {
+                LOCK(pto->cs_filter);
+                pto->filterInventoryKnown.reset();
+            }
+            int64_t elapsed = nNow - (lastTx > 0 ? lastTx : pto->nTimeConnected);
+            LogPrint(BCLog::NET,
+                     "tx stall from peer=%d (%ds since last tx), requesting mempool\n",
+                     pto->GetId(), (int)elapsed);
+            connman.PushMessage(pto, msgMaker.Make(NetMsgType::MEMPOOL));
+            pto->timeLastMempoolReqSent = nNow;
+            g_mempoolPullLastTime.store(nNow);
+        }
+    }
 
     // Message: inventory
     SendInventory(config, pto, connman, msgMaker);

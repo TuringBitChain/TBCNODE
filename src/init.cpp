@@ -519,6 +519,9 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-rejectmempoolrequest", _("Reject every mempool request from "
                                      "non-whitelisted peers."));
+        HelpMessageOpt("-mempoolpull", strprintf(_("Actively request peer mempool when tx "
+                                     "sync stalls (BIP35 pull recovery). Default: %u"),
+                                     DEFAULT_MEMPOOL_PULL));
 #ifndef WIN32
     strUsage += HelpMessageOpt(
         "-sysperms",

@@ -79,6 +79,9 @@ static const bool DEFAULT_WHITELISTRELAY = true;
 static const bool DEFAULT_WHITELISTFORCERELAY = true;
 /** Default for DEFAULT_REJECTMEMPOOLREQUEST. */
 static const bool DEFAULT_REJECTMEMPOOLREQUEST = false;
+/** Default for -mempoolpull: enable BIP35 active pull to recover stalled tx sync.
+ *  Off by default; intended for low-peer-count deployments (e.g. private mining networks). */
+static const bool DEFAULT_MEMPOOL_PULL = false;
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
 static constexpr Amount DEFAULT_MIN_RELAY_TX_FEE(60);
 //! -maxtxfee default
