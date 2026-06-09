@@ -4452,6 +4452,7 @@ bool SendMessages(const Config &config, const CNodePtr& pto, CConnman &connman,
                 pto->mapAskFor.clear();
             }
             {
+                LOCK(pto->cs_inventory);
                 LOCK(pto->cs_filter);
                 pto->filterInventoryKnown.reset();
             }
