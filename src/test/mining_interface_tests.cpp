@@ -1,4 +1,5 @@
 #include <interfaces/types.h>
+#include <interfaces/mining.h>
 #include <node/mining_types.h>
 #include <node/context.h>
 #include <amount.h>
@@ -25,6 +26,29 @@ BOOST_AUTO_TEST_CASE(types_defaults)
 
     node::NodeContext ctx;
     BOOST_CHECK(ctx.config == nullptr);
+}
+
+namespace {
+//! Minimal mock proving the abstract interface is implementable/compiles.
+class MockTemplate : public interfaces::BlockTemplate {
+public:
+    CBlockHeader getBlockHeader() override { return {}; }
+    CBlock getBlock() override { return {}; }
+    std::vector<Amount> getTxFees() override { return {}; }
+    std::vector<int64_t> getTxSigops() override { return {}; }
+    node::CoinbaseTx getCoinbaseTx() override { return {}; }
+    std::vector<uint256> getCoinbaseMerklePath() override { return {}; }
+    bool submitSolution(uint32_t, uint32_t, uint32_t, CTransactionRef) override { return false; }
+    std::unique_ptr<interfaces::BlockTemplate> waitNext(node::BlockWaitOptions) override { return nullptr; }
+    void interruptWait() override {}
+};
+} // namespace
+
+BOOST_AUTO_TEST_CASE(interface_is_implementable)
+{
+    MockTemplate t;
+    BOOST_CHECK(t.getTxFees().empty());
+    BOOST_CHECK(t.waitNext({}) == nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
