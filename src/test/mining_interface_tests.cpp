@@ -5,6 +5,8 @@
 #include <node/context.h>
 #include <amount.h>
 #include <chain.h>
+#include <config.h>
+#include <consensus/merkle.h>
 #include <key.h>
 #include <pow.h>
 #include <script/script.h>
@@ -62,40 +64,61 @@ BOOST_AUTO_TEST_CASE(interface_is_implementable)
     BOOST_CHECK(t.waitNext({}) == nullptr);
 }
 
-BOOST_FIXTURE_TEST_CASE(get_tip_matches_chain, TestChain100Setup)
+// All chain-dependent assertions share ONE TestChain100Setup instance. The heavyweight
+// regtest fixture does not survive repeated instantiation within a single suite (global
+// chain/DB state leaks across instances), so the create/wait/submit behaviours are
+// exercised together in one fixture rather than one case each.
+BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
 {
-    auto tip = node::GetTip();
-    BOOST_REQUIRE(tip.has_value());
-    LOCK(cs_main);
-    BOOST_CHECK_EQUAL(tip->height, chainActive.Height());
-    BOOST_CHECK(tip->hash == chainActive.Tip()->GetBlockHash());
-}
+    const CScript spk = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
 
-BOOST_FIXTURE_TEST_CASE(wait_tip_changed_returns_on_new_block, TestChain100Setup)
-{
-    auto before = node::GetTip();
-    BOOST_REQUIRE(before.has_value());
+    // getTip() matches the active chain.
+    auto t0 = node::GetTip();
+    BOOST_REQUIRE(t0.has_value());
+    {
+        LOCK(cs_main);
+        BOOST_CHECK_EQUAL(t0->height, chainActive.Height());
+        BOOST_CHECK(t0->hash == chainActive.Tip()->GetBlockHash());
+    }
 
-    // Mine one more block, then confirm WaitTipChanged observes the new tip immediately.
-    CScript spk = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
+    // MakeMining -> createNewBlock -> solve PoW -> submitSolution advances the tip by one.
+    node::NodeContext ctx;
+    ctx.config = &testConfig;
+    auto mining = interfaces::MakeMining(ctx);
+    BOOST_REQUIRE(mining);
+
+    auto tipA = mining->getTip();
+    BOOST_REQUIRE(tipA.has_value());
+
+    node::BlockCreateOptions opts;
+    opts.coinbase_output_script = spk;
+    auto tmpl = mining->createNewBlock(opts, /*cooldown=*/false);
+    BOOST_REQUIRE(tmpl);
+    BOOST_CHECK(tmpl->getCoinbaseTx().block_reward_remaining > Amount(0));
+
+    CBlock block = tmpl->getBlock();
+    // Solve PoW against the final merkle root (the same one submitSolution recomputes from
+    // the coinbase); the assembler does not leave a valid merkle root on the template.
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+    while (!CheckProofOfWork(block.GetHash(), block.nBits, testConfig)) ++block.nNonce;
+    BOOST_CHECK(tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+
+    auto tipB = mining->getTip();
+    BOOST_REQUIRE(tipB.has_value());
+    BOOST_CHECK_EQUAL(tipB->height, tipA->height + 1);
+
+    // WaitTipChanged times out (no new block) and returns the same tip.
+    std::atomic<bool> interrupt{false};
+    auto same = node::WaitTipChanged(tipB->hash, std::chrono::milliseconds(200), interrupt);
+    BOOST_REQUIRE(same.has_value());
+    BOOST_CHECK(same->hash == tipB->hash);
+
+    // WaitTipChanged returns promptly once a new block connects.
     CreateAndProcessBlock({}, spk);
-
-    std::atomic<bool> interrupt{false};
-    auto after = node::WaitTipChanged(before->hash, std::chrono::milliseconds(5000), interrupt);
-    BOOST_REQUIRE(after.has_value());
-    BOOST_CHECK(after->hash != before->hash);
-    BOOST_CHECK_EQUAL(after->height, before->height + 1);
-}
-
-BOOST_FIXTURE_TEST_CASE(wait_tip_changed_times_out, TestChain100Setup)
-{
-    auto tip = node::GetTip();
-    BOOST_REQUIRE(tip.has_value());
-    std::atomic<bool> interrupt{false};
-    // No new block: should time out and return the same tip.
-    auto res = node::WaitTipChanged(tip->hash, std::chrono::milliseconds(200), interrupt);
-    BOOST_REQUIRE(res.has_value());
-    BOOST_CHECK(res->hash == tip->hash);
+    auto next = node::WaitTipChanged(tipB->hash, std::chrono::milliseconds(5000), interrupt);
+    BOOST_REQUIRE(next.has_value());
+    BOOST_CHECK(next->hash != tipB->hash);
+    BOOST_CHECK_EQUAL(next->height, tipB->height + 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

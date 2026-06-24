@@ -240,6 +240,7 @@ add_library(server
 	init.cpp
 	dbwrapper.cpp
 	merkleblock.cpp
+	node/interfaces.cpp
 	node/miner.cpp
 	mining/assembler.cpp
 	mining/candidates.cpp
