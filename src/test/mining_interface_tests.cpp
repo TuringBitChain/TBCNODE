@@ -77,6 +77,18 @@ BOOST_AUTO_TEST_CASE(is_test_chain_recognizes_all_test_networks)
     BOOST_CHECK(node::IsTestChain(*CreateChainParams(CBaseChainParams::STN)));
 }
 
+// BlocksAheadOfTip is the cooldown gate: it reports how far the best header leads the active
+// tip (nullopt when synced or the tip is at/above the header), mirroring upstream
+// ChainstateManager::BlocksAheadOfTip(). createNewBlock(cooldown=true) cools down while it
+// returns a value, to avoid handing out templates during the post-IBD catch-up.
+BOOST_AUTO_TEST_CASE(blocks_ahead_of_tip_counts_only_when_headers_lead)
+{
+    using node::BlocksAheadOfTip;
+    BOOST_CHECK(BlocksAheadOfTip(/*best_header=*/100, /*tip=*/100) == std::nullopt); // synced
+    BOOST_CHECK(BlocksAheadOfTip(/*best_header=*/95, /*tip=*/100) == std::nullopt);  // tip not behind
+    BOOST_CHECK(BlocksAheadOfTip(/*best_header=*/105, /*tip=*/100) == std::optional<int>(5));
+}
+
 // All chain-dependent assertions share ONE TestChain100Setup instance. The heavyweight
 // regtest fixture does not survive repeated instantiation within a single suite (global
 // chain/DB state leaks across instances), so the create/wait/submit behaviours are
@@ -126,6 +138,17 @@ BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
         std::string reason, debug;
         BOOST_CHECK(!mining->submitBlock(block, reason, debug));
         BOOST_CHECK_EQUAL(reason, "duplicate");
+    }
+
+    // Cooldown path: on a synced chain (best header == tip) CooldownIfHeadersAhead returns at
+    // once, and createNewBlock(cooldown=true) completes (does not block on the IBD/headers
+    // waits). REQUIRE the chain is out of IBD first so the cooldown call cannot spin forever.
+    {
+        std::atomic<bool> cd_interrupt{false};
+        BOOST_CHECK(node::CooldownIfHeadersAhead(cd_interrupt));
+        BOOST_REQUIRE(!mining->isInitialBlockDownload());
+        auto tmpl_cd = mining->createNewBlock(opts, /*cooldown=*/true);
+        BOOST_CHECK(tmpl_cd != nullptr);
     }
 
     // WaitTipChanged times out (no new block) and returns the same tip.

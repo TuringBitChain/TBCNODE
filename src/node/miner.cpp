@@ -17,11 +17,19 @@
 #include <boost/thread.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 
+#include <algorithm>
+
 namespace node {
 
 bool IsTestChain(const CChainParams& params)
 {
     return params.NetworkIDString() != CBaseChainParams::MAIN;
+}
+
+std::optional<int> BlocksAheadOfTip(int best_header_height, int tip_height)
+{
+    if (best_header_height <= tip_height) return std::nullopt;
+    return best_header_height - tip_height;
 }
 
 std::optional<interfaces::BlockRef> GetTip()
@@ -57,6 +65,43 @@ std::optional<interfaces::BlockRef> WaitTipChanged(uint256 current_tip,
 
     if (interrupt.load()) return std::nullopt;
     return GetTip();
+}
+
+bool CooldownIfHeadersAhead(std::atomic<bool>& interrupt)
+{
+    // Mirror upstream node::CooldownIfHeadersAhead, adapted to TBC's cvBlockChange/pindexBestHeader
+    // (no KernelNotifications): while the best header leads the tip, wait out a clamped 3-20s
+    // window; if the tip advances, re-evaluate; if the window expires without progress, proceed.
+    while (true) {
+        uint256 last_tip;
+        std::optional<int> remaining;
+        {
+            LOCK(cs_main);
+            const CBlockIndex* tip = chainActive.Tip();
+            if (!tip || !pindexBestHeader) return true;
+            last_tip = tip->GetBlockHash();
+            remaining = BlocksAheadOfTip(pindexBestHeader->nHeight, tip->nHeight);
+        }
+        if (!remaining) return true; // tip caught up with headers
+
+        const int cooldown_seconds = std::clamp(*remaining, 3, 20);
+        const boost::system_time deadline =
+            boost::get_system_time() + boost::posix_time::seconds(cooldown_seconds);
+
+        bool tip_changed = false;
+        {
+            boost::unique_lock<boost::mutex> lock(csBestBlock);
+            while (!interrupt.load()) {
+                const CBlockIndex* now_tip = chainActive.Tip();
+                if (now_tip && now_tip->GetBlockHash() != last_tip) { tip_changed = true; break; }
+                if (!cvBlockChange.timed_wait(lock, deadline)) break; // window expired
+            }
+        }
+        if (interrupt.load()) return false;
+        if (tip_changed) continue;  // tip advanced; re-check how far headers still lead
+        break;                      // window expired with no progress; stop waiting
+    }
+    return true;
 }
 
 namespace {

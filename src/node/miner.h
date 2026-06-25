@@ -26,6 +26,15 @@ namespace node {
 //! upstream CChainParams::IsTestChain. Used by interfaces::Mining::isTestChain.
 bool IsTestChain(const CChainParams& params);
 
+//! How many blocks the best header leads the active tip by, or nullopt when the tip is not
+//! behind. The cooldown gate for createNewBlock() (mirrors ChainstateManager::BlocksAheadOfTip).
+std::optional<int> BlocksAheadOfTip(int best_header_height, int tip_height);
+
+//! Block while the best header still leads the tip (post-IBD catch-up), returning true when the
+//! tip has caught up / the cooldown window expires, or false on interrupt. Mirrors upstream
+//! node::CooldownIfHeadersAhead.
+bool CooldownIfHeadersAhead(std::atomic<bool>& interrupt);
+
 //! Current chain tip as a BlockRef, or nullopt if no tip.
 std::optional<interfaces::BlockRef> GetTip();
 

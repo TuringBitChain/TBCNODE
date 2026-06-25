@@ -128,8 +128,23 @@ public:
     }
 
     std::unique_ptr<BlockTemplate> createNewBlock(const BlockCreateOptions& options,
-                                                  bool /*cooldown*/) override
+                                                  bool cooldown) override
     {
+        // Ensure a tip is connected so the template (and its consumers) can rely on it.
+        auto tip = WaitTipChanged(uint256(), std::chrono::milliseconds::max(), m_interrupt);
+        if (!tip) return nullptr;
+
+        if (cooldown) {
+            // Do not hand out templates during IBD (it has long pauses). Gated behind cooldown
+            // because on regtest / single-miner signet this would otherwise wait forever.
+            while (IsInitialBlockDownload()) {
+                tip = WaitTipChanged(tip->hash, std::chrono::milliseconds(1000), m_interrupt);
+                if (!tip || m_interrupt.load()) return nullptr;
+            }
+            // Also wait out the final post-IBD catch-up while headers lead the tip.
+            if (!CooldownIfHeadersAhead(m_interrupt)) return nullptr;
+        }
+
         CScript spk = options.coinbase_output_script;
         CBlockIndex* pindexPrev{nullptr};
         auto tmpl = mining::g_miningFactory->GetAssembler()->CreateNewBlock(spk, pindexPrev);
