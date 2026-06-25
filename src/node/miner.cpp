@@ -5,6 +5,8 @@
 #include <node/miner.h>
 
 #include <chain.h>                 // CBlockIndex, mapBlockIndex
+#include <chainparams.h>           // CChainParams
+#include <chainparamsbase.h>       // CBaseChainParams::MAIN
 #include <config.h>
 #include <consensus/validation.h>  // CValidationState
 #include <primitives/transaction.h>
@@ -16,6 +18,11 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 
 namespace node {
+
+bool IsTestChain(const CChainParams& params)
+{
+    return params.NetworkIDString() != CBaseChainParams::MAIN;
+}
 
 std::optional<interfaces::BlockRef> GetTip()
 {

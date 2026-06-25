@@ -21,9 +21,10 @@ namespace node {
 struct BlockCreateOptions {
     //! Set false to omit mempool transactions.
     bool use_mempool{true};
-    //! Minimum fee rate for transactions to be included (overrides -blockmintxfee).
+    //! RESERVED (TBC): not a per-call option. TBC's JournalingBlockAssembler reads -blockmintxfee
+    //! / -printpriority from Config/gArgs itself (no MergeMiningOptions layer; cf. spec §1A #3),
+    //! so these are currently unwired. Slated to be dropped in the M3 schema audit.
     std::optional<CFeeRate> block_min_fee_rate{};
-    //! Log the fee rate of each added transaction (overrides -printpriority).
     std::optional<bool> print_modified_fee{};
     //! Script to put in the coinbase. Default is anyone-can-spend (tests only).
     CScript coinbase_output_script{CScript() << OP_TRUE};

@@ -32,6 +32,10 @@ public:
     virtual ~BlockTemplate() = default;
 
     virtual CBlockHeader getBlockHeader() = 0;
+    //! The returned block contains a DUMMY coinbase that should not be used as-is, and may
+    //! not match a coinbase constructed from getCoinbaseTx(). Callers build the real coinbase
+    //! from getCoinbaseTx(), re-derive the merkle root (getCoinbaseMerklePath()), and submit
+    //! via submitSolution().
     virtual CBlock getBlock() = 0;
 
     virtual std::vector<Amount> getTxFees() = 0;
@@ -41,7 +45,12 @@ public:
     //! Merkle path to the coinbase, ordered from the deepest.
     virtual std::vector<uint256> getCoinbaseMerklePath() = 0;
 
-    //! Construct and broadcast the block. Modifies the template in place.
+    //! Construct and broadcast the block from a COMPLETE coinbase, recomputing the merkle
+    //! root; modifies the template in place. (TBC has no witness, so the coinbase is plain.)
+    //! The coinbase scriptSig must retain the BIP34 height prefix `CScript() << height << OP_0`;
+    //! at heights <= 16 the height is a single-byte push, so the trailing OP_0 padding is
+    //! required to keep the coinbase scriptSig long enough (cf. bitcoin#34860). Returns true if
+    //! the block (or an equal one already known) is accepted.
     virtual bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) = 0;
 
     //! Wait for higher fees, a new tip, or timeout. nullptr on timeout.
@@ -71,7 +80,9 @@ public:
     //! Check a block's validity (PoW check skippable for externally generated templates).
     virtual bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) = 0;
 
-    //! Process a fully assembled block (like submitblock). true if accepted as new.
+    //! Process a fully assembled block (like submitblock). Returns true ONLY if accepted as a
+    //! NEW block (reason left empty); a duplicate or inconclusive outcome returns false with
+    //! reason set ("duplicate"/"inconclusive") and debug populated on validation failure.
     virtual bool submitBlock(const CBlock& block, std::string& reason, std::string& debug) = 0;
 
     //! Internal node context. Useful for RPC/testing; not accessible across processes.

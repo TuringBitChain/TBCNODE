@@ -117,7 +117,7 @@ class MinerImpl : public Mining
 public:
     explicit MinerImpl(const NodeContext& node) : m_node(node) {}
 
-    bool isTestChain() override { return Params().MineBlocksOnDemand(); }
+    bool isTestChain() override { return IsTestChain(Params()); }
     bool isInitialBlockDownload() override { return IsInitialBlockDownload(); }
     std::optional<BlockRef> getTip() override { return GetTip(); }
 

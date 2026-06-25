@@ -5,6 +5,8 @@
 #include <node/context.h>
 #include <amount.h>
 #include <chain.h>
+#include <chainparams.h>
+#include <chainparamsbase.h>
 #include <config.h>
 #include <consensus/merkle.h>
 #include <key.h>
@@ -64,6 +66,17 @@ BOOST_AUTO_TEST_CASE(interface_is_implementable)
     BOOST_CHECK(t.waitNext({}) == nullptr);
 }
 
+// isTestChain must be true for EVERY non-mainnet chain (testnet/regtest/STN), mirroring
+// upstream interfaces::Mining::isTestChain == CChainParams::IsTestChain. The old mapping
+// (MineBlocksOnDemand) was regtest-only and wrongly returned false on testnet/STN.
+BOOST_AUTO_TEST_CASE(is_test_chain_recognizes_all_test_networks)
+{
+    BOOST_CHECK(!node::IsTestChain(*CreateChainParams(CBaseChainParams::MAIN)));
+    BOOST_CHECK(node::IsTestChain(*CreateChainParams(CBaseChainParams::TESTNET)));
+    BOOST_CHECK(node::IsTestChain(*CreateChainParams(CBaseChainParams::REGTEST)));
+    BOOST_CHECK(node::IsTestChain(*CreateChainParams(CBaseChainParams::STN)));
+}
+
 // All chain-dependent assertions share ONE TestChain100Setup instance. The heavyweight
 // regtest fixture does not survive repeated instantiation within a single suite (global
 // chain/DB state leaks across instances), so the create/wait/submit behaviours are
@@ -106,6 +119,14 @@ BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
     auto tipB = mining->getTip();
     BOOST_REQUIRE(tipB.has_value());
     BOOST_CHECK_EQUAL(tipB->height, tipA->height + 1);
+
+    // submitBlock must reject an already-connected block as a duplicate (false + "duplicate"),
+    // matching upstream submitBlock's `accepted && new_block && reason.empty()` contract.
+    {
+        std::string reason, debug;
+        BOOST_CHECK(!mining->submitBlock(block, reason, debug));
+        BOOST_CHECK_EQUAL(reason, "duplicate");
+    }
 
     // WaitTipChanged times out (no new block) and returns the same tip.
     std::atomic<bool> interrupt{false};

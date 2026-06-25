@@ -18,8 +18,13 @@
 #include <string>
 
 class Config;
+class CChainParams;
 
 namespace node {
+
+//! True iff the given chain is a test chain (anything but mainnet), mirroring
+//! upstream CChainParams::IsTestChain. Used by interfaces::Mining::isTestChain.
+bool IsTestChain(const CChainParams& params);
 
 //! Current chain tip as a BlockRef, or nullopt if no tip.
 std::optional<interfaces::BlockRef> GetTip();
