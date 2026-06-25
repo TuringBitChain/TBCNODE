@@ -32,6 +32,13 @@ std::optional<int> BlocksAheadOfTip(int best_header_height, int tip_height)
     return best_header_height - tip_height;
 }
 
+Amount SumTemplateFees(const std::vector<Amount>& fees)
+{
+    Amount total{0};
+    for (size_t i = 1; i < fees.size(); ++i) total += fees[i]; // skip coinbase placeholder
+    return total;
+}
+
 std::optional<interfaces::BlockRef> GetTip()
 {
     LOCK(cs_main);

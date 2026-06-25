@@ -89,6 +89,17 @@ BOOST_AUTO_TEST_CASE(blocks_ahead_of_tip_counts_only_when_headers_lead)
     BOOST_CHECK(BlocksAheadOfTip(/*best_header=*/105, /*tip=*/100) == std::optional<int>(5));
 }
 
+// SumTemplateFees totals the real per-tx fees of a template, skipping element 0 (the coinbase
+// placeholder holding -total). waitNext compares this between the old and a freshly built
+// template to decide whether fees rose past fee_threshold.
+BOOST_AUTO_TEST_CASE(template_fees_skip_coinbase_placeholder)
+{
+    using node::SumTemplateFees;
+    BOOST_CHECK(SumTemplateFees({Amount(-30), Amount(10), Amount(20)}) == Amount(30));
+    BOOST_CHECK(SumTemplateFees({}) == Amount(0));
+    BOOST_CHECK(SumTemplateFees({Amount(-5)}) == Amount(0)); // coinbase placeholder only
+}
+
 // All chain-dependent assertions share ONE TestChain100Setup instance. The heavyweight
 // regtest fixture does not survive repeated instantiation within a single suite (global
 // chain/DB state leaks across instances), so the create/wait/submit behaviours are
@@ -163,6 +174,15 @@ BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
     BOOST_REQUIRE(next.has_value());
     BOOST_CHECK(next->hash != tipB->hash);
     BOOST_CHECK_EQUAL(next->height, tipB->height + 1);
+
+    // waitNext returns nullptr on timeout when no trigger fires (no tip change, default
+    // fee_threshold = MAX_MONEY). The old impl wrongly rebuilt and returned a template on
+    // every timeout tick instead of signalling "nothing new".
+    auto fresh_tmpl = mining->createNewBlock(opts, /*cooldown=*/false);
+    BOOST_REQUIRE(fresh_tmpl);
+    node::BlockWaitOptions wopts;
+    wopts.timeout = std::chrono::milliseconds(300);
+    BOOST_CHECK(fresh_tmpl->waitNext(wopts) == nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

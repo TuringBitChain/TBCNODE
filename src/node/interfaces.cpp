@@ -5,6 +5,7 @@
 #include <interfaces/mining.h>
 
 #include <chain.h>
+#include <chainparams.h>           // Params(), GetConsensus()
 #include <config.h>
 #include <consensus/merkle.h>      // ComputeMerkleRoot, ComputeMerkleBranch
 #include <consensus/validation.h>  // CValidationState
@@ -17,7 +18,9 @@
 #include <sync.h>
 #include <validation.h>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -31,8 +34,10 @@ namespace {
 class BlockTemplateImpl : public BlockTemplate
 {
 public:
-    BlockTemplateImpl(const Config& config, std::unique_ptr<mining::CBlockTemplate> tmpl)
-        : m_config(config), m_template(std::move(tmpl)) {}
+    BlockTemplateImpl(const Config& config, std::unique_ptr<mining::CBlockTemplate> tmpl,
+                      BlockCreateOptions create_options)
+        : m_config(config), m_template(std::move(tmpl)),
+          m_create_options(std::move(create_options)) {}
 
     CBlockHeader getBlockHeader() override { return m_template->GetBlockRef()->GetBlockHeader(); }
     CBlock getBlock() override { return *m_template->GetBlockRef(); }
@@ -91,17 +96,56 @@ public:
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
     {
-        // M1: wait for a new tip, then build a fresh template. (Fee-threshold-only
-        // wakeups are a later refinement; tip change is the primary trigger.)
+        // Three wake triggers (mirrors upstream WaitAndCreateNewBlock): a new tip, a fee rise of
+        // at least fee_threshold, or — on min-difficulty test nets — a 20-minute stall. Returns
+        // nullptr on timeout or interrupt. The (expensive) fee re-check runs at most once/second.
         const uint256 prev = m_template->GetBlockRef()->hashPrevBlock;
-        auto after = WaitTipChanged(prev, options.timeout, m_interrupt);
-        if (!after) return nullptr;
+        const bool allow_min_difficulty = Params().GetConsensus().fPowAllowMinDifficultyBlocks;
+        const bool wait_forever = (options.timeout == std::chrono::milliseconds::max());
+        const auto start = std::chrono::steady_clock::now();
+        std::optional<Amount> current_fees;
 
-        CBlockIndex* pindexPrev{nullptr};
-        auto fresh = mining::g_miningFactory->GetAssembler()->CreateNewBlock(
-            CScript() << OP_TRUE, pindexPrev);
-        if (!fresh) return nullptr;
-        return std::make_unique<BlockTemplateImpl>(m_config, std::move(fresh));
+        while (true) {
+            std::chrono::milliseconds tick{1000};
+            if (!wait_forever) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start);
+                if (elapsed >= options.timeout) return nullptr;
+                tick = std::min(tick, options.timeout - elapsed);
+            }
+
+            auto after = WaitTipChanged(prev, tick, m_interrupt);
+            if (!after) return nullptr; // interrupted
+            bool tip_changed = (after->hash != prev);
+
+            // On test networks, treat a 20-minute stall as a trigger (min-difficulty block).
+            if (!tip_changed && allow_min_difficulty) {
+                int64_t tip_time;
+                { LOCK(cs_main); tip_time = chainActive.Tip()->GetBlockTime(); }
+                if (GetTime() > tip_time + 20 * 60) tip_changed = true;
+            }
+
+            if (options.fee_threshold < MAX_MONEY || tip_changed) {
+                CBlockIndex* pindexPrev{nullptr};
+                auto fresh = mining::g_miningFactory->GetAssembler()->CreateNewBlock(
+                    m_create_options.coinbase_output_script, pindexPrev);
+
+                // A tip change yields the new template regardless of its fees.
+                if (tip_changed) {
+                    if (!fresh) return nullptr;
+                    return std::make_unique<BlockTemplateImpl>(m_config, std::move(fresh),
+                                                               m_create_options);
+                }
+                // Otherwise only return it if fees rose by at least fee_threshold.
+                if (fresh) {
+                    if (!current_fees) current_fees = SumTemplateFees(m_template->vTxFees);
+                    if (SumTemplateFees(fresh->vTxFees) >= *current_fees + options.fee_threshold) {
+                        return std::make_unique<BlockTemplateImpl>(m_config, std::move(fresh),
+                                                                   m_create_options);
+                    }
+                }
+            }
+        }
     }
 
     void interruptWait() override { m_interrupt = true; cvBlockChange.notify_all(); }
@@ -109,6 +153,7 @@ public:
 private:
     const Config& m_config;
     const std::unique_ptr<mining::CBlockTemplate> m_template;
+    const BlockCreateOptions m_create_options;
     std::atomic<bool> m_interrupt{false};
 };
 
@@ -149,7 +194,7 @@ public:
         CBlockIndex* pindexPrev{nullptr};
         auto tmpl = mining::g_miningFactory->GetAssembler()->CreateNewBlock(spk, pindexPrev);
         if (!tmpl) return nullptr;
-        return std::make_unique<BlockTemplateImpl>(config(), std::move(tmpl));
+        return std::make_unique<BlockTemplateImpl>(config(), std::move(tmpl), options);
     }
 
     void interrupt() override { m_interrupt = true; cvBlockChange.notify_all(); }

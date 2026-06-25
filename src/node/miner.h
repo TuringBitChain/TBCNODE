@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 class Config;
 class CChainParams;
@@ -34,6 +35,10 @@ std::optional<int> BlocksAheadOfTip(int best_header_height, int tip_height);
 //! tip has caught up / the cooldown window expires, or false on interrupt. Mirrors upstream
 //! node::CooldownIfHeadersAhead.
 bool CooldownIfHeadersAhead(std::atomic<bool>& interrupt);
+
+//! Total real transaction fees in a template's vTxFees, skipping element 0 (the coinbase
+//! placeholder holding -total). Used by waitNext to detect a fee rise between templates.
+Amount SumTemplateFees(const std::vector<Amount>& fees);
 
 //! Current chain tip as a BlockRef, or nullopt if no tip.
 std::optional<interfaces::BlockRef> GetTip();
