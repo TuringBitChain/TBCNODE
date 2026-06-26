@@ -96,6 +96,7 @@ set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "Enable ECDSA pubkey recovery
 
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
+add_subdirectory(ipc)
 
 # Because the Bitcoin ABc source code is disorganised, we
 # end up with a bunch of libraries without any aparent
