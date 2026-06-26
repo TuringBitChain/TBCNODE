@@ -102,8 +102,6 @@ if(ENABLE_IPC)
   add_libmultiprocess(ipc/libmultiprocess)
 endif()
 
-add_subdirectory(ipc)
-
 # Because the Bitcoin ABc source code is disorganised, we
 # end up with a bunch of libraries without any aparent
 # cohesive structure. This is inherited from Bitcoin Core
@@ -176,6 +174,8 @@ prepend(BOOST_LIBRARIES "Boost::" ${BOOST_PACKAGES_REQUIRED})
 
 find_package(Boost 1.59 REQUIRED ${BOOST_PACKAGES_REQUIRED})
 target_link_libraries(util univalue crypto ${BOOST_LIBRARIES})
+
+add_subdirectory(ipc)
 
 # Make sure boost uses std::atomic (it doesn't before 1.63)
 target_compile_definitions(util PUBLIC BOOST_SP_USE_STD_ATOMIC BOOST_AC_USE_STD_ATOMIC)

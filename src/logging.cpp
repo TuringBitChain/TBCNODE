@@ -85,6 +85,7 @@ const CLogCategoryDesc LogCategories[] = {
     {BCLog::TXNSRC, "txnsrc"},
     {BCLog::JOURNAL, "journal"},
     {BCLog::TXNVAL, "txnval"},
+    {BCLog::IPC, "ipc"},
     {BCLog::ALL, "1"},
     {BCLog::ALL, "all"},
 };

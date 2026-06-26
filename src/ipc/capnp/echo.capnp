@@ -12,6 +12,6 @@ $Proxy.include("interfaces/echo.h");
 $Proxy.includeTypes("ipc/capnp/echo-types.h");
 
 interface Echo $Proxy.wrap("interfaces::Echo") {
-    destroy @0 () -> ();
-    echo @1 (echo: Text) -> (result :Text);
+    destroy @0 (context :Proxy.Context) -> ();
+    echo @1 (context :Proxy.Context, echo :Text) -> (result :Text);
 }
