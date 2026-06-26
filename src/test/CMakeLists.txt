@@ -211,3 +211,13 @@ endif()
 #   )
 #   target_link_libraries(test_bitcoin bitcoin_ipc_test)
 # endif()
+
+# M3a Task 2: CTransaction serialization round-trip test via capnp Data hooks.
+# ipc_tests.cpp is C++17 (no capnp headers); ipc_test.cpp (C++20, in bitcoin_ipc_test)
+# provides SerializeRoundTripTest().
+if(ENABLE_IPC)
+  target_sources(test_bitcoin PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/ipc/test/ipc_tests.cpp
+  )
+  target_link_libraries(test_bitcoin bitcoin_ipc_test)
+endif()
