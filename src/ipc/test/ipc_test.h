@@ -21,4 +21,10 @@ public:
 //! C++17 Boost.Test runner can call it without pulling in C++20 generated code.
 void SerializeRoundTripTest();
 
+//! Test unix-socket address canonicalization via ipc::MakeProcess()->connect().
+//! Exercises ParseAddress for: bare "unix", "unix:<path>", oversized path
+//! (throws std::invalid_argument), and unrecognized scheme (throws
+//! std::invalid_argument).  Declared in plain C++ so the C++17 runner can call it.
+void ParseAddressTest();
+
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

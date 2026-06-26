@@ -17,4 +17,9 @@ BOOST_AUTO_TEST_CASE(ipc_serialize)
     SerializeRoundTripTest();
 }
 
+BOOST_AUTO_TEST_CASE(parse_address)
+{
+    ParseAddressTest();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

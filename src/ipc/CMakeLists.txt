@@ -3,7 +3,10 @@ if(NOT ENABLE_IPC)
   return()
 endif()
 
-add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL stub.cpp)
+add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
+  stub.cpp
+  process.cpp
+)
 set_target_properties(bitcoin_ipc PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 target_capnp_sources(bitcoin_ipc ${CMAKE_SOURCE_DIR}/src

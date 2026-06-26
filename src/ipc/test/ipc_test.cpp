@@ -19,9 +19,14 @@
 
 #include <primitives/transaction.h>
 
+#include <ipc/process.h>
+#include <fs.h>
+
 #include <cassert>
 #include <future>
 #include <memory>
+#include <stdexcept>
+#include <system_error>
 #include <thread>
 
 void SerializeRoundTripTest()
@@ -74,4 +79,68 @@ void SerializeRoundTripTest()
     // Tear down.
     client.reset();
     loop_thread.join();
+}
+
+void ParseAddressTest()
+{
+    // Use a non-existent datadir so connect() always fails with ENOENT after
+    // canonicalizing the address (never before).
+    std::unique_ptr<ipc::Process> process{ipc::MakeProcess()};
+    fs::path datadir{"/var/empty/notexist"};
+
+    // Helper: returns true when the system_error is ENOENT (no-such-file).
+    auto is_notexist = [](const std::system_error& e) {
+        return e.code() == std::errc::no_such_file_or_directory;
+    };
+
+    // check_valid: address should be canonicalized to expect_address, then
+    // connect() should throw std::system_error(ENOENT) because the socket path
+    // doesn't exist.
+    auto check_valid = [&](std::string address, const std::string& expect_address) {
+        bool threw_notexist = false;
+        try {
+            process->connect(datadir, "test_bitcoin", address);
+        } catch (const std::system_error& e) {
+            threw_notexist = is_notexist(e);
+        }
+        assert(threw_notexist && "expected std::system_error ENOENT");
+        assert(address == expect_address);
+    };
+
+    // check_invalid: address parsing itself should throw std::invalid_argument
+    // with a message containing expect_substr.  Address must remain unchanged.
+    auto check_invalid = [&](std::string address, const std::string& expect_addr_after,
+                              const std::string& expect_substr) {
+        bool threw_invalid = false;
+        std::string what;
+        try {
+            process->connect(datadir, "test_bitcoin", address);
+        } catch (const std::invalid_argument& e) {
+            threw_invalid = true;
+            what = e.what();
+        }
+        assert(threw_invalid && "expected std::invalid_argument");
+        assert(what.find(expect_substr) != std::string::npos);
+        assert(address == expect_addr_after);
+    };
+
+    // Bare "unix" resolves to <datadir>/test_bitcoin.sock.
+    check_valid("unix",  "unix:/var/empty/notexist/test_bitcoin.sock");
+
+    // "unix:" (empty path after colon) also resolves to <datadir>/test_bitcoin.sock.
+    check_valid("unix:", "unix:/var/empty/notexist/test_bitcoin.sock");
+
+    // "unix:path.sock" (relative) resolves to <datadir>/path.sock.
+    check_valid("unix:path.sock", "unix:/var/empty/notexist/path.sock");
+
+    // Oversized path: address is set before the length check fails, then
+    // ParseAddress returns false and connect() throws std::invalid_argument.
+    // The long-path case canonicalizes the address then fails the length check.
+    check_invalid(
+        "unix:0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.sock",
+        "unix:/var/empty/notexist/0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.sock",
+        "exceeded maximum socket path length");
+
+    // Unrecognized scheme throws invalid_argument; address unchanged.
+    check_invalid("invalid", "invalid", "Unrecognized address 'invalid'");
 }
