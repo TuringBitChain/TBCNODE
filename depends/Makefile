@@ -142,6 +142,10 @@ $(host_prefix)/share/config.site : config.site.in $(host_prefix)/.stamp_$(final_
             $< > $@
 	$(AT)touch $@
 
+$(host_prefix)/toolchain.cmake: toolchain.cmake.in $(host_prefix)/.stamp_$(final_build_id)
+	@mkdir -p $(@D)
+	sed -e 's|@ipc_packages@|$(ipc_packages_)|' \
+	    $< > $@
 
 define check_or_remove_cached
   mkdir -p $(BASE_CACHE)/$(host)/$(package) && cd $(BASE_CACHE)/$(host)/$(package); \
@@ -164,9 +168,11 @@ check-sources:
 
 $(host_prefix)/share/config.site: check-packages
 
+$(host_prefix)/toolchain.cmake: check-packages
+
 check-packages: check-sources
 
-install: check-packages $(host_prefix)/share/config.site
+install: check-packages $(host_prefix)/share/config.site $(host_prefix)/toolchain.cmake
 
 download-one: check-sources $(all_sources)
 
