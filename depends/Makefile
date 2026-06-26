@@ -5,6 +5,7 @@ BASE_CACHE ?= $(BASEDIR)/built
 SDK_PATH ?= $(BASEDIR)/SDKs
 NO_WALLET ?=
 NO_UPNP ?=
+NO_IPC ?=
 FALLBACK_DOWNLOAD_PATH ?= https://bitcoinsv.io/depends-sources
 
 BUILD = $(shell ./config.guess)
@@ -90,6 +91,13 @@ $(host_arch)_$(host_os)_id_string+=$(shell $(host_STRIP) --version 2>/dev/null)
 
 wallet_packages_$(NO_WALLET) = $(wallet_packages)
 upnp_packages_$(NO_UPNP) = $(upnp_packages)
+
+# IPC (Cap'n Proto / libmultiprocess). Disabled when NO_IPC=1 (e.g. mingw).
+ipc_packages_$(NO_IPC) = $(ipc_packages)
+ifneq ($(ipc_packages_),)
+packages += $(ipc_packages)
+native_packages += $(multiprocess_native_packages)
+endif
 
 packages += $($(host_arch)_$(host_os)_packages) $($(host_os)_packages) $(wallet_packages_) $(upnp_packages_)
 native_packages += $($(host_arch)_$(host_os)_native_packages) $($(host_os)_native_packages)

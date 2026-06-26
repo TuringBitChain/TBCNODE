@@ -36,6 +36,14 @@ endef
 
 define int_get_build_recipe_hash
 $(eval $(1)_all_file_checksums:=$(shell $(build_SHA256SUM) $(meta_depends) packages/$(1).mk $(addprefix $(PATCHES_PATH)/$(1)/,$($(1)_patches)) | cut -d" " -f1))
+# If $(1)_local_dir is set, create a tarball from the local directory and
+# include its hash so changes in the directory trigger a rebuild.
+$(if $($(1)_local_dir),$(eval $(1)_local_tar:=$(SOURCES_PATH)/$(subst /,-,$(strip $($(1)_local_dir))).tar))
+$(if $($(1)_local_dir),$(eval $(1)_sha256_hash:=$(shell \
+    mkdir -p $(SOURCES_PATH) && \
+    tar -c -f $($(1)_local_tar) -C $($(1)_local_dir) . && \
+    $(build_SHA256SUM) $($(1)_local_tar) | cut -d" " -f1)))
+$(if $($(1)_local_dir),$(eval $(1)_all_file_checksums+=$($(1)_sha256_hash)))
 $(eval $(1)_recipe_hash:=$(shell echo -n "$($(1)_all_file_checksums)" | $(build_SHA256SUM) | cut -d" " -f1))
 endef
 
@@ -51,6 +59,8 @@ final_build_id_long+=$($(package)_build_id_long)
 $(1)_build_subdir?=.
 $(1)_download_file?=$($(1)_file_name)
 $(1)_source_dir:=$(SOURCES_PATH)
+# If file_name is empty and local_dir is set, use the pre-staged local tarball filename.
+$(if $($(1)_file_name),,$(if $($(1)_local_dir),$(eval $(1)_file_name:=$(subst /,-,$(strip $($(1)_local_dir))).tar)))
 $(1)_source:=$$($(1)_source_dir)/$($(1)_file_name)
 $(1)_staging_dir=$(base_staging_dir)/$(host)/$(1)/$($(1)_version)-$($(1)_build_id)
 $(1)_staging_prefix_dir:=$$($(1)_staging_dir)$($($(1)_type)_prefix)
@@ -154,6 +164,25 @@ $(1)_autoconf += CPPFLAGS="$$($(1)_cppflags)"
 endif
 ifneq ($($(1)_ldflags),)
 $(1)_autoconf += LDFLAGS="$$($(1)_ldflags)"
+endif
+
+$(1)_cmake=env CC="$$($(1)_cc)" \
+               CFLAGS="$$($(1)_cppflags) $$($(1)_cflags)" \
+               CXX="$$($(1)_cxx)" \
+               CXXFLAGS="$$($(1)_cppflags) $$($(1)_cxxflags)" \
+               LDFLAGS="$$($(1)_ldflags)" \
+               cmake -G "Unix Makefiles" \
+               -DCMAKE_INSTALL_PREFIX:PATH="$$($($(1)_type)_prefix)" \
+               -DCMAKE_AR=`which $$($(1)_ar)` \
+               -DCMAKE_NM=`which $$($(1)_nm)` \
+               -DCMAKE_RANLIB=`which $$($(1)_ranlib)` \
+               -DCMAKE_INSTALL_LIBDIR=lib \
+               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+               -DCMAKE_VERBOSE_MAKEFILE:BOOL=$(V) \
+               -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY:BOOL=TRUE \
+               $$($(1)_config_opts)
+ifeq ($($(1)_type),build)
+$(1)_cmake += -DCMAKE_INSTALL_RPATH:PATH="$$($($(1)_type)_prefix)/lib"
 endif
 endef
 
