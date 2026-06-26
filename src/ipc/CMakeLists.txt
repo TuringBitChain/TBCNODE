@@ -6,6 +6,7 @@ endif()
 add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
   stub.cpp
   process.cpp
+  interfaces.cpp
   capnp/protocol.cpp
 )
 set_target_properties(bitcoin_ipc PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
