@@ -96,6 +96,12 @@ set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "Enable ECDSA pubkey recovery
 
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
+
+if(ENABLE_IPC)
+  include(${CMAKE_SOURCE_DIR}/cmake/libmultiprocess.cmake)
+  add_libmultiprocess(ipc/libmultiprocess)
+endif()
+
 add_subdirectory(ipc)
 
 # Because the Bitcoin ABc source code is disorganised, we

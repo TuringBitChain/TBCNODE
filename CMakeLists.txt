@@ -2,7 +2,7 @@
 # Copyright (c) 2019 Bitcoin Association
 # Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.16)
 project(TuringBitChain)
 #Reduce warnings on MSVC, to closer match GCC compiler settings
 if(POLICY CMP0092 AND MSVC)
