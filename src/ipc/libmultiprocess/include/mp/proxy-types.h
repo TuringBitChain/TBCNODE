@@ -7,7 +7,6 @@
 
 #include <mp/proxy-io.h>
 
-#include <atomic>
 #include <exception>
 #include <optional>
 #include <set>
