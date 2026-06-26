@@ -27,4 +27,15 @@ void SerializeRoundTripTest();
 //! std::invalid_argument).  Declared in plain C++ so the C++17 runner can call it.
 void ParseAddressTest();
 
+//! Test ipc::Protocol connect() and serve() methods end-to-end over a
+//! socketpair.  Exercises the real CapnpProtocol serve/connect path, the Init
+//! bootstrap, and the Echo makeEcho() round-trip.  Declared in plain C++ so
+//! the C++17 Boost.Test runner can call it.
+void IpcSocketPairTest();
+
+//! Test ipc::Process bind() and ipc::Protocol listen()/connect() methods
+//! over a real unix socket.  Exercises multiple addresses and multiple connects.
+//! Declared in plain C++ so the C++17 Boost.Test runner can call it.
+void IpcSocketTest();
+
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

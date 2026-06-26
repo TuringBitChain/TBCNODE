@@ -22,4 +22,14 @@ BOOST_AUTO_TEST_CASE(parse_address)
     ParseAddressTest();
 }
 
+BOOST_AUTO_TEST_CASE(ipc_socket_pair)
+{
+    IpcSocketPairTest();
+}
+
+BOOST_AUTO_TEST_CASE(ipc_socket)
+{
+    IpcSocketTest();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

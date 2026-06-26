@@ -246,7 +246,6 @@ add_library(server
 	httpserver.cpp
 	init.cpp
 	dbwrapper.cpp
-	interfaces/echo.cpp
 	merkleblock.cpp
 	node/interfaces.cpp
 	node/miner.cpp

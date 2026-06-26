@@ -8,6 +8,7 @@ add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
   process.cpp
   interfaces.cpp
   capnp/protocol.cpp
+  ${CMAKE_SOURCE_DIR}/src/interfaces/echo.cpp
 )
 set_target_properties(bitcoin_ipc PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 

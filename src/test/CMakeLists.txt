@@ -202,17 +202,7 @@ if(BUILD_BITCOIN_WALLET)
 	)
 endif()
 
-# NOTE (M3a Task 1): ipc_echo_tests temporarily excluded — ipc_echo_round_trip.cpp
-# was written for the no-context echo schema and breaks with context params restored.
-# Will be replaced when Task 6 deletes/rewrites this test.
-# if(ENABLE_IPC)
-#   target_sources(test_bitcoin PRIVATE
-#     ${CMAKE_SOURCE_DIR}/src/ipc/test/ipc_echo_tests.cpp
-#   )
-#   target_link_libraries(test_bitcoin bitcoin_ipc_test)
-# endif()
-
-# M3a Task 2: CTransaction serialization round-trip test via capnp Data hooks.
+# M3a Task 6: Echo round-trip over real socket via protocol layer (M3a acceptance).
 # ipc_tests.cpp is C++17 (no capnp headers); ipc_test.cpp (C++20, in bitcoin_ipc_test)
 # provides SerializeRoundTripTest().
 if(ENABLE_IPC)

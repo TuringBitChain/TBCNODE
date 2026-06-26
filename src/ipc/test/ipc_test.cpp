@@ -13,21 +13,36 @@
 #include <ipc/test/ipc_test.capnp.proxy.h>
 
 #include <ipc/capnp/common-types.h>
+#include <ipc/capnp/protocol.h>
+#include <ipc/process.h>
+#include <ipc/protocol.h>
+
+#include <interfaces/echo.h>
+#include <interfaces/init.h>
 
 #include <mp/proxy-io.h>
 #include <mp/proxy.h>
 
 #include <primitives/transaction.h>
 
-#include <ipc/process.h>
 #include <fs.h>
+#include <tinyformat.h>
 
 #include <cassert>
 #include <future>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <sys/socket.h>
 #include <system_error>
 #include <thread>
+
+//! Simple Init implementation for tests: makeEcho returns an in-process EchoImpl.
+class TestInit : public interfaces::Init
+{
+public:
+    std::unique_ptr<interfaces::Echo> makeEcho() override { return interfaces::MakeEcho(); }
+};
 
 void SerializeRoundTripTest()
 {
@@ -143,4 +158,93 @@ void ParseAddressTest()
 
     // Unrecognized scheme throws invalid_argument; address unchanged.
     check_invalid("invalid", "invalid", "Unrecognized address 'invalid'");
+}
+
+//! Generate a temporary directory path using mkdtemp and return it.
+static fs::path TempDir(std::string_view pattern)
+{
+    std::string temp{(fs::temp_directory_path() / fs::path{std::string{pattern}}).string()};
+    temp.push_back('\0');
+    assert(mkdtemp(temp.data()) != nullptr);
+    temp.resize(temp.size() - 1);
+    return fs::path{temp};
+}
+
+//! Test ipc::Protocol connect() and serve() methods connecting over a socketpair.
+void IpcSocketPairTest()
+{
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    std::unique_ptr<interfaces::Init> init{std::make_unique<TestInit>()};
+    std::unique_ptr<ipc::Protocol> protocol{ipc::capnp::MakeCapnpProtocol()};
+    std::promise<void> promise;
+    std::thread thread([&]() {
+        protocol->serve(fds[0], "test-serve", *init, [&] { promise.set_value(); });
+    });
+    promise.get_future().wait();
+    std::unique_ptr<interfaces::Init> remote_init{protocol->connect(fds[1], "test-connect")};
+    std::unique_ptr<interfaces::Echo> remote_echo{remote_init->makeEcho()};
+    assert(remote_echo->echo("echo test") == "echo test");
+    // Tear down: destroy echo and init first so the server sees the disconnects,
+    // then join the serve thread.
+    remote_echo.reset();
+    remote_init.reset();
+    thread.join();
+}
+
+//! Test ipc::Process bind() and connect() methods connecting over a unix socket.
+void IpcSocketTest()
+{
+    // Use a short private temp directory so socket paths fit within the
+    // 108-byte unix socket path limit.
+    fs::path datadir{TempDir("ipc_sock_XXXXXX")};
+
+    std::unique_ptr<interfaces::Init> init{std::make_unique<TestInit>()};
+    std::unique_ptr<ipc::Protocol> protocol{ipc::capnp::MakeCapnpProtocol()};
+    std::unique_ptr<ipc::Process> process{ipc::MakeProcess()};
+
+    // Verify that an invalid address throws.
+    std::string invalid_bind{"invalid:"};
+    bool threw_invalid_bind = false;
+    try { process->bind(datadir, "test_bitcoin", invalid_bind); } catch (const std::invalid_argument&) { threw_invalid_bind = true; }
+    assert(threw_invalid_bind);
+    std::string invalid_connect{"invalid:"};
+    bool threw_invalid_connect = false;
+    try { process->connect(datadir, "test_bitcoin", invalid_connect); } catch (const std::invalid_argument&) { threw_invalid_connect = true; }
+    assert(threw_invalid_connect);
+
+    // Use relative socket names so ParseAddress resolves them under datadir.
+    // After bind(), capture the canonical address (absolute path) for connects.
+    // NOTE: In TBC, fs = Boost.Filesystem where (path / "/abs") appends rather
+    // than replaces.  We therefore use relative socket names here so both
+    // bind() and connect() resolve identically against the same datadir.
+    std::vector<std::string> socket_names{"sock0.sock", "sock1.sock"};
+
+    // Bind and listen on each socket.
+    // process->bind() sets address to the canonical form ("unix:<abs-path>").
+    std::vector<std::string> canonical_addresses;
+    for (const auto& name : socket_names) {
+        std::string addr{strprintf("unix:%s", name)};
+        int serve_fd{process->bind(datadir, "test_bitcoin", addr)};
+        assert(serve_fd >= 0);
+        canonical_addresses.push_back(addr);   // addr is now canonical
+        protocol->listen(serve_fd, "test-serve", *init);
+    }
+
+    // Connect using the same relative names (process->connect canonicalizes
+    // identically to bind).
+    auto connect_and_test{[&](const std::string& name) {
+        std::string addr{strprintf("unix:%s", name)};
+        int connect_fd{process->connect(datadir, "test_bitcoin", addr)};
+        std::unique_ptr<interfaces::Init> remote_init{protocol->connect(connect_fd, "test-connect")};
+        std::unique_ptr<interfaces::Echo> remote_echo{remote_init->makeEcho()};
+        assert(remote_echo->echo("echo test") == "echo test");
+    }};
+
+    for (int i : {0, 1, 0, 0, 1}) {
+        connect_and_test(socket_names[i]);
+    }
+
+    // Clean up temp directory (removes socket files too).
+    fs::remove_all(datadir);
 }
