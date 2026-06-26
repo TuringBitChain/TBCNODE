@@ -100,9 +100,10 @@ concept TbcDeserializable =
 
 //! Build: serialize any TBC-Serializable type into a capnp Data field.
 //!
-//! Overloads multiprocess library's CustomBuildField hook (Priority<1>).
-//! The std::is_same_v guard prevents this overload from taking priority over
-//! more-specific Priority<2> / type-data.h overloads for byte-span types.
+//! Overloads multiprocess library's CustomBuildField hook at Priority<1>. More-specific
+//! Priority<2> / type-data.h overloads for byte-span types still win via priority-tag
+//! inheritance (Priority<2> derives from Priority<1>), so this generic hook never shadows
+//! them — no explicit is_same_v guard is needed.
 template <typename LocalType, typename Value, typename Output>
 void CustomBuildField(
     TypeList<LocalType>, Priority<1>, InvokeContext& invoke_context,
