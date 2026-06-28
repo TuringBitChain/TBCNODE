@@ -60,6 +60,8 @@ void CJournal::applyChanges(const CJournalChangeSet& changeSet)
             {
                 index1.emplace_back(txn);
             }
+            LogPrintf("=========== added txn to journal, txid: %s \n",
+                txn.getTxn()->GetId().ToString());
         }
         else if(op == CJournalChangeSet::Operation::REMOVE)
         {

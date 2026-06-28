@@ -1788,9 +1788,18 @@ UniValue mempoolInfoToJSON(const Config& config) {
              (int64_t)mempool.getNonFinalPool().estimateMemoryUsage()));
     size_t maxmempool = config.GetMaxMempool();
     ret.push_back(Pair("maxmempool", (int64_t)maxmempool));
+    // Current size-dependent admission fee floor (the curve evaluated at the
+    // current usage). Below the ramp start it equals mempoolfloorfee; as usage
+    // approaches maxmempool it rises hyperbolically.
     ret.push_back(
         Pair("mempoolminfee",
              ValueFromAmount(mempool.GetMinFee(maxmempool).GetFeePerK())));
+    // Curve parameters, so the value above can be interpreted.
+    ret.push_back(
+        Pair("mempoolfloorfee",
+             ValueFromAmount(config.GetMempoolMinFeePerKB().GetFeePerK())));
+    ret.push_back(
+        Pair("mempoolfeerampstart", (int64_t)config.GetMempoolFeeRampStart()));
 
     return ret;
 }
@@ -1813,9 +1822,15 @@ UniValue getmempoolinfo(const Config &config, const JSONRPCRequest &request) {
             "  \"nonfinalusage\": xxxxx,      (numeric) Total memory usage for "
             "the non-final mempool\n"
             "  \"maxmempool\": xxxxx,         (numeric) Maximum memory usage "
-            "for the mempool\n"
-            "  \"mempoolminfee\": xxxxx       (numeric) Minimum fee for tx to "
-            "be accepted\n"
+            "for the mempool (the hard size cap; the mempool is never trimmed)\n"
+            "  \"mempoolminfee\": xxxxx,      (numeric) Current minimum feerate "
+            "for a tx to be accepted, given current mempool usage. Rises "
+            "hyperbolically from mempoolfloorfee toward maxmempool\n"
+            "  \"mempoolfloorfee\": xxxxx,    (numeric) Configured admission fee "
+            "floor charged while usage is below mempoolfeerampstart "
+            "(-mempoolminfeerate)\n"
+            "  \"mempoolfeerampstart\": xxxxx (numeric) Mempool usage (bytes) "
+            "below which mempoolminfee equals mempoolfloorfee (-mempoolfeerampstart)\n"
             "}\n"
             "\nExamples:\n" +
             HelpExampleCli("getmempoolinfo", "") +

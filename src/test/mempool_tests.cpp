@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "config.h"
 #include "mining/journal_change_set.h"
 #include "policy/policy.h"
 #include "txmempool.h"
@@ -456,12 +457,15 @@ BOOST_AUTO_TEST_CASE(MempoolAncestorIndexingTest) {
     CheckSort<ancestor_score>(pool, sortedOrder);
 }
 
-BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest) {
+BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
+    // The mempool is never trimmed; admission is bounded by a size-dependent
+    // fee floor (CTxMemPool::GetMinFee). Below the ramp start (N1) the floor is
+    // returned verbatim; between N1 and N2 the required feerate rises
+    // hyperbolically with a pole at N2; at/above N2 it clamps to the ceiling.
     CTxMemPool pool;
     TestMemPoolEntryHelper entry;
-    entry.dPriority = 10.0;
-    Amount feeIncrement = MEMPOOL_FULL_FEE_INCREMENT.GetFeePerK();
 
+    // Add a couple of transactions so the pool has a non-trivial memory usage.
     CMutableTransaction tx1 = CMutableTransaction();
     tx1.vin.resize(1);
     tx1.vin[0].scriptSig = CScript() << OP_1;
@@ -480,156 +484,58 @@ BOOST_AUTO_TEST_CASE(MempoolSizeLimitTest) {
     pool.AddUnchecked(tx2.GetId(),
                       entry.Fee(Amount(5000LL)).FromTx(tx2, &pool), nullChangeSet);
 
-    // should do nothing
-    pool.TrimToSize(pool.DynamicMemoryUsage(), nullChangeSet);
-    BOOST_CHECK(pool.Exists(tx1.GetId()));
-    BOOST_CHECK(pool.Exists(tx2.GetId()));
+    const size_t usage = pool.DynamicMemoryUsage();
+    BOOST_CHECK(usage > 0);
 
-    // should remove the lower-feerate transaction
-    pool.TrimToSize(pool.DynamicMemoryUsage() * 3 / 4, nullChangeSet);
-    BOOST_CHECK(pool.Exists(tx1.GetId()));
-    BOOST_CHECK(!pool.Exists(tx2.GetId()));
+    GlobalConfig& config = GlobalConfig::GetConfig();
+    const int64_t floorRate = 1000; // satoshis per kB
+    std::string err;
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(floorRate, &err));
 
-    pool.AddUnchecked(tx2.GetId(), entry.FromTx(tx2, &pool), nullChangeSet);
-    CMutableTransaction tx3 = CMutableTransaction();
-    tx3.vin.resize(1);
-    tx3.vin[0].prevout = COutPoint(tx2.GetId(), 0);
-    tx3.vin[0].scriptSig = CScript() << OP_2;
-    tx3.vout.resize(1);
-    tx3.vout[0].scriptPubKey = CScript() << OP_3 << OP_EQUAL;
-    tx3.vout[0].nValue = 10 * COIN;
-    pool.AddUnchecked(tx3.GetId(),
-                      entry.Fee(Amount(20000LL)).FromTx(tx3, &pool), nullChangeSet);
+    // Below the ramp start (N1 > usage): the floor applies regardless of N2.
+    BOOST_CHECK(config.SetMempoolFeeRampStart(usage + 1, &err));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 4).GetFeePerK(), Amount(floorRate));
 
-    // tx3 should pay for tx2 (CPFP)
-    pool.TrimToSize(pool.DynamicMemoryUsage() * 3 / 4, nullChangeSet);
-    BOOST_CHECK(!pool.Exists(tx1.GetId()));
-    BOOST_CHECK(pool.Exists(tx2.GetId()));
-    BOOST_CHECK(pool.Exists(tx3.GetId()));
+    // On the ramp (N1 = 0): rate = floor * (N2 - N1) / (N2 - usage).
+    BOOST_CHECK(config.SetMempoolFeeRampStart(0, &err));
+    //   N2 = 2*usage -> floor * 2u / u = 2 * floor.
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 2).GetFeePerK(),
+                      Amount(2 * floorRate));
+    //   N2 = 4*usage -> floor * 4u / 3u = 1333 (integer division, exact for any u).
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 4).GetFeePerK(),
+                      Amount(4 * floorRate / 3));
 
-    // mempool is limited to tx1's size in memory usage, so nothing fits
-    pool.TrimToSize(CTransaction(tx1).GetTotalSize(), nullChangeSet);
-    BOOST_CHECK(!pool.Exists(tx1.GetId()));
-    BOOST_CHECK(!pool.Exists(tx2.GetId()));
-    BOOST_CHECK(!pool.Exists(tx3.GetId()));
+    // At/above the hard cap (N2 <= usage): clamp to the ceiling.
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage).GetFeePerK(),
+                      MAX_MEMPOOL_RAMP_FEE_RATE);
 
-    CFeeRate maxFeeRateRemoved(Amount(25000),
-                               CTransaction(tx3).GetTotalSize() +
-                                   CTransaction(tx2).GetTotalSize());
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(),
-                      maxFeeRateRemoved.GetFeePerK() + feeIncrement);
+    // Inclusive lower boundary: usage == N1 is still the flat floor (not the
+    // ramp), because the branch uses usage <= N1.
+    BOOST_CHECK(config.SetMempoolFeeRampStart(usage, &err));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 2).GetFeePerK(), Amount(floorRate));
 
-    CMutableTransaction tx4 = CMutableTransaction();
-    tx4.vin.resize(2);
-    tx4.vin[0].prevout = COutPoint();
-    tx4.vin[0].scriptSig = CScript() << OP_4;
-    tx4.vin[1].prevout = COutPoint();
-    tx4.vin[1].scriptSig = CScript() << OP_4;
-    tx4.vout.resize(2);
-    tx4.vout[0].scriptPubKey = CScript() << OP_4 << OP_EQUAL;
-    tx4.vout[0].nValue = 10 * COIN;
-    tx4.vout[1].scriptPubKey = CScript() << OP_4 << OP_EQUAL;
-    tx4.vout[1].nValue = 10 * COIN;
+    // The hyperbolic ramp itself clamps when the computed rate would exceed the
+    // ceiling. With the floor sitting at the ceiling, any ramp factor > 1
+    // saturates: N1 = 0, N2 = 2*usage -> floor * 2 -> clamped back to the cap.
+    BOOST_CHECK(config.SetMempoolFeeRampStart(0, &err));
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(
+        MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis(), &err));
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 2).GetFeePerK(),
+                      MAX_MEMPOOL_RAMP_FEE_RATE);
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(floorRate, &err)); // restore floor
 
-    CMutableTransaction tx5 = CMutableTransaction();
-    tx5.vin.resize(2);
-    tx5.vin[0].prevout = COutPoint(tx4.GetId(), 0);
-    tx5.vin[0].scriptSig = CScript() << OP_4;
-    tx5.vin[1].prevout = COutPoint();
-    tx5.vin[1].scriptSig = CScript() << OP_5;
-    tx5.vout.resize(2);
-    tx5.vout[0].scriptPubKey = CScript() << OP_5 << OP_EQUAL;
-    tx5.vout[0].nValue = 10 * COIN;
-    tx5.vout[1].scriptPubKey = CScript() << OP_5 << OP_EQUAL;
-    tx5.vout[1].nValue = 10 * COIN;
+    // Degenerate config (N2 <= N1) is treated as flat even when usage > N1: the
+    // floor is returned rather than falling through to the ramp/clamp branches.
+    BOOST_CHECK(config.SetMempoolFeeRampStart(usage / 2, &err));
+    BOOST_CHECK(usage / 2 < usage);                          // usage is above N1
+    BOOST_CHECK_EQUAL(pool.GetMinFee(usage / 4).GetFeePerK(), // and N2 <= N1
+                      Amount(floorRate));
 
-    CMutableTransaction tx6 = CMutableTransaction();
-    tx6.vin.resize(2);
-    tx6.vin[0].prevout = COutPoint(tx4.GetId(), 1);
-    tx6.vin[0].scriptSig = CScript() << OP_4;
-    tx6.vin[1].prevout = COutPoint();
-    tx6.vin[1].scriptSig = CScript() << OP_6;
-    tx6.vout.resize(2);
-    tx6.vout[0].scriptPubKey = CScript() << OP_6 << OP_EQUAL;
-    tx6.vout[0].nValue = 10 * COIN;
-    tx6.vout[1].scriptPubKey = CScript() << OP_6 << OP_EQUAL;
-    tx6.vout[1].nValue = 10 * COIN;
-
-    CMutableTransaction tx7 = CMutableTransaction();
-    tx7.vin.resize(2);
-    tx7.vin[0].prevout = COutPoint(tx5.GetId(), 0);
-    tx7.vin[0].scriptSig = CScript() << OP_5;
-    tx7.vin[1].prevout = COutPoint(tx6.GetId(), 0);
-    tx7.vin[1].scriptSig = CScript() << OP_6;
-    tx7.vout.resize(2);
-    tx7.vout[0].scriptPubKey = CScript() << OP_7 << OP_EQUAL;
-    tx7.vout[0].nValue = 10 * COIN;
-    tx7.vout[1].scriptPubKey = CScript() << OP_7 << OP_EQUAL;
-    tx7.vout[1].nValue = 10 * COIN;
-
-    pool.AddUnchecked(tx4.GetId(),
-                      entry.Fee(Amount(7000LL)).FromTx(tx4, &pool), nullChangeSet);
-    pool.AddUnchecked(tx5.GetId(),
-                      entry.Fee(Amount(1000LL)).FromTx(tx5, &pool), nullChangeSet);
-    pool.AddUnchecked(tx6.GetId(),
-                      entry.Fee(Amount(1100LL)).FromTx(tx6, &pool), nullChangeSet);
-    pool.AddUnchecked(tx7.GetId(),
-                      entry.Fee(Amount(9000LL)).FromTx(tx7, &pool), nullChangeSet);
-
-    // we only require this remove, at max, 2 txn, because its not clear what
-    // we're really optimizing for aside from that
-    pool.TrimToSize(pool.DynamicMemoryUsage() - 1, nullChangeSet);
-    BOOST_CHECK(pool.Exists(tx4.GetId()));
-    BOOST_CHECK(pool.Exists(tx6.GetId()));
-    BOOST_CHECK(!pool.Exists(tx7.GetId()));
-
-    if (!pool.Exists(tx5.GetId()))
-        pool.AddUnchecked(tx5.GetId(),
-                          entry.Fee(Amount(1000LL)).FromTx(tx5, &pool), nullChangeSet);
-    pool.AddUnchecked(tx7.GetId(),
-                      entry.Fee(Amount(9000LL)).FromTx(tx7, &pool), nullChangeSet);
-
-    // should maximize mempool size by only removing 5/7
-    pool.TrimToSize(pool.DynamicMemoryUsage() / 2, nullChangeSet);
-    BOOST_CHECK(pool.Exists(tx4.GetId()));
-    BOOST_CHECK(!pool.Exists(tx5.GetId()));
-    BOOST_CHECK(pool.Exists(tx6.GetId()));
-    BOOST_CHECK(!pool.Exists(tx7.GetId()));
-
-    pool.AddUnchecked(tx5.GetId(),
-                      entry.Fee(Amount(1000LL)).FromTx(tx5, &pool), nullChangeSet);
-    pool.AddUnchecked(tx7.GetId(),
-                      entry.Fee(Amount(9000LL)).FromTx(tx7, &pool), nullChangeSet);
-
-    std::vector<CTransactionRef> vtx;
-    SetMockTime(42);
-    SetMockTime(42 + CTxMemPool::ROLLING_FEE_HALFLIFE);
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(),
-                      maxFeeRateRemoved.GetFeePerK() + feeIncrement);
-    // ... we should keep the same min fee until we get a block
-    std::vector<CTransactionRef> txNew;
-    pool.RemoveForBlock(vtx, nullChangeSet, txNew);
-    SetMockTime(42 + 2 * CTxMemPool::ROLLING_FEE_HALFLIFE);
-    BOOST_CHECK_EQUAL(pool.GetMinFee(1).GetFeePerK(),
-                      (maxFeeRateRemoved.GetFeePerK() + feeIncrement) / 2);
-    // ... then feerate should drop 1/2 each halflife
-
-    SetMockTime(42 + 2 * CTxMemPool::ROLLING_FEE_HALFLIFE +
-                CTxMemPool::ROLLING_FEE_HALFLIFE / 2);
-    BOOST_CHECK_EQUAL(
-        pool.GetMinFee(pool.DynamicMemoryUsage() * 5 / 2).GetFeePerK(),
-        (maxFeeRateRemoved.GetFeePerK() + feeIncrement) / 4);
-    // ... with a 1/2 halflife when mempool is < 1/2 its target size
-
-    SetMockTime(42 + 2 * CTxMemPool::ROLLING_FEE_HALFLIFE +
-                CTxMemPool::ROLLING_FEE_HALFLIFE / 2 +
-                CTxMemPool::ROLLING_FEE_HALFLIFE / 4);
-    BOOST_CHECK_EQUAL(
-        pool.GetMinFee(pool.DynamicMemoryUsage() * 9 / 2).GetFeePerK(),
-        (maxFeeRateRemoved.GetFeePerK() + feeIncrement) / 8);
-    // ... with a 1/4 halflife when mempool is < 1/4 its target size
-
-    SetMockTime(0);
+    // Restore policy defaults so other tests are unaffected.
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(
+        DEFAULT_MEMPOOL_MIN_FEE_RATE.GetSatoshis(), &err));
+    BOOST_CHECK(config.SetMempoolFeeRampStart(
+        DEFAULT_MEMPOOL_FEE_RAMP_START * ONE_MEGABYTE, &err));
 }
 
 BOOST_AUTO_TEST_CASE(CTxPrioritizerTest) {

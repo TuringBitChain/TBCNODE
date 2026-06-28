@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "txn_validator.h"
+#include "logging.h"
 #include "txn_validation_config.h"
 #include "config.h"
 #include "net/net_processing.h"
@@ -524,6 +525,8 @@ CTxnValResult CTxnValidator::executeTxnValidationNL(
     CTxnHandlers& handlers,
     bool fLimitMempoolSize,
     bool fUseLimits) {
+
+    LogPrintf("======= fUseLimit by rpc route: %d \n", fUseLimits);
 
     // Execute txn validation.
     CTxnValResult result =

@@ -15,8 +15,6 @@ GlobalConfig::GlobalConfig() {
 
 void GlobalConfig::Reset()
 {
-    feePerKB = CFeeRate {};
-    blockMinFeePerKB = CFeeRate{DEFAULT_BLOCK_MIN_TX_FEE};
     blockPriorityPercentage = DEFAULT_BLOCK_PRIORITY_PERCENTAGE;
     preferredBlockFileSize = DEFAULT_PREFERRED_BLOCKFILE_SIZE;
     factorMaxSendQueuesBytes = DEFAULT_FACTOR_MAX_SEND_QUEUES_BYTES;
@@ -73,7 +71,8 @@ void GlobalConfig::Reset()
     
     mMaxMempool = DEFAULT_MAX_MEMPOOL_SIZE * ONE_MEGABYTE;
     mMemPoolExpiry = DEFAULT_MEMPOOL_EXPIRY * SECONDS_IN_ONE_HOUR;
-    mLimitFreeRelay = DEFAULT_LIMITFREERELAY * ONE_KILOBYTE;
+    mMempoolFeeRampStart = DEFAULT_MEMPOOL_FEE_RAMP_START * ONE_MEGABYTE;
+    mMempoolMinFeePerKB = CFeeRate(DEFAULT_MEMPOOL_MIN_FEE_RATE);
     mMaxOrphanTxSize = COrphanTxns::DEFAULT_MAX_ORPHAN_TRANSACTIONS_SIZE;
     mStopAtHeight = DEFAULT_STOPATHEIGHT;
     mPromiscuousMempoolFlags = 0;
@@ -909,22 +908,6 @@ int DummyConfig::GetPerBlockScriptValidationMaxBatchSize() const
     return DEFAULT_SCRIPT_CHECK_MAX_BATCH_SIZE;
 }
 
-void GlobalConfig::SetMinFeePerKB(CFeeRate fee) {
-    feePerKB = fee;
-}
-
-CFeeRate GlobalConfig::GetMinFeePerKB() const {
-    return feePerKB;
-}
-
-void GlobalConfig::SetBlockMinFeePerKB(CFeeRate fee) {
-    blockMinFeePerKB = fee;
-}
-
-CFeeRate GlobalConfig::GetBlockMinFeePerKB() const {
-    return blockMinFeePerKB;
-}
-
 bool GlobalConfig::SetMaxTxSigOpsCountPolicy(int64_t maxTxSigOpsCountIn, std::string* err)
 {
     if (LessThanZero(maxTxSigOpsCountIn, err, "Policy value for maximum allowed number of signature operations per transaction cannot be less than 0"))
@@ -1040,19 +1023,34 @@ uint64_t GlobalConfig::GetMemPoolExpiry() const {
     return mMemPoolExpiry;
 }
 
-bool GlobalConfig::SetLimitFreeRelay(int64_t limitFreeRelay, std::string* err) {
-    if (LessThanZero(limitFreeRelay, err, "Policy value for rate-limit free transactions must not be less than 0."))
+bool GlobalConfig::SetMempoolFeeRampStart(int64_t rampStart, std::string* err) {
+    if (LessThanZero(rampStart, err, "Policy value for mempool fee ramp start must not be less than 0."))
     {
         return false;
     }
 
-    mLimitFreeRelay = static_cast<uint64_t>(limitFreeRelay);
+    mMempoolFeeRampStart = static_cast<uint64_t>(rampStart);
 
     return true;
 }
 
-uint64_t GlobalConfig::GetLimitFreeRelay() const {
-    return mLimitFreeRelay;
+uint64_t GlobalConfig::GetMempoolFeeRampStart() const {
+    return mMempoolFeeRampStart;
+}
+
+bool GlobalConfig::SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) {
+    if (LessThanZero(feePerKB, err, "Policy value for mempool minimum feerate must not be less than 0."))
+    {
+        return false;
+    }
+
+    mMempoolMinFeePerKB = CFeeRate(Amount(feePerKB));
+
+    return true;
+}
+
+CFeeRate GlobalConfig::GetMempoolMinFeePerKB() const {
+    return mMempoolMinFeePerKB;
 }
 
 bool GlobalConfig::SetMaxOrphanTxSize(int64_t maxOrphanTxSize, std::string* err) {

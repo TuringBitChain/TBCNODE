@@ -40,7 +40,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         # The size of the signature of every input may be at most 2 bytes larger
         # than a minimum sized signature.
 
-        #            = 2 bytes * minRelayTxFeePerByte
+        #            = 2 bytes * mempoolMinFeePerByte
         feeTolerance = 2 * min_relay_tx_fee / 1000
 
         self.nodes[2].generate(1)

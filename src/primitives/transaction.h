@@ -185,16 +185,16 @@ public:
 
     bool IsNull() const { return (nValue == Amount(-1)); }
 
-    Amount GetDustThreshold(const CFeeRate &minRelayTxFee, bool isGenesisEnabled) const {
+    Amount GetDustThreshold(const CFeeRate &dustRelayFee, bool isGenesisEnabled) const {
         /**
-         * "Dust" is defined in terms of CTransaction::minRelayTxFee, which has
+         * "Dust" is defined in terms of the configured dustRelayFee, which has
          * units satoshis-per-kilobyte. If you'd pay more than 1/3 in fees to
          * spend something, then we consider it dust. A typical spendable
          * non-segwit txout is 34 bytes big, and will need a CTxIn of at least
          * 148 bytes to spend: so dust is a spendable txout less than
-         * 546*minRelayTxFee/1000 (in satoshis). A typical spendable segwit
+         * 546*dustRelayFee/1000 (in satoshis). A typical spendable segwit
          * txout is 31 bytes big, and will need a CTxIn of at least 67 bytes to
-         * spend: so dust is a spendable txout less than 294*minRelayTxFee/1000
+         * spend: so dust is a spendable txout less than 294*dustRelayFee/1000
          * (in satoshis).
          */
         // if (scriptPubKey.IsUnspendable(isGenesisEnabled)) return Amount(0);
@@ -204,12 +204,12 @@ public:
         // // the 148 mentioned above
         // nSize += (32 + 4 + 1 + 107 + 4);
 
-        // return 3 * minRelayTxFee.GetFee(nSize);
+        // return 3 * dustRelayFee.GetFee(nSize);
         return Amount(10);
     }
 
-    bool IsDust(const CFeeRate &minRelayTxFee, bool isGenesisEnabled) const {
-        return (nValue < GetDustThreshold(minRelayTxFee, isGenesisEnabled));
+    bool IsDust(const CFeeRate &dustRelayFee, bool isGenesisEnabled) const {
+        return (nValue < GetDustThreshold(dustRelayFee, isGenesisEnabled));
     }
 
     friend bool operator==(const CTxOut &a, const CTxOut &b) {
