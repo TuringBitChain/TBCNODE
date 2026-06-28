@@ -905,6 +905,9 @@ std::optional<bool> EvalScript(
                         stack.pop_back();
                         stack.pop_back();
                         valtype vchHash(32);
+                        if (vchSize.size() > sizeof(uint64_t)) {
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
                         uint64_t vchSizeUint64 = 0;
                         for (size_t i = 0; i < vchSize.size(); ++i) {
                             vchSizeUint64 |= static_cast<uint64_t>(vchSize.GetElement()[i]) << (8 * i);
@@ -921,6 +924,9 @@ std::optional<bool> EvalScript(
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }
                             uint64_t partHashSize = vchSizeUint64 - remainVchSizeUint64;
+                            if (partHashSize % 64 != 0) {
+                                return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
                             uint8_t partHashSizeArray[8];
                             WriteLE64(partHashSizeArray, partHashSize);
                             CSHA256(vchPartHash.GetElement().data(), partHashSizeArray)
