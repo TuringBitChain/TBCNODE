@@ -21,6 +21,7 @@
 
 #include <interfaces/echo.h>
 #include <interfaces/init.h>
+#include <interfaces/ipc.h>
 #include <interfaces/mining.h>
 
 #include <mp/proxy-io.h>
@@ -348,6 +349,85 @@ void IpcMiningTest(const Config& config)
     mining.reset();
     remote_init.reset();
     serve_thread.join();
+}
+
+//! M3c acceptance: serve Mining over a REAL unix socket via listenAddress/connectAddress.
+//! Server-side NodeInit wires MakeMining; client drives create→submit over the socket.
+void IpcListenMiningTest(const Config& config)
+{
+    // Server-side Init: wires MakeMining to a live NodeContext.
+    struct NodeInit : public interfaces::Init {
+        std::unique_ptr<interfaces::Mining> makeMining() override
+        {
+            m_node.config = m_config;
+            return interfaces::MakeMining(m_node);
+        }
+        node::NodeContext m_node;
+        const Config* m_config{nullptr};
+    };
+    NodeInit server_init;
+    server_init.m_config = &config;
+
+    // Client-side Init: serves nothing back to the server.
+    struct ClientInit : public interfaces::Init {};
+    ClientInit client_init;
+
+    // Create server IPC and listen on a named unix socket in the test datadir.
+    auto server_ipc = interfaces::MakeIpc("bitcoin-node", "", server_init);
+    std::string addr = "unix:m3c_listen.sock";
+    server_ipc->listenAddress(addr);  // real AF_UNIX bind + listen; addr is canonicalized
+
+    // Create client IPC and connect to the same socket.
+    auto client_ipc = interfaces::MakeIpc("bitcoin-cli", "", client_init);
+    std::string caddr = "unix:m3c_listen.sock";
+    std::unique_ptr<interfaces::Init> remote = client_ipc->connectAddress(caddr);
+    assert(remote);
+
+    // Obtain Mining over the real unix socket.
+    std::unique_ptr<interfaces::Mining> mining = remote->makeMining();
+    assert(mining);
+
+    // Record the chain tip height directly (chain is idle during the test).
+    auto local_tip = node::GetTip();
+    assert(local_tip.has_value());
+
+    // getTip() over IPC must match the active chain.
+    auto tip = mining->getTip();
+    assert(tip.has_value());
+    assert(tip->height == local_tip->height);
+
+    // createNewBlock() returns a remote BlockTemplate (default OP_TRUE coinbase).
+    node::BlockCreateOptions opts;
+    auto tmpl = mining->createNewBlock(opts, /*cooldown=*/false);
+    assert(tmpl);
+
+    // getCoinbaseTx().version must be 10 (TBC coinbase version).
+    auto cb_tx = tmpl->getCoinbaseTx();
+    assert(cb_tx.version == 10 && "getCoinbaseTx().version must be 10 (TBC coinbase)");
+
+    // Solve PoW against the final merkle root.
+    CBlock block = tmpl->getBlock();
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+    while (!CheckProofOfWork(block.GetHash(), block.nBits, config)) {
+        ++block.nNonce;
+    }
+
+    // submitSolution advances the tip by one.
+    assert(tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+
+    auto tip2 = mining->getTip();
+    assert(tip2.has_value());
+    assert(tip2->height == tip->height + 1);
+
+    // Teardown: destroy remote interfaces first so the server sees disconnects.
+    tmpl.reset();
+    mining.reset();
+    remote.reset();
+    // Disconnect any incoming connections on the server side.
+    server_ipc->disconnectIncoming();
+    // Destroy client and server IPC (joins EventLoop threads).
+    client_ipc.reset();
+    server_ipc.reset();
 }
 
 //! Test ipc::Process bind() and connect() methods connecting over a unix socket.

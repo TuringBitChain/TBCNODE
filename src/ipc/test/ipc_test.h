@@ -60,4 +60,17 @@ class Config;
 //! runner (ipc_tests.cpp) can call it.
 void IpcMiningTest(const Config& config);
 
+//! M3c acceptance test: serve interfaces::Mining over a REAL unix socket
+//! established by interfaces::Ipc::listenAddress/connectAddress (not a
+//! socketpair).  Drives the same create→solve-PoW→submitSolution flow as
+//! IpcMiningTest, but over the real named-socket path.
+//!
+//! Must be called from inside a TestChain100Setup fixture (chainActive +
+//! g_miningFactory live).  config is the regtest GlobalConfig.
+//! GetDataDir() is used by listenAddress/connectAddress to resolve the socket
+//! path, so the socket lands in the test datadir.
+//! Declared in plain C++ (no capnp/proxy headers) so the C++17 Boost.Test
+//! runner (ipc_tests.cpp) can call it.
+void IpcListenMiningTest(const Config& config);
+
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

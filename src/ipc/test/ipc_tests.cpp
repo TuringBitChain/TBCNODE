@@ -47,4 +47,13 @@ BOOST_FIXTURE_TEST_CASE(ipc_mining, TestChain100Setup)
     IpcMiningTest(testConfig);
 }
 
+// M3c acceptance: Mining served over a REAL unix socket via
+// interfaces::Ipc::listenAddress/connectAddress (not a socketpair).
+// Uses TestChain100Setup which initialises chainActive and g_miningFactory.
+// GetDataDir() in the IPC layer resolves the socket path to the test datadir.
+BOOST_FIXTURE_TEST_CASE(ipc_listen_mining, TestChain100Setup)
+{
+    IpcListenMiningTest(testConfig);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
