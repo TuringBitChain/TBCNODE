@@ -80,7 +80,8 @@ static bool ParseAddress(std::string& address,
             }
             path = data_dir / fs::path(strprintf("%s.sock", sock_name));
         } else {
-            path = data_dir / fs::path(address.substr(5));
+            fs::path sock_path{address.substr(5)};
+            path = sock_path.is_absolute() ? sock_path : data_dir / sock_path;
         }
         std::string path_str = path.string();
         address = strprintf("unix:%s", path_str);

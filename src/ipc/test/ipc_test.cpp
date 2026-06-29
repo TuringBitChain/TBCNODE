@@ -173,6 +173,12 @@ void ParseAddressTest()
 
     // Unrecognized scheme throws invalid_argument; address unchanged.
     check_invalid("invalid", "invalid", "Unrecognized address 'invalid'");
+
+    // Absolute unix path must NOT be joined under datadir (Boost.Filesystem
+    // operator/ appends rather than replaces when the RHS is absolute).
+    // "unix:/tmp/m3c_abs.sock" must canonicalize to itself, not to
+    // "unix:/var/empty/notexist/tmp/m3c_abs.sock".
+    check_valid("unix:/tmp/m3c_abs.sock", "unix:/tmp/m3c_abs.sock");
 }
 
 //! Generate a temporary directory path using mkdtemp and return it.
