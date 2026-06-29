@@ -54,10 +54,10 @@ class Config;
 //! across the socket and assert the tip advances by one.
 //!
 //! Must be called from inside a TestChain100Setup fixture (chainActive +
-//! g_miningFactory live).  config is the regtest GlobalConfig; coinbase_spk is
-//! the output script to pay the coinbase to.
+//! g_miningFactory live).  config is the regtest GlobalConfig.
+//! Uses the default OP_TRUE coinbase script (server-side; not pushed over IPC).
 //! Declared in plain C++ (no capnp/proxy headers) so the C++17 Boost.Test
 //! runner (ipc_tests.cpp) can call it.
-void IpcMiningTest(const Config& config, const CScript& coinbase_spk);
+void IpcMiningTest(const Config& config);
 
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

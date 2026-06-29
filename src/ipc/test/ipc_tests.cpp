@@ -9,8 +9,6 @@
 #include <ipc/test/ipc_test.h>
 
 #include <config.h>
-#include <key.h>
-#include <script/script.h>
 #include <test/test_bitcoin.h>
 
 #include <boost/test/unit_test.hpp>
@@ -46,8 +44,7 @@ BOOST_AUTO_TEST_CASE(ipc_timeout)
 // Uses TestChain100Setup which initialises chainActive and g_miningFactory.
 BOOST_FIXTURE_TEST_CASE(ipc_mining, TestChain100Setup)
 {
-    const CScript coinbase_spk = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
-    IpcMiningTest(testConfig, coinbase_spk);
+    IpcMiningTest(testConfig);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -275,7 +275,7 @@ private:
 };
 
 //! M3b acceptance: serve Mining over IPC via makeMining, drive create→submit.
-void IpcMiningTest(const Config& config, const CScript& coinbase_spk)
+void IpcMiningTest(const Config& config)
 {
     // Wire up a NodeContext so MakeMining can reach chainActive / g_miningFactory.
     node::NodeContext ctx;
@@ -314,8 +314,8 @@ void IpcMiningTest(const Config& config, const CScript& coinbase_spk)
     assert(tip->height == local_tip->height);
 
     // createNewBlock() returns a remote BlockTemplate.
+    // Uses the default OP_TRUE coinbase script (server-side; no script pushed over IPC).
     node::BlockCreateOptions opts;
-    opts.coinbase_output_script = coinbase_spk;
     auto tmpl = mining->createNewBlock(opts, /*cooldown=*/false);
     assert(tmpl);
 
