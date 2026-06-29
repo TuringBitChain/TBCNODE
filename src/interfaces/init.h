@@ -5,6 +5,7 @@
 #ifndef BITCOIN_INTERFACES_INIT_H
 #define BITCOIN_INTERFACES_INIT_H
 
+#include <interfaces/mining.h>
 #include <memory>
 
 namespace node {
@@ -27,6 +28,9 @@ class Init
 public:
     virtual ~Init() = default;
     virtual std::unique_ptr<Echo> makeEcho() { return nullptr; }
+    //! Reserved for upstream wire-compatibility (@2 in init.capnp; not used by TBC).
+    virtual void makeMiningReserved() {}
+    virtual std::unique_ptr<Mining> makeMining() { return nullptr; }
     virtual Ipc* ipc() { return nullptr; }
     virtual bool canListenIpc() { return false; }
     virtual const char* exeName() { return nullptr; }

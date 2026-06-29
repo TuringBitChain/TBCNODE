@@ -13,6 +13,7 @@
 #include <ipc/test/ipc_test.capnp.proxy.h>
 
 #include <ipc/capnp/common-types.h>
+#include <ipc/capnp/init-types.h>
 #include <ipc/capnp/mining-types.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/process.h>
@@ -20,11 +21,24 @@
 
 #include <interfaces/echo.h>
 #include <interfaces/init.h>
+#include <interfaces/mining.h>
 
 #include <mp/proxy-io.h>
 #include <mp/proxy.h>
 
+#include <consensus/merkle.h>
+#include <node/context.h>
+#include <node/miner.h>
+#include <node/mining_types.h>
+#include <pow.h>
+#include <primitives/block.h>
 #include <primitives/transaction.h>
+#include <script/script.h>
+
+// Forward-declare Config so IpcMiningTest can accept it by reference and pass
+// it to CheckProofOfWork / NodeContext::config without pulling in config.h
+// (which transitively includes validation.h, incompatible with C++20 builds).
+class Config;
 
 #include <fs.h>
 #include <tinyformat.h>
@@ -243,6 +257,91 @@ void TimeoutConversionTest()
         assert(ms_out == std::chrono::milliseconds::max() && "maxDouble should read back as milliseconds::max()");
         assert(ms_out.count() > 0 && "milliseconds::max() must not be negative/overflowed");
     }
+}
+
+//! Minimal Init implementation that serves Mining via MakeMining.
+//! Used only by IpcMiningTest; requires that chainActive and g_miningFactory
+//! are live (TestChain100Setup provides this).
+class MiningInit : public interfaces::Init
+{
+public:
+    explicit MiningInit(node::NodeContext& node) : m_node(node) {}
+    std::unique_ptr<interfaces::Mining> makeMining() override
+    {
+        return interfaces::MakeMining(m_node);
+    }
+private:
+    node::NodeContext& m_node;
+};
+
+//! M3b acceptance: serve Mining over IPC via makeMining, drive create→submit.
+void IpcMiningTest(const Config& config, const CScript& coinbase_spk)
+{
+    // Wire up a NodeContext so MakeMining can reach chainActive / g_miningFactory.
+    node::NodeContext ctx;
+    ctx.config = &config;
+
+    MiningInit init{ctx};
+
+    // Create a socketpair: fds[0] = server side, fds[1] = client side.
+    int fds[2];
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+
+    std::unique_ptr<ipc::Protocol> protocol{ipc::capnp::MakeCapnpProtocol()};
+
+    // Serve on fds[0] in a background thread.  Signal readiness via promise.
+    std::promise<void> ready_promise;
+    std::thread serve_thread([&]() {
+        protocol->serve(fds[0], "test-serve", init, [&] { ready_promise.set_value(); });
+    });
+    ready_promise.get_future().wait();
+
+    // Connect the client side.
+    std::unique_ptr<interfaces::Init> remote_init{protocol->connect(fds[1], "test-connect")};
+
+    // --- Drive Mining over IPC ---
+    std::unique_ptr<interfaces::Mining> mining{remote_init->makeMining()};
+    assert(mining);
+
+    // Record the chain tip height before IPC (via direct global call, no lock needed
+    // as the chain is idle during the test).
+    auto local_tip = node::GetTip();
+    assert(local_tip.has_value());
+
+    // getTip() over IPC must match the active chain.
+    auto tip = mining->getTip();
+    assert(tip.has_value());
+    assert(tip->height == local_tip->height);
+
+    // createNewBlock() returns a remote BlockTemplate.
+    node::BlockCreateOptions opts;
+    opts.coinbase_output_script = coinbase_spk;
+    auto tmpl = mining->createNewBlock(opts, /*cooldown=*/false);
+    assert(tmpl);
+
+    // getCoinbaseTx().version must be 10 (TBC coinbase version).
+    auto cb_tx = tmpl->getCoinbaseTx();
+    assert(cb_tx.version == 10 && "getCoinbaseTx().version must be 10 (TBC coinbase)");
+
+    // Solve PoW against the final merkle root (same root submitSolution recomputes).
+    CBlock block = tmpl->getBlock();
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+    while (!CheckProofOfWork(block.GetHash(), block.nBits, config)) {
+        ++block.nNonce;
+    }
+
+    // submitSolution advances the tip by one.
+    assert(tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+
+    auto tip2 = mining->getTip();
+    assert(tip2.has_value());
+    assert(tip2->height == tip->height + 1);
+
+    // Tear down: destroy Mining and Init first (server sees disconnects), then join.
+    tmpl.reset();
+    mining.reset();
+    remote_init.reset();
+    serve_thread.join();
 }
 
 //! Test ipc::Process bind() and connect() methods connecting over a unix socket.

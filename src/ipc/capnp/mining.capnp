@@ -44,6 +44,7 @@ struct BlockCreateOptions $Proxy.wrap("node::BlockCreateOptions") {
     blockReservedWeightReserved @1 :Void $Proxy.skip;
     # @2 reserved (was coinbaseOutputMaxAdditionalSigops — TBC sigops are per-MB/Genesis-based)
     coinbaseOutputMaxAdditionalSigopsReserved @2 :Void $Proxy.skip;
+    coinbaseOutputScript @3 :Data $Proxy.name("coinbase_output_script");
 }
 
 struct BlockWaitOptions $Proxy.wrap("node::BlockWaitOptions") {

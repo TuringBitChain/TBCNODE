@@ -6,6 +6,7 @@
 #define BITCOIN_IPC_TEST_IPC_TEST_H
 
 #include <primitives/transaction.h>
+#include <script/script.h>
 
 //! Simple implementation class used by the ipc_test.capnp IpcTestInterface.
 //! passTransaction echoes a CTransaction back to the caller; the round-trip
@@ -45,5 +46,18 @@ void IpcSocketTest();
 //!    back to milliseconds::max(), NOT a negative/overflowed int64 value.
 //! Declared in plain C++ so the C++17 Boost.Test runner can call it.
 void TimeoutConversionTest();
+
+class Config;
+
+//! M3b acceptance test: serve interfaces::Mining over a real Cap'n Proto socket
+//! via the Init::makeMining bootstrap, then drive create→solve-PoW→submitSolution
+//! across the socket and assert the tip advances by one.
+//!
+//! Must be called from inside a TestChain100Setup fixture (chainActive +
+//! g_miningFactory live).  config is the regtest GlobalConfig; coinbase_spk is
+//! the output script to pay the coinbase to.
+//! Declared in plain C++ (no capnp/proxy headers) so the C++17 Boost.Test
+//! runner (ipc_tests.cpp) can call it.
+void IpcMiningTest(const Config& config, const CScript& coinbase_spk);
 
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H
