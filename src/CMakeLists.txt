@@ -380,13 +380,18 @@ if(BUILD_BITCOIN_MINER)
 endif()
 
 # bitcoind
-add_executable(bitcoind bitcoind.cpp)
+add_executable(bitcoind bitcoind.cpp init/bitcoind.cpp)
 target_link_libraries(
 	bitcoind
 	server
 	$<$<PLATFORM_ID:Linux>:rt>) # use librt.so for aio on Linux
 if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 	target_sources(bitcoind PRIVATE bitcoind-res.rc)
+endif()
+
+if(ENABLE_IPC)
+	add_executable(bitcoin-node bitcoind.cpp init/bitcoin-node.cpp)
+	target_link_libraries(bitcoin-node server bitcoin_ipc $<$<PLATFORM_ID:Linux>:rt>)
 endif()
 
 if (MSVC)

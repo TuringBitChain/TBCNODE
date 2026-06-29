@@ -54,6 +54,8 @@
 #include "wallet/wallet.h"
 #endif
 #include "warnings.h"
+#include <init/node_ipc.h>
+#include <interfaces/ipc.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -87,6 +89,8 @@ static const bool DEFAULT_STOPAFTERBLOCKIMPORT = false;
 
 std::unique_ptr<CConnman> g_connman;
 std::unique_ptr<PeerLogicValidation> peerLogic;
+
+interfaces::Ipc* g_node_ipc = nullptr;
 
 #if ENABLE_ZMQ
 static CZMQNotificationInterface *pzmqNotificationInterface = nullptr;
@@ -211,6 +215,7 @@ void Shutdown() {
     UnregisterValidationInterface(peerLogic.get());
     peerLogic.reset();
 
+    if (g_node_ipc) g_node_ipc->disconnectIncoming();
     mining::g_miningFactory.reset();
 
     ShutdownScriptCheckQueues();
@@ -392,6 +397,9 @@ std::string HelpMessage(HelpMessageMode mode) {
         strprintf("Set block height at which genesis should be activated. "
                   "(default: %u).",
                   defaultChainParams->GetConsensus().genesisHeight));
+
+    strUsage += HelpMessageOpt("-ipcbind=<address>",
+        _("Bind to a Unix socket and listen for IPC connections. \"unix\" listens on <datadir>/bitcoin-node.sock; \"unix:/path\" uses a custom path. Default: do not listen. (multiprocess bitcoin-node only)"));
 
     strUsage += HelpMessageOpt(
         "-loadblock=<file>",
@@ -2902,6 +2910,17 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     // Create mining factory
     assert(!mining::g_miningFactory);
     mining::g_miningFactory = std::make_unique<mining::CMiningFactory>(config);
+
+    if (g_node_ipc) {
+        for (std::string address : gArgs.GetArgs("-ipcbind")) {
+            try {
+                g_node_ipc->listenAddress(address);
+            } catch (const std::exception& e) {
+                return InitError(strprintf("Unable to bind to IPC address %s: %s", address, e.what()));
+            }
+            LogPrintf("Listening for IPC requests on address %s\n", address);
+        }
+    }
 
     // Launch non-final mempool periodic checks
     mempool.getNonFinalPool().startPeriodicChecks(scheduler);

@@ -20,6 +20,7 @@
 #include "scheduler.h"
 #include "util.h"
 #include "utilstrencodings.h"
+#include <init/node_ipc.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/thread.hpp>
@@ -73,6 +74,7 @@ bool AppInit(int argc, char *argv[]) {
     // not possible as the whole application has too many global state. However,
     // this is a first step.
     auto& config = GlobalConfig::GetConfig();
+    g_node_ipc = SetupNodeIpc(argc, argv);
 
     bool fRet = false;
 
