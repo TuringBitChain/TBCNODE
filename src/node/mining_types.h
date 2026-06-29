@@ -5,14 +5,13 @@
 #ifndef BITCOIN_NODE_MINING_TYPES_H
 #define BITCOIN_NODE_MINING_TYPES_H
 
-#include <amount.h>                  // Amount, CFeeRate, MAX_MONEY
+#include <amount.h>                  // Amount, MAX_MONEY
 #include <primitives/transaction.h>  // CTxOut
 #include <script/script.h>           // CScript, OP_TRUE
 #include <uint256.h>
 
 #include <chrono>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 namespace node {
@@ -21,11 +20,6 @@ namespace node {
 struct BlockCreateOptions {
     //! Set false to omit mempool transactions.
     bool use_mempool{true};
-    //! RESERVED (TBC): not a per-call option. TBC's JournalingBlockAssembler reads -blockmintxfee
-    //! / -printpriority from Config/gArgs itself (no MergeMiningOptions layer; cf. spec §1A #3),
-    //! so these are currently unwired. Slated to be dropped in the M3 schema audit.
-    std::optional<CFeeRate> block_min_fee_rate{};
-    std::optional<bool> print_modified_fee{};
     //! Script to put in the coinbase. Default is anyone-can-spend (tests only).
     CScript coinbase_output_script{CScript() << OP_TRUE};
     //! Whether to call TestBlockValidity() at the end of CreateNewBlock (tests/benches).
@@ -33,6 +27,8 @@ struct BlockCreateOptions {
     // TBC spec-§5 audit: dropped block_reserved_weight / block_max_weight (no weight model;
     // max block size comes from Config) and coinbase_output_max_additional_sigops
     // (TBC sigops are per-MB / Genesis-based, not a fixed coinbase budget).
+    // Also dropped block_min_fee_rate / print_modified_fee (M3b schema audit):
+    // TBC reads -blockmintxfee / -printpriority from Config/gArgs itself, not per-call.
 };
 
 struct BlockWaitOptions {
