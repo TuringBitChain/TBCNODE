@@ -38,4 +38,12 @@ void IpcSocketPairTest();
 //! Declared in plain C++ so the C++17 Boost.Test runner can call it.
 void IpcSocketTest();
 
+//! Test overflow-safe timeout conversion: std::chrono::milliseconds ↔ Float64.
+//! Verifies:
+//!  - 5000ms round-trips to 5000ms (normal case).
+//!  - node::BlockWaitOptions{} (timeout == milliseconds::max()) round-trips
+//!    back to milliseconds::max(), NOT a negative/overflowed int64 value.
+//! Declared in plain C++ so the C++17 Boost.Test runner can call it.
+void TimeoutConversionTest();
+
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

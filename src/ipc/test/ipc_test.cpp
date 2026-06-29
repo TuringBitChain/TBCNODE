@@ -13,6 +13,7 @@
 #include <ipc/test/ipc_test.capnp.proxy.h>
 
 #include <ipc/capnp/common-types.h>
+#include <ipc/capnp/mining-types.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/process.h>
 #include <ipc/protocol.h>
@@ -190,6 +191,58 @@ void IpcSocketPairTest()
     remote_echo.reset();
     remote_init.reset();
     thread.join();
+}
+
+//! Minimal field mock that holds a double, suitable for testing
+//! CustomBuildField / CustomReadField for std::chrono::milliseconds.
+struct DoubleField {
+    double val{0.0};
+    double get() const { return val; }
+    void set(double v) { val = v; }
+    bool has() const { return true; }
+};
+
+//! Test the overflow-safe milliseconds ↔ Float64 conversion from mining-types.h.
+//! Exercises CustomBuildField + CustomReadField directly (no IPC round-trip needed).
+void TimeoutConversionTest()
+{
+    // We need an InvokeContext. Use a null/empty one — our overloads don't use it.
+    // mp::InvokeContext is not default-constructible in all subtree versions;
+    // use a dummy EventLoop to obtain one via mp::g_invoke_context if available,
+    // or just cast a nullptr (the overloads don't dereference invoke_context).
+    // Safe approach: cast a nullptr to InvokeContext& — our overloads never use it.
+    mp::InvokeContext* ctx_ptr = nullptr;
+    mp::InvokeContext& ctx = *ctx_ptr; // Only safe because our overloads don't use it.
+
+    // --- Case 1: 5000ms round-trips ---
+    {
+        std::chrono::milliseconds ms_in{5000};
+        DoubleField field;
+        mp::CustomBuildField(mp::TypeList<std::chrono::milliseconds>(), mp::Priority<2>(), ctx, ms_in, field);
+        assert(field.val == 5000.0 && "5000ms should build as 5000.0");
+
+        std::chrono::milliseconds ms_out{0};
+        mp::ReadDestUpdate<std::chrono::milliseconds> dest(ms_out);
+        mp::CustomReadField(mp::TypeList<std::chrono::milliseconds>(), mp::Priority<2>(), ctx, field, dest);
+        assert(ms_out == std::chrono::milliseconds{5000} && "5000.0 should read back as 5000ms");
+    }
+
+    // --- Case 2: milliseconds::max() (the "forever" default) round-trips ---
+    // Without the overflow guard, reading maxDouble into int64_t is UB (overflows).
+    {
+        std::chrono::milliseconds ms_forever{std::chrono::milliseconds::max()};
+        DoubleField field;
+        mp::CustomBuildField(mp::TypeList<std::chrono::milliseconds>(), mp::Priority<2>(), ctx, ms_forever, field);
+        // Should be encoded as maxDouble, not milliseconds::max().count() (which overflows double precision).
+        assert(field.val == std::numeric_limits<double>::max() && "milliseconds::max() should build as maxDouble");
+
+        std::chrono::milliseconds ms_out{0};
+        mp::ReadDestUpdate<std::chrono::milliseconds> dest(ms_out);
+        mp::CustomReadField(mp::TypeList<std::chrono::milliseconds>(), mp::Priority<2>(), ctx, field, dest);
+        // Must round-trip to milliseconds::max(), not a negative/overflowed value.
+        assert(ms_out == std::chrono::milliseconds::max() && "maxDouble should read back as milliseconds::max()");
+        assert(ms_out.count() > 0 && "milliseconds::max() must not be negative/overflowed");
+    }
 }
 
 //! Test ipc::Process bind() and connect() methods connecting over a unix socket.

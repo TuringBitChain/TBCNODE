@@ -7,6 +7,7 @@ add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
   stub.cpp
   process.cpp
   interfaces.cpp
+  capnp/mining.cpp
   capnp/protocol.cpp
   ${CMAKE_SOURCE_DIR}/src/interfaces/echo.cpp
 )
@@ -16,6 +17,7 @@ target_capnp_sources(bitcoin_ipc ${CMAKE_SOURCE_DIR}/src
   capnp/echo.capnp
   capnp/common.capnp
   capnp/init.capnp
+  capnp/mining.capnp
 )
 target_include_directories(bitcoin_ipc PUBLIC ${CMAKE_SOURCE_DIR}/src)
 # bitcoin_ipc includes TBC headers (serialize.h, streams.h, primitives/) that

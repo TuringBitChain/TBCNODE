@@ -32,4 +32,9 @@ BOOST_AUTO_TEST_CASE(ipc_socket)
     IpcSocketTest();
 }
 
+BOOST_AUTO_TEST_CASE(ipc_timeout)
+{
+    TimeoutConversionTest();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
