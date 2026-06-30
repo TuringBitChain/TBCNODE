@@ -526,7 +526,6 @@ CTxnValResult CTxnValidator::executeTxnValidationNL(
     bool fLimitMempoolSize,
     bool fUseLimits) {
 
-    LogPrintf("======= fUseLimit by rpc route: %d \n", fUseLimits);
 
     // Execute txn validation.
     CTxnValResult result =

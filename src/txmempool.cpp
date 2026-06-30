@@ -603,8 +603,6 @@ void CTxMemPool::AddUncheckedNL(
     // Check if the transaction by itself pays enough for mining.
     // If not it will not enter the journal nor any other transaction will be affected, so
     // we can skip journal related stuff
-    LogPrintf("========== block min tx fee: %d \n", blockMinTxfee.GetFee((newit->GetTxSize())));
-    LogPrintf("========== tx modified fee: %d \n", newit->GetModifiedFee());
 
     if (blockMinTxfee.GetFee(newit->GetTxSize()) <= newit->GetModifiedFee())
     {
