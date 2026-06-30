@@ -107,3 +107,4 @@ contrib/devtools/split-debug.sh
 
 # Clangd
 .clangd
+.cache

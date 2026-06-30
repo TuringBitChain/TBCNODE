@@ -188,11 +188,11 @@ void TestPackageSelection(Config &config, CScript scriptPubKey,
         BOOST_CHECK(txn->GetId() != lowFeeTxId);
     }
 
-    // Test that packages above the min relay fee do get included, even if one
-    // of the transactions is below the min relay fee. Remove the low fee
+    // Test that packages above the block minimum fee do get included, even if one
+    // of the transactions is below the block minimum fee. Remove the low fee
     // transaction and replace with a higher fee transaction
     mempool.RemoveRecursive(CTransaction(tx), nullChangeSet);
-    // Now we should be just over the min relay fee.
+    // Now we should be just over the block minimum fee.
     tx.vout[0].nValue -= Amount(2);
     lowFeeTxId = tx.GetId();
     mempool.AddUnchecked(lowFeeTxId,

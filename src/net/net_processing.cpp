@@ -4315,15 +4315,15 @@ void SendFeeFilter(const Config &config, const CNodePtr& pto, CConnman& connman,
         int64_t timeNow = GetTimeMicros();
         if (timeNow > pto->nextSendTimeFeeFilter) {
             static CFeeRate default_feerate =
-                CFeeRate(DEFAULT_MIN_RELAY_TX_FEE);
+                CFeeRate(DEFAULT_MEMPOOL_MIN_FEE_RATE);
             static FeeFilterRounder filterRounder(default_feerate);
             Amount filterToSend = filterRounder.round(currentFilter);
-            // If we don't allow free transactions, then we always have a fee
-            // filter of at least minRelayTxFee
-            if (config.GetLimitFreeRelay() <= 0) {
-                filterToSend = std::max(filterToSend,
-                                        config.GetMinFeePerKB().GetFeePerK());
-            }
+            // Never advertise below the current (dynamic) mempool admission
+            // feerate: rounding can bucket filterToSend down past the live
+            // floor, which would let peers waste bandwidth relaying txns we
+            // would now reject. currentFilter is already GetMinFee(), so this
+            // tracks the ramp instead of the static configured floor.
+            filterToSend = std::max(filterToSend, currentFilter);
 
             if (filterToSend != pto->lastSentFeeFilter) {
                 connman.PushMessage(

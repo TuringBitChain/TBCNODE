@@ -21,7 +21,6 @@ add_executable(bench_bitcoin
         crypto_hash.cpp
         interpreter.cpp
         lockedpool.cpp
-        mempool_eviction.cpp
         perf.cpp
         rollingbloom.cpp
         data/block413567.raw.h)

@@ -9,6 +9,7 @@
 #include "clientversion.h"
 #include "consensus/consensus.h"
 #include "consensus/validation.h"
+#include "logging.h"
 #include "policy/fees.h"
 #include "policy/policy.h"
 #include "streams.h"
@@ -602,6 +603,7 @@ void CTxMemPool::AddUncheckedNL(
     // Check if the transaction by itself pays enough for mining.
     // If not it will not enter the journal nor any other transaction will be affected, so
     // we can skip journal related stuff
+
     if (blockMinTxfee.GetFee(newit->GetTxSize()) <= newit->GetModifiedFee())
     {
         // transaction pays enough for mining
@@ -1020,9 +1022,6 @@ void CTxMemPool::RemoveForBlock(
         DebugPrintMempoolTreeNL("Mempool Tree AFTER RemoveForBlock", nullptr);
     }
 
-    lastRollingFeeUpdate = GetTime();
-    blockSinceLastRollingFeeBump = true;
-
     int64_t nDuration = GetTimeMicros() - nStartTime;
     LogPrint(BCLog::MEMPOOL, "MempoolRemove-Block: txs_removed=%zu, max depth=%zu, "
             "time=%.3fms, mempool_size_after=%zu\n",
@@ -1037,18 +1036,8 @@ void CTxMemPool::clearNL() {
     vTxHashes.clear();
     totalTxSize = 0;
     cachedInnerUsage = 0;
-    lastRollingFeeUpdate = GetTime();
-    blockSinceLastRollingFeeBump = false;
-    rollingMinimumFeeRate = 0;
     ++nTransactionsUpdated;
     mJournalBuilder.clearJournal();
-}
-
-void CTxMemPool::trackPackageRemovedNL(const CFeeRate &rate) {
-    if (rate.GetFeePerK().GetSatoshis() > rollingMinimumFeeRate) {
-        rollingMinimumFeeRate = rate.GetFeePerK().GetSatoshis();
-        blockSinceLastRollingFeeBump = false;
-    }
 }
 
 void CTxMemPool::Clear() {
@@ -1432,10 +1421,8 @@ CFeeRate CTxMemPool::estimateFee() const {
     uint64_t maxMempoolSize =
         GlobalConfig::GetConfig().GetMaxMempool();
 
-    // return maximum of min fee per KB from config, min fee calculated from mempool 
-    return std::max(GlobalConfig::GetConfig().GetMinFeePerKB(), GetMinFee(maxMempoolSize));
-
-  }
+    return GetMinFee(maxMempoolSize);
+}
 
 
 void CTxMemPool::PrioritiseTransaction(
@@ -2072,88 +2059,64 @@ CTxMemPool::GetMemPoolChildrenNL(txiter entry) const {
     return it->second.children;
 }
 
+// Size-dependent mempool admission fee floor (no-trim policy).
+//
+// The floor is a piecewise function of current mempool usage:
+//   usage <= N1            : floorRate                          (flat)
+//   N1 <  usage < N2       : floorRate * (N2 - N1) / (N2 - usage) (ramp)
+//   usage >= N2            : clamped ceiling (hard reject handled at admission)
+// where N1 = -mempoolfeerampstart and N2 = -maxmempool (the hard size cap).
+//
+// The ramp is a reciprocal barrier function C/(N2 - usage) with a pole at N2
+// (the same family as interior-point barrier functions). It is chosen over a
+// bounded exponential floor*(ceil/floor)^frac for three reasons:
+//
+//  1. Unreachable cap. A bounded exponential tops out at a finite ceil at N2,
+//     so N2 is reachable by anyone willing to pay ceil. The barrier diverges at
+//     N2, so the fee required to push usage to N2 is infinite and the mempool
+//     asymptotes below N2 instead of ever filling it.
+//  2. Determinism. This admission gate must give bit-identical results on the
+//     RPC and P2P paths (and across nodes). The barrier is pure integer math
+//     (128-bit, with an explicit clamp); an exponential needs pow()/exp() and
+//     would reintroduce floating-point rounding differences at the margin.
+//  3. Back-pressure, not a cliff. A flat floor plus a hard cut at N2 accepts
+//     floor-fee txns right up to the wall and then thrashes at the cliff. The
+//     rising ramp makes marginal admission cost grow as the pool fills, so
+//     demand throttles smoothly before the cap.
+//
+// The exponent alpha is fixed at 1; a steeper ramp would raise it to
+// ((N2-N1)/(N2-usage))^alpha. At usage == N1 the ramp equals floorRate exactly,
+// so the function is continuous at the ramp start.
 CFeeRate CTxMemPool::GetMinFee(size_t sizelimit) const {
     std::shared_lock lock(smtx);
-    if (!blockSinceLastRollingFeeBump || rollingMinimumFeeRate == 0) {
-        return CFeeRate(Amount(int64_t(rollingMinimumFeeRate)));
+    const Config& config = GlobalConfig::GetConfig();
+    const int64_t floorRate =
+        config.GetMempoolMinFeePerKB().GetFeePerK().GetSatoshis();
+    const size_t N1 = config.GetMempoolFeeRampStart();
+    const size_t N2 = sizelimit; // hard size cap (no-trim)
+    const size_t usage = DynamicMemoryUsageNL();
+
+    // Below the ramp start (or a degenerate N1 >= N2 config) the admission
+    // floor is just the configured minimum feerate.
+    if (usage <= N1 || N2 <= N1) {
+        return CFeeRate(Amount(floorRate));
     }
-
-    int64_t time = GetTime();
-    if (time > lastRollingFeeUpdate + 10) {
-        double halflife = ROLLING_FEE_HALFLIFE;
-        if (DynamicMemoryUsageNL() < sizelimit / 4) {
-            halflife /= 4;
-        } else if (DynamicMemoryUsageNL() < sizelimit / 2) {
-            halflife /= 2;
-        }
-
-        rollingMinimumFeeRate =
-            rollingMinimumFeeRate /
-            pow(2.0, (time - lastRollingFeeUpdate) / halflife);
-        lastRollingFeeUpdate = time;
+    // At/above the hard cap the pool is full. Admission is hard-rejected
+    // separately before this point, so this is only a safety clamp.
+    if (usage >= N2) {
+        return CFeeRate(MAX_MEMPOOL_RAMP_FEE_RATE);
     }
-    return CFeeRate(Amount(int64_t(rollingMinimumFeeRate)));
-}
-
-std::vector<TxId> CTxMemPool::TrimToSize(
-    size_t sizelimit,
-    const mining::CJournalChangeSetPtr& changeSet,
-    std::vector<COutPoint>* pvNoSpendsRemaining) {
-
-    std::unique_lock lock(smtx);
-
-    unsigned nTxnRemoved = 0;
-    CFeeRate maxFeeRateRemoved(Amount(0));
-    std::vector<TxId> vRemovedTxIds {};
-    while (!mapTx.empty() && DynamicMemoryUsageNL() > sizelimit) {
-        indexed_transaction_set::index<descendant_score>::type::iterator it =
-            mapTx.get<descendant_score>().begin();
-
-        // We set the new mempool min fee to the feerate of the removed set,
-        // plus the "minimum reasonable fee rate" (ie some value under which we
-        // consider txn to have 0 fee). This way, we don't allow txn to enter
-        // mempool with feerate equal to txn which were removed with no block in
-        // between.
-        CFeeRate removed(it->GetModFeesWithDescendants(),
-                         it->GetSizeWithDescendants());
-        removed += MEMPOOL_FULL_FEE_INCREMENT;
-
-        trackPackageRemovedNL(removed);
-        maxFeeRateRemoved = std::max(maxFeeRateRemoved, removed);
-
-        setEntries stage;
-        CalculateDescendantsNL(mapTx.project<0>(it), stage);
-        nTxnRemoved += stage.size();
-
-        std::vector<CTransaction> txn;
-        if (pvNoSpendsRemaining) {
-            txn.reserve(stage.size());
-            for (txiter iter : stage) {
-                txn.push_back(iter->GetTx());
-                vRemovedTxIds.emplace_back(iter->GetTx().GetId());
-            }
-        }
-        removeStagedNL(stage, false, changeSet, MemPoolRemovalReason::SIZELIMIT);
-        if (pvNoSpendsRemaining) {
-            for (const CTransaction &tx : txn) {
-                for (const CTxIn &txin : tx.vin) {
-                    if (ExistsNL(txin.prevout.GetTxId())) {
-                        continue;
-                    }
-                    if (!mapNextTx.count(txin.prevout)) {
-                        pvNoSpendsRemaining->push_back(txin.prevout);
-                    }
-                }
-            }
-        }
+    // Hyperbolic ramp between N1 and N2 with a pole at N2 (alpha = 1):
+    //   rate = floor * (N2 - N1) / (N2 - usage)
+    // As usage approaches N2 the required feerate diverges, so in practice the
+    // mempool asymptotes below N2 instead of ever reaching it.
+    __int128 rate = (static_cast<__int128>(floorRate) *
+                     static_cast<int64_t>(N2 - N1)) /
+                    static_cast<int64_t>(N2 - usage);
+    if (rate > MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis()) {
+        rate = MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis();
     }
-
-    if (maxFeeRateRemoved > CFeeRate(Amount(0))) {
-        LogPrint(BCLog::MEMPOOL,
-                 "Removed %u txn, rolling minimum fee bumped to %s\n",
-                 nTxnRemoved, maxFeeRateRemoved.ToString());
-    }
-    return vRemovedTxIds;
+    return CFeeRate(Amount(static_cast<int64_t>(rate)));
 }
 
 bool CTxMemPool::TransactionWithinChainLimit(const uint256 &txid,

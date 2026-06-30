@@ -36,12 +36,14 @@ class CAutoFile;
 class CBlockIndex;
 class Config;
 
+// Coin-age priority threshold used only by the legacy priority-area block
+// builder (see -blockprioritypercentage). It is no longer consulted on the
+// transaction admission/relay path.
 inline double AllowFreeThreshold() {
     return COIN.GetSatoshis() * 144 / 250;
 }
 
 inline bool AllowFree(double dPriority) {
-    // Large (in bytes) low-priority (new, small-coin) transactions need a fee.
     return dPriority > AllowFreeThreshold();
 }
 
@@ -526,11 +528,6 @@ private:
     //! themselves)
     uint64_t cachedInnerUsage;
 
-    mutable int64_t lastRollingFeeUpdate;
-    mutable bool blockSinceLastRollingFeeBump;
-    //!< minimum fee to get into the pool, decreases exponentially
-    mutable double rollingMinimumFeeRate;
-
     // Our journal builder
     mutable mining::CJournalBuilder mJournalBuilder;
 
@@ -538,9 +535,6 @@ private:
     CTimeLockedMempool mTimeLockedPool {};
 
 public:
-    // public only for testing
-    static const int ROLLING_FEE_HALFLIFE = 60 * 60 * 12;
-
     // DEPRECATED - this will become private and ultimately changed or removed
     typedef boost::multi_index_container<
         CTxMemPoolEntry, boost::multi_index::indexed_by<
@@ -661,6 +655,7 @@ public:
     void SetSanityCheck(double dFrequency = 1.0);
 
     void SetBlockMinTxFee(CFeeRate feerate) { blockMinTxfee = feerate; };
+    CFeeRate GetBlockMinTxFee() const { return blockMinTxfee; };
 
     /** Rebuild the journal contents so they match the mempool */
     void RebuildJournal() const;
@@ -838,21 +833,13 @@ public:
             setEntries &setDescendants);
 
     /**
-     * The minimum fee to get into the mempool, which may itself not be enough
-     * for larger-sized transactions.
+     * The minimum feerate to get into the mempool, as a deterministic function
+     * of current mempool usage. With sizelimit == N2 (the hard cap): below the
+     * configured ramp start (N1) it returns the configured floor; between N1
+     * and N2 it rises hyperbolically (pole at N2) so that N2 is in practice
+     * unreachable. The mempool is never trimmed (no eviction).
      */
     CFeeRate GetMinFee(size_t sizelimit) const;
-
-    /**
-     * Remove transactions from the mempool until its dynamic size is <=
-     * sizelimit. pvNoSpendsRemaining, if set, will be populated with the list
-     * of outpoints which are not in mempool which no longer have any spends in
-     * this mempool. Return TxIds which were removed (if pvNoSpendsRemaining is set).
-     */
-    std::vector<TxId> TrimToSize(
-        size_t sizelimit,
-        const mining::CJournalChangeSetPtr& changeSet,
-        std::vector<COutPoint> *pvNoSpendsRemaining = nullptr);
 
     /** Expire all transaction (and their dependencies) in the mempool older
      * than time. Return the number of removed transactions. */
@@ -989,8 +976,6 @@ private:
             setEntriesTopoSorted& childrenOfToRemove);
 
     void clearNL();
-
-    void trackPackageRemovedNL(const CFeeRate &rate);
 
     /**
      * Remove a set of transactions from the mempool. If a transaction is in
