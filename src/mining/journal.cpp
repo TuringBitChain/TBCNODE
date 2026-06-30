@@ -60,7 +60,6 @@ void CJournal::applyChanges(const CJournalChangeSet& changeSet)
             {
                 index1.emplace_back(txn);
             }
-                txn.getTxn()->GetId().ToString());
         }
         else if(op == CJournalChangeSet::Operation::REMOVE)
         {
