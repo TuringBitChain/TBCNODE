@@ -68,6 +68,7 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
 
     // Get tip we're builing on
     LOCK(cs_main);
+    const int64_t cs_main_start { GetTimeMicros() };
     CBlockIndex* pindexPrevNew { chainActive.Tip() };
 
     {
@@ -95,8 +96,6 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
     }
 
     uint64_t serializeSize { GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION) };
-    LogPrintf("JournalingBlockAssembler::CreateNewBlock(): total size: %u txs: %u fees: %ld sigops %d\n",
-        serializeSize, block->vtx.size() - 1, mBlockFees, mBlockSigOps);
 
     bool isGenesisEnabled = IsGenesisEnabled(mConfig, chainActive.Height() + 1);
     bool sigOpCountError;
@@ -121,6 +120,19 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
     pindexPrev = pindexPrevNew;
     mRecentlyUpdated = false;
 
+    const int64_t cs_main_end { GetTimeMicros() };
+
+    LogPrintf(
+        "template_create_cs_main builder=journaling height=%d txs=%zu size_no_cb=%zu "
+        "total_size=%llu fees=%ld sigops=%d cs_main_us=%lld prevhash=%s ntime=%u bits=%08x\n",
+        pindexPrevNew->nHeight + 1,
+        block->vtx.size() > 0 ? block->vtx.size() - 1 : 0,
+        block->GetSizeWithoutCoinbase(),
+        static_cast<unsigned long long>(serializeSize),
+        mBlockFees, mBlockSigOps,
+        static_cast<long long>(cs_main_end - cs_main_start),
+        block->hashPrevBlock.ToString(),
+        block->nTime, block->nBits);
     return blockTemplate;
 }
 
@@ -319,4 +331,3 @@ bool JournalingBlockAssembler::addTransaction(const CBlockIndex* pindex)
 
     return true;
 }
-

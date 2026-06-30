@@ -463,6 +463,7 @@ bool Sv2TemplateProvider::BuildNewWorkSetWithId(bool future_template,
     // No m_tp_mutex required — only touches the mining interface and a
     // throwaway BlockTemplate. createNewBlock takes its own cs_main / mempool
     // locks internally.
+    const int64_t time_start = GetTimeMicros();
     CScript scriptDummy = CScript() << OP_TRUE;
     std::shared_ptr<BlockTemplate> pblocktemplate{m_mining.createNewBlock(scriptDummy)};
     if (!pblocktemplate) {
@@ -470,12 +471,24 @@ bool Sv2TemplateProvider::BuildNewWorkSetWithId(bool future_template,
         return false;
     }
     pblocktemplate->getBlockRef()->nNonce = 0;
-    LogPrint(BCLog::SV2, "BuildNewWorkSet: nTime=%u nBits=%08x\n",
-        pblocktemplate->getBlockRef()->nTime, pblocktemplate->getBlockRef()->nBits);
 
     Sv2NewTemplateMsg new_template{*pblocktemplate, template_id, future_template};
     Sv2SetNewPrevHashMsg set_new_prev_hash{*pblocktemplate, template_id};
     newWorkSet = {new_template, pblocktemplate, set_new_prev_hash};
+    const int64_t time_end = GetTimeMicros();
+    auto* block = pblocktemplate->getBlockRef().get();
+    auto tip = m_mining.getTip();
+    const int height = tip ? tip->height + 1 : -1;
+    LogPrint(BCLog::SV2,
+        "SV2PERF event=template_create template_id=%lu ok=1 future=%d height=%d txs=%zu size_no_cb=%zu "
+        "total_size=%llu total_us=%lld prevhash=%s ntime=%u bits=%08x\n",
+        template_id, future_template ? 1 : 0, height,
+        block->vtx.size() > 0 ? block->vtx.size() - 1 : 0,
+        block->GetSizeWithoutCoinbase(),
+        static_cast<unsigned long long>(GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION)),
+        static_cast<long long>(time_end - time_start),
+        block->hashPrevBlock.ToString(),
+        block->nTime, block->nBits);
     return true;
 }
 
@@ -962,6 +975,7 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
 
 void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 {
+        const int64_t time_start = GetTimeMicros();
         LogPrint(BCLog::SV2, "SubmitSolution id=%lu version=%d timestamp=%d nonce=%08x\n",
             solution.m_template_id, solution.m_version,
             solution.m_header_timestamp, solution.m_header_nonce);
@@ -1008,7 +1022,9 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 
         LOCKMt(m_submit_mutex);
 
+        const int64_t get_tip_start = GetTimeMicros();
         auto current_tip = m_mining.getTip();
+        const int64_t get_tip_end = GetTimeMicros();
         if (!current_tip || block_template->getBlockRef()->hashPrevBlock != current_tip->hash) {
             LogPrintf("SV2 SubmitSolution: stale template id=%lu prevhash=%s chain_tip=%s, solution dropped\n",
                 solution.m_template_id,
@@ -1020,7 +1036,24 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         LogPrint(BCLog::SV2, "SubmitSolution: template_id=%lu prevhash=%s\n",
             solution.m_template_id, block_template->getBlock().hashPrevBlock.ToString());
 
-        if (!block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb))) {
+        auto* block = block_template->getBlockRef().get();
+        const size_t txs = block->vtx.size() > 0 ? block->vtx.size() - 1 : 0;
+        const size_t size_no_cb = block->GetSizeWithoutCoinbase();
+        const std::string prevhash = block->hashPrevBlock.ToString();
+        const int height = current_tip->height + 1;
+        const int64_t validation_start = GetTimeMicros();
+        const bool accepted = block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb));
+        const int64_t validation_end = GetTimeMicros();
+        LogPrint(BCLog::SV2,
+            "SV2PERF event=submit_solution template_id=%lu ok=%d height=%d txs=%zu size_no_cb=%zu "
+            "total_size=%llu get_tip_us=%lld process_new_block_us=%lld total_us=%lld prevhash=%s submit_ntime=%u nonce=%08x\n",
+            solution.m_template_id, accepted ? 1 : 0, height, txs, size_no_cb,
+            static_cast<unsigned long long>(GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION)),
+            static_cast<long long>(get_tip_end - get_tip_start),
+            static_cast<long long>(validation_end - validation_start),
+            static_cast<long long>(validation_end - time_start),
+            prevhash, solution.m_header_timestamp, solution.m_header_nonce);
+        if (!accepted) {
             LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
         }
 }
