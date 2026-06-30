@@ -4,7 +4,10 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "config.h"
+#include "mining/journal.h"
+#include "mining/journal_builder.h"
 #include "mining/journal_change_set.h"
+#include "mining/journal_entry.h"
 #include "policy/policy.h"
 #include "txmempool.h"
 #include "util.h"
@@ -455,6 +458,94 @@ BOOST_AUTO_TEST_CASE(MempoolAncestorIndexingTest) {
         sortedOrder.erase(sortedOrder.end() - 2);
     sortedOrder.insert(sortedOrder.begin(), tx7.GetId().ToString());
     CheckSort<ancestor_score>(pool, sortedOrder);
+}
+
+// Regression test for the P0 "mis-ordered block template" bug.
+//
+// RemoveForBlock only refreshes survivors' ancestorsHeight, not their
+// nCountWithAncestors. After a block is mined, a surviving descendant keeps a
+// stale (inflated) nCountWithAncestors that still counts the just-removed
+// ancestors, while a transaction added afterwards gets a correct (lower) count.
+// When such a parent/child pair are later pulled into the journal together (here
+// via CPFP), topo-sorting by nCountWithAncestors places the child before the
+// parent, producing a journal/block template that is not topologically valid.
+//
+// The journal must instead be sorted by insertionIndex, which is assigned once at
+// admission (parents always before children) and never goes stale.
+BOOST_AUTO_TEST_CASE(MempoolJournalTopoOrderAfterRemoveForBlock) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    // Require a positive fee for journal acceptance so that zero-fee
+    // transactions stay out of the journal until a paying descendant covers
+    // their debt (the CPFP path that performs the topo sort).
+    pool.SetBlockMinTxFee(CFeeRate(Amount(1000)));
+
+    auto chainChild = [](const CTransaction& parent) {
+        CMutableTransaction tx;
+        tx.vin.resize(1);
+        tx.vin[0].prevout = COutPoint(parent.GetId(), 0);
+        tx.vin[0].scriptSig = CScript() << OP_11;
+        tx.vout.resize(1);
+        tx.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+        tx.vout[0].nValue = 10 * COIN;
+        return tx;
+    };
+
+    // Root of the chain: r1 -> r2 -> p. r1/r2 are mined away to inflate p's
+    // stale ancestor count by two.
+    CMutableTransaction r1;
+    r1.vin.resize(1);
+    r1.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+    r1.vin[0].scriptSig = CScript() << OP_11;
+    r1.vout.resize(1);
+    r1.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    r1.vout[0].nValue = 10 * COIN;
+    pool.AddUnchecked(r1.GetId(), entry.Fee(Amount(0LL)).FromTx(r1), nullChangeSet);
+
+    CMutableTransaction r2 = chainChild(CTransaction(r1));
+    pool.AddUnchecked(r2.GetId(), entry.Fee(Amount(0LL)).FromTx(r2), nullChangeSet);
+
+    CMutableTransaction p = chainChild(CTransaction(r2));
+    pool.AddUnchecked(p.GetId(), entry.Fee(Amount(0LL)).FromTx(p), nullChangeSet);
+
+    // Mine r1 and r2. p survives; its nCountWithAncestors is now stale (3),
+    // while its true ancestor count is 1.
+    std::vector<CTransactionRef> vtx{MakeTransactionRef(r1), MakeTransactionRef(r2)};
+    std::vector<CTransactionRef> txNew;
+    pool.RemoveForBlock(vtx, nullChangeSet, txNew);
+    BOOST_CHECK_EQUAL(pool.Size(), 1UL);
+
+    // c spends p and is added afterwards: its ancestor count is computed fresh
+    // (2) and so is *smaller* than its stale parent p (3).
+    CMutableTransaction c = chainChild(CTransaction(p));
+    pool.AddUnchecked(c.GetId(), entry.Fee(Amount(0LL)).FromTx(c), nullChangeSet);
+
+    // d spends c and pays generously, covering the debt of both p and c, which
+    // pulls them into the journal together (CPFP) and triggers the topo sort.
+    CMutableTransaction d = chainChild(CTransaction(c));
+    pool.AddUnchecked(d.GetId(), entry.Fee(100 * COIN).FromTx(d), nullChangeSet);
+
+    using mining::CJournalEntry;
+    using mining::CJournalPtr;
+    using mining::CJournalTester;
+    CJournalPtr journal{pool.getJournalBuilder().getCurrentJournal()};
+
+    CJournalEntry pEntry{*pool.mapTx.find(p.GetId())};
+    CJournalEntry cEntry{*pool.mapTx.find(c.GetId())};
+    CJournalEntry dEntry{*pool.mapTx.find(d.GetId())};
+
+    // The CPFP pull-in must place the whole chain in the journal...
+    BOOST_CHECK(CJournalTester{journal}.checkTxnExists(pEntry));
+    BOOST_CHECK(CJournalTester{journal}.checkTxnExists(cEntry));
+    BOOST_CHECK(CJournalTester{journal}.checkTxnExists(dEntry));
+
+    // ...in valid topological order: parent before child. With the stale-count
+    // sort this fails (c is ordered before its parent p).
+    BOOST_CHECK(CJournalTester{journal}.checkTxnOrdering(pEntry, cEntry) ==
+                CJournalTester::TxnOrder::BEFORE);
+    BOOST_CHECK(CJournalTester{journal}.checkTxnOrdering(cEntry, dEntry) ==
+                CJournalTester::TxnOrder::BEFORE);
 }
 
 BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {

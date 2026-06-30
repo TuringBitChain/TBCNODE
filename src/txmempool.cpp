@@ -1757,13 +1757,21 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
         }
     };
 
-    // returns topo sorted vector of transactions
+    // returns topo sorted vector of transactions.
+    //
+    // Sort by insertionIndex rather than nCountWithAncestors: a transaction can
+    // only enter the mempool after all of its in-mempool parents, so a parent
+    // always has a smaller insertionIndex than its child (see setEntriesTopoSorted
+    // in txmempool.h). Unlike nCountWithAncestors, insertionIndex is assigned once
+    // and never mutated, so it cannot go stale when ancestors are removed (e.g. in
+    // RemoveForBlock, which only refreshes ancestorsHeight) -- using the stale
+    // ancestor count here produced mis-ordered block templates that were rejected.
     auto topoSortedTxFromSet = [](const setEntries& txSet){
         std::vector<txiter> txs(txSet.begin(), txSet.end());
         std::sort(txs.begin(), txs.end(),
             [](const txiter& entry1, const txiter& entry2)
             {
-                return entry1->GetCountWithAncestors() < entry2->GetCountWithAncestors();
+                return entry1->GetInsertionIndex() < entry2->GetInsertionIndex();
             }
         );
         return txs;
