@@ -103,6 +103,7 @@ add_test_to_suite(bitcoin test_bitcoin
     net_association_tests.cpp
 	object_stream_deserialization_tests.cpp
 	opcode_tests.cpp
+	partial_hash_tests.cpp
 	multisig_tests.cpp
 	net_tests.cpp
 	netbase_tests.cpp
