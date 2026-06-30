@@ -548,6 +548,52 @@ BOOST_AUTO_TEST_CASE(MempoolJournalTopoOrderAfterRemoveForBlock) {
                 CJournalTester::TxnOrder::BEFORE);
 }
 
+// Regression test for the reorg insertionIndex fixup (Phase 4).
+//
+// A reorg re-adds previously-confirmed transactions and can re-add a parent
+// after a child that is already in the mempool, leaving the parent with a larger
+// (later) insertionIndex than its child -- which would invert the topological
+// order everything now derives from insertionIndex. UpdateTransactionsFromBlock
+// must restore a topological insertionIndex over the affected component.
+BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndex) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    CMutableTransaction p;
+    p.vin.resize(1);
+    p.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+    p.vin[0].scriptSig = CScript() << OP_11;
+    p.vout.resize(1);
+    p.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    p.vout[0].nValue = 10 * COIN;
+
+    CMutableTransaction c;
+    c.vin.resize(1);
+    c.vin[0].prevout = COutPoint(p.GetId(), 0);
+    c.vin[0].scriptSig = CScript() << OP_11;
+    c.vout.resize(1);
+    c.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    c.vout[0].nValue = 9 * COIN;
+
+    // Child enters the mempool first (its parent is still confirmed at this
+    // point), then the parent is re-added -- mimicking a block disconnect that
+    // re-adds the parent underneath an existing child.
+    pool.AddUnchecked(c.GetId(), entry.Fee(Amount(10000LL)).FromTx(c), nullChangeSet);
+    pool.AddUnchecked(p.GetId(), entry.Fee(Amount(10000LL)).FromTx(p), nullChangeSet);
+
+    auto pIdx = [&] { return pool.mapTx.find(p.GetId())->GetInsertionIndex(); };
+    auto cIdx = [&] { return pool.mapTx.find(c.GetId())->GetInsertionIndex(); };
+
+    // Before fixup the parent has the larger (later) insertionIndex.
+    BOOST_CHECK(cIdx() < pIdx());
+
+    std::vector<uint256> toUpdate{p.GetId()};
+    pool.UpdateTransactionsFromBlock(toUpdate, nullChangeSet);
+
+    // After fixup the parent precedes the child topologically.
+    BOOST_CHECK(pIdx() < cIdx());
+}
+
 BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
     // The mempool is never trimmed; admission is bounded by a size-dependent
     // fee floor (CTxMemPool::GetMinFee). Below the ramp start (N1) the floor is

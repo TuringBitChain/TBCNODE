@@ -231,11 +231,75 @@ void CTxMemPool::UpdateTransactionsFromBlock(
 
     CEnsureNonNullChangeSet nonNullChangeSet(*this, changeSet);
 
-    // Now we will check transactions connected with newly added transactions 
+    // Now we will check transactions connected with newly added transactions
     // We are doing this because it could be that a newly added transaction
     // did not end up in the journal but have descendants which are in the journal already.
     setEntries affected = getConnectedNL(addedTransactions);
+
+    // A reorg re-adds previously-confirmed transactions, and can re-add a parent
+    // after a child that is already in the mempool. That leaves insertionIndex
+    // non-topological (the parent gets a larger index than its child). Restore a
+    // topological insertionIndex over the whole affected connected component
+    // before anything relies on the ordering it provides (journal acceptance
+    // below, block-template assembly, ancestorsHeight maintenance).
+    setEntries component { affected };
+    component.insert(addedTransactions.begin(), addedTransactions.end());
+    reassignInsertionIndicesNL(component);
+
     checkJournalAcceptanceNL(affected, nonNullChangeSet.Get());
+}
+
+void CTxMemPool::reassignInsertionIndicesNL(const setEntries& entries)
+{
+    // Depth of each entry within the set (longest chain of in-set ancestors),
+    // which yields a topological order: a parent always has a strictly smaller
+    // depth than its child.
+    std::map<txiter, size_t, CompareIteratorByHash> depth;
+    std::set<txiter, CompareIteratorByHash> visiting;
+    std::function<size_t(txiter)> computeDepth = [&](txiter it) -> size_t {
+        auto memoIt = depth.find(it);
+        if(memoIt != depth.end())
+        {
+            return memoIt->second;
+        }
+        // Guard against unexpected cycles (a valid mempool is acyclic).
+        if(!visiting.insert(it).second)
+        {
+            return 0;
+        }
+        size_t d = 0;
+        for(txiter parent : GetMemPoolParentsNL(it))
+        {
+            if(entries.count(parent))
+            {
+                d = std::max(d, computeDepth(parent) + 1);
+            }
+        }
+        visiting.erase(it);
+        depth.emplace(it, d);
+        return d;
+    };
+
+    std::vector<txiter> ordered(entries.begin(), entries.end());
+    for(txiter it : ordered)
+    {
+        computeDepth(it);
+    }
+    std::sort(ordered.begin(), ordered.end(), [&depth](txiter a, txiter b) {
+        if(depth[a] != depth[b])
+        {
+            return depth[a] < depth[b];
+        }
+        // Stable tie-break for entries with no dependency between them.
+        return a->GetInsertionIndex() < b->GetInsertionIndex();
+    });
+
+    for(txiter it : ordered)
+    {
+        mapTx.modify(it, [this](CTxMemPoolEntry& e) {
+            e.SetInsertionIndex(insertionIndex.GetNext());
+        });
+    }
 }
 
 bool CTxMemPool::CalculateMemPoolAncestors(
@@ -1344,12 +1408,14 @@ public:
     bool
     operator()(const CTxMemPool::indexed_transaction_set::const_iterator &a,
                const CTxMemPool::indexed_transaction_set::const_iterator &b) {
-        uint64_t counta = a->GetCountWithAncestors();
-        uint64_t countb = b->GetCountWithAncestors();
-        if (counta == countb) {
+        // insertionIndex is a topological proxy (parents always precede their
+        // children) and, unlike nCountWithAncestors, is never stale.
+        uint64_t deptha = a->GetInsertionIndex();
+        uint64_t depthb = b->GetInsertionIndex();
+        if (deptha == depthb) {
             return CompareTxMemPoolEntryByScore()(*a, *b);
         }
-        return counta < countb;
+        return deptha < depthb;
     }
 };
 } // namespace

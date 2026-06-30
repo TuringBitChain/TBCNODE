@@ -1034,6 +1034,13 @@ private:
 
     // Walks recursively through all descendants of the items in the set and updates their ancestorsHeight.
     void UpdateAncestorsHeightNL(setEntriesTopoSorted entries);
+
+    // Reassign insertionIndex to every entry in the given connected component in
+    // topological order. Used after a reorg re-adds a previously-confirmed parent
+    // underneath a transaction that is already in the mempool, which can otherwise
+    // leave a parent with a larger insertionIndex than its child. The set must be
+    // closed under in-mempool ancestors and descendants.
+    void reassignInsertionIndicesNL(const setEntries& entries);
 };
 
 /**
