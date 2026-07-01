@@ -2667,10 +2667,12 @@ static void ProcessBlockTxnMessage(const Config& config, const CNodePtr& pfrom,
         }
         else if(status == READ_STATUS_FAILED) {
             // Might have collided, fall back to getdata now :(
+            MarkBlockAsReceived(resp.blockhash);
             std::vector<CInv> invs;
             invs.push_back(CInv(MSG_BLOCK, resp.blockhash));
             connman.PushMessage(pfrom,
                                 msgMaker.Make(NetMsgType::GETDATA, invs));
+            return;
         }
         else {
             // Block is either okay, or possibly we received

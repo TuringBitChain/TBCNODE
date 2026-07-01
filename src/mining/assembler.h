@@ -63,3 +63,10 @@ using BlockAssemblerRef = std::shared_ptr<BlockAssembler>;
 
 }
 
+/** Modify the extranonce in a block */
+void IncrementExtraNonce(CBlock *pblock,
+                         const CBlockIndex *pindexPrev,
+                         unsigned int &nExtraNonce);
+int64_t UpdateTime(CBlockHeader *pblock, const Config &config,
+                   const CBlockIndex *pindexPrev);
+
