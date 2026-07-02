@@ -385,9 +385,15 @@ private:
     std::mutex m_builder_mutex;
     std::condition_variable m_builder_cv;
     bool m_builder_request_pending{false};   // guarded by m_builder_mutex
+    bool m_builder_building{false};           // guarded by m_builder_mutex
+    uint64_t m_builder_generation{0};         // guarded by m_builder_mutex
 
     void ThreadBuilder() EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex);
     void RequestRebuild();
+    bool IsCachedWorkSetUsable(bool send_new_prevhash) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    void WaitForBuilderRefresh(uint64_t generation);
+    void WaitForBuilderOnCacheMiss(bool send_new_prevhash) EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex);
+    void NotifyBuilderCacheRefreshed();
     // ─────────────────────────────────────────────────────────────────────
 
     // ── Dispatch Rate Limiter ("Capacitor") ───────────────────────────────

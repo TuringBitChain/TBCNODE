@@ -330,6 +330,8 @@ void Sv2TemplateProvider::ThreadSv2Handler()
         // C2: tip moved -> ask builder to refresh immediately (outside m_tp_mutex)
         if (best_block_changed) {
             RequestRebuild();
+        } else {
+            WaitForBuilderOnCacheMiss(/*send_new_prevhash=*/false);
         }
 
         m_connman->ForEachClient([this, best_block_changed](Sv2Client& client) {
@@ -429,6 +431,8 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
         // This doesn't have any effect, but it will once waitFeesChanged() updates the last_fees value.
         fees_previous_interval = last_fees;
 
+        WaitForBuilderOnCacheMiss(/*send_new_prevhash=*/false);
+
         m_connman->ForEachClient([this, last_fees, &fees_previous_interval](Sv2Client& client) {
             if (!client.m_coinbase_output_data_size_recv) {
                 return;
@@ -498,6 +502,23 @@ bool Sv2TemplateProvider::BuildNewWorkSet(bool future_template, unsigned int coi
     return BuildNewWorkSetWithId(future_template, m_template_id, newWorkSet);
 }
 
+bool Sv2TemplateProvider::IsCachedWorkSetUsable(bool send_new_prevhash)
+{
+    AssertLockHeld(m_tp_mutex);
+    if (send_new_prevhash || !m_cached_workset.has_value()) {
+        return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
+    const auto ttl = m_options.fee_check_interval * CACHE_TTL_MULTIPLIER;
+    const bool ttl_ok = (now - m_cache_built_at) < ttl;
+    const bool delta_ok = (cur_seq - m_cache_mempool_seq) < CACHE_MEMPOOL_DELTA;
+    const bool prev_ok = (m_cached_workset->block_template->getBlockRef()->hashPrevBlock
+                          == m_best_prev_hash);
+    return ttl_ok && delta_ok && prev_ok;
+}
+
 void Sv2TemplateProvider::PruneBlockTemplateCache()
 {
     AssertLockHeld(m_tp_mutex);
@@ -539,6 +560,48 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     ++m_template_id;
     NewWorkSet new_work_set;
 
+    auto use_cached_workset = [&]() -> bool {
+        if (!IsCachedWorkSetUsable(send_new_prevhash)) {
+            return false;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
+        new_work_set = *m_cached_workset;
+        new_work_set.new_template.m_template_id = m_template_id;
+        // Override future_template to reflect the actual send context: a cache hit
+        // on a fee-update path (send_new_prevhash=false) must NOT inherit true from
+        // the originally-built workset (which was built for a new-block context).
+        new_work_set.new_template.m_future_template = send_new_prevhash;
+
+        // "Selection time" on cache hit: only updates the local
+        // prev_hash copy. We deliberately do NOT mutate
+        // block_template->getBlockRef()->nTime — that BlockTemplate is
+        // shared via shared_ptr with m_block_template_cache, and
+        // SubmitSolution writes to block->nTime under m_submit_mutex
+        // (after m_tp_mutex is released). Writing nTime here would race
+        // with that path and could overwrite the miner's submitted
+        // timestamp, causing PoW hash mismatch and a dropped solution.
+        //
+        // In this branch send_new_prevhash=false, so prev_hash is not
+        // emitted on the wire anyway; the local update keeps the field
+        // coherent in case this path ever extends to send_new_prevhash.
+        const uint32_t now_sec = static_cast<uint32_t>(GetAdjustedTime());
+        const uint32_t built_ntime = new_work_set.block_template->getBlockRef()->nTime;
+        if (now_sec > built_ntime) {
+            new_work_set.prev_hash.m_header_timestamp = now_sec;
+        }
+
+        LogPrint(BCLog::SV2,
+            "SendWork: cache hit (age=%llds, dseq=%u, txs=%zu, nTime built=%u sel=%u) -> reuse as id=%lu\n",
+            std::chrono::duration_cast<std::chrono::seconds>(now - m_cache_built_at).count(),
+            cur_seq - m_cache_mempool_seq,
+            new_work_set.block_template->getBlockRef()->vtx.size() - 1,
+            built_ntime, now_sec,
+            m_template_id);
+        return true;
+    };
+
     // ── C1: template reuse cache ───────────────────────────────────────────
     // For fee-update style sends (send_new_prevhash=false) we can serve the
     // previously built NewWorkSet as long as:
@@ -547,51 +610,7 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     //   - chain tip hasn't changed
     // The block template (shared_ptr) is reused verbatim; we bump m_template_id
     // so SubmitSolution lookups remain monotonic.
-    bool cache_hit = false;
-    if (!send_new_prevhash && m_cached_workset.has_value()) {
-        const auto now = std::chrono::steady_clock::now();
-        const unsigned int cur_seq = m_mempool.GetTransactionsUpdated();
-        const auto ttl = m_options.fee_check_interval * CACHE_TTL_MULTIPLIER;
-        const bool ttl_ok   = (now - m_cache_built_at) < ttl;
-        const bool delta_ok = (cur_seq - m_cache_mempool_seq) < CACHE_MEMPOOL_DELTA;
-        const bool prev_ok  = (m_cached_workset->block_template->getBlockRef()->hashPrevBlock
-                               == m_best_prev_hash);
-        if (ttl_ok && delta_ok && prev_ok) {
-            new_work_set = *m_cached_workset;
-            new_work_set.new_template.m_template_id = m_template_id;
-            // Override future_template to reflect the actual send context: a cache hit
-            // on a fee-update path (send_new_prevhash=false) must NOT inherit true from
-            // the originally-built workset (which was built for a new-block context).
-            new_work_set.new_template.m_future_template = send_new_prevhash;
-
-            // "Selection time" on cache hit: only updates the local
-            // prev_hash copy. We deliberately do NOT mutate
-            // block_template->getBlockRef()->nTime — that BlockTemplate is
-            // shared via shared_ptr with m_block_template_cache, and
-            // SubmitSolution writes to block->nTime under m_submit_mutex
-            // (after m_tp_mutex is released). Writing nTime here would race
-            // with that path and could overwrite the miner's submitted
-            // timestamp, causing PoW hash mismatch and a dropped solution.
-            //
-            // In this branch send_new_prevhash=false, so prev_hash is not
-            // emitted on the wire anyway; the local update keeps the field
-            // coherent in case this path ever extends to send_new_prevhash.
-            const uint32_t now_sec = static_cast<uint32_t>(GetAdjustedTime());
-            const uint32_t built_ntime = new_work_set.block_template->getBlockRef()->nTime;
-            if (now_sec > built_ntime) {
-                new_work_set.prev_hash.m_header_timestamp = now_sec;
-            }
-
-            cache_hit = true;
-            LogPrint(BCLog::SV2,
-                "SendWork: cache hit (age=%llds, dseq=%u, txs=%zu, nTime built=%u sel=%u) -> reuse as id=%lu\n",
-                std::chrono::duration_cast<std::chrono::seconds>(now - m_cache_built_at).count(),
-                cur_seq - m_cache_mempool_seq,
-                new_work_set.block_template->getBlockRef()->vtx.size() - 1,
-                built_ntime, now_sec,
-                m_template_id);
-        }
-    }
+    bool cache_hit = use_cached_workset();
     if (!cache_hit) {
         if (!BuildNewWorkSet(/*future_template=*/send_new_prevhash, client.m_coinbase_tx_outputs_size, new_work_set)) {
             return false;
@@ -599,6 +618,7 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         m_cached_workset    = new_work_set;
         m_cache_built_at    = std::chrono::steady_clock::now();
         m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+        NotifyBuilderCacheRefreshed();
     }
     // ───────────────────────────────────────────────────────────────────────
 
@@ -860,6 +880,53 @@ void Sv2TemplateProvider::RequestRebuild()
     m_builder_cv.notify_one();
 }
 
+void Sv2TemplateProvider::WaitForBuilderRefresh(uint64_t generation)
+{
+    std::unique_lock<std::mutex> lk(m_builder_mutex);
+    m_builder_cv.wait_for(lk, std::chrono::seconds(2), [this, generation] {
+        return m_builder_generation != generation || !m_builder_building ||
+               m_flag_interrupt_sv2.load();
+    });
+}
+
+void Sv2TemplateProvider::WaitForBuilderOnCacheMiss(bool send_new_prevhash)
+{
+    if (send_new_prevhash) {
+        return;
+    }
+
+    {
+        LOCKMt(m_tp_mutex);
+        if (IsCachedWorkSetUsable(send_new_prevhash)) {
+            return;
+        }
+    }
+
+    uint64_t builder_generation = 0;
+    bool wait_for_builder = false;
+    {
+        std::lock_guard<std::mutex> lk(m_builder_mutex);
+        wait_for_builder = m_builder_building;
+        builder_generation = m_builder_generation;
+    }
+    if (!wait_for_builder) {
+        return;
+    }
+
+    LogPrint(BCLog::SV2, "SendWork: cache miss, waiting for builder generation=%lu\n",
+        builder_generation);
+    WaitForBuilderRefresh(builder_generation);
+}
+
+void Sv2TemplateProvider::NotifyBuilderCacheRefreshed()
+{
+    {
+        std::lock_guard<std::mutex> lk(m_builder_mutex);
+        ++m_builder_generation;
+    }
+    m_builder_cv.notify_all();
+}
+
 void Sv2TemplateProvider::ThreadBuilder()
 {
     LogPrint(BCLog::SV2, "Builder thread start (tick=%llds)\n",
@@ -915,26 +982,39 @@ void Sv2TemplateProvider::ThreadBuilder()
         // Heavy build OUTSIDE m_tp_mutex. createNewBlock still grabs cs_main /
         // mempool internally — that contention with RPC remains, but SV2
         // handler / capacitor threads stay responsive.
-        NewWorkSet new_work_set;
-        if (!BuildNewWorkSetWithId(/*future_template=*/false, placeholder_id, new_work_set)) {
-            continue;
+        {
+            std::lock_guard<std::mutex> lk(m_builder_mutex);
+            m_builder_building = true;
         }
+        NewWorkSet new_work_set;
+        const bool built = BuildNewWorkSetWithId(/*future_template=*/false, placeholder_id, new_work_set);
 
         // Commit to cache.
-        {
+        bool committed = false;
+        if (built) {
             LOCKMt(m_tp_mutex);
             // Guard against tip having moved while we were building outside the
             // lock: if our build is already stale (prevhash mismatch), drop it.
             if (m_best_prev_hash != uint256{} &&
                 new_work_set.block_template->getBlockRef()->hashPrevBlock != m_best_prev_hash) {
                 LogPrint(BCLog::SV2, "Builder: tip moved during build, discard\n");
-                continue;
+            } else {
+                m_cached_workset    = std::move(new_work_set);
+                m_cache_built_at    = std::chrono::steady_clock::now();
+                m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
+                committed = true;
+                LogPrint(BCLog::SV2, "Builder: cache refreshed (placeholder_id=%lu)\n", placeholder_id);
             }
-            m_cached_workset    = std::move(new_work_set);
-            m_cache_built_at    = std::chrono::steady_clock::now();
-            m_cache_mempool_seq = m_mempool.GetTransactionsUpdated();
-            LogPrint(BCLog::SV2, "Builder: cache refreshed (placeholder_id=%lu)\n", placeholder_id);
         }
+
+        {
+            std::lock_guard<std::mutex> lk(m_builder_mutex);
+            m_builder_building = false;
+            if (committed) {
+                ++m_builder_generation;
+            }
+        }
+        m_builder_cv.notify_all();
     }
     LogPrint(BCLog::SV2, "Builder thread exit\n");
 }
