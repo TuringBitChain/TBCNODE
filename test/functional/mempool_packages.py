@@ -256,6 +256,14 @@ class MempoolPackagesTest(BitcoinTestFramework):
         self.nodes[0].invalidateblock(self.nodes[0].getbestblockhash())
         sync_blocks(self.nodes)
 
+        node1_mempool = self.nodes[1].getrawmempool()
+        assert(tx1_id in node1_mempool)
+        assert(txid not in node1_mempool)
+
+        # Node0 does not have the tight ancestor limit, so the disconnected
+        # chain and its high-fee dependent transaction survive reorg replay.
+        assert(txid in self.nodes[0].getrawmempool())
+
 
 if __name__ == '__main__':
     MempoolPackagesTest().main()
