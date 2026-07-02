@@ -2751,6 +2751,46 @@ void WriteIndexHeader(CAutoFile& fileout,
     }
 }
 
+class DiskBlockDataWriter {
+private:
+    CAutoFile& fileout;
+    CHashWriter hasher;
+    uint64_t size{0};
+
+public:
+    DiskBlockDataWriter(CAutoFile& fileoutIn, int nTypeIn, int nVersionIn)
+        : fileout(fileoutIn), hasher(nTypeIn, nVersionIn) {}
+
+    int GetType() const { return hasher.GetType(); }
+    int GetVersion() const { return hasher.GetVersion(); }
+
+    void write(const char* pch, size_t nSize)
+    {
+        fileout.write(pch, nSize);
+        hasher.write(pch, nSize);
+        size += nSize;
+    }
+
+    void write(bsv::span<const std::byte> src)
+    {
+        fileout.write(src);
+        hasher.write(src);
+        size += src.size();
+    }
+
+    template <typename T>
+    DiskBlockDataWriter& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return *this;
+    }
+
+    CDiskBlockMetaData GetMetaData()
+    {
+        return {hasher.GetHash(), size};
+    }
+};
+
 static bool WriteBlockToDisk(
     const CBlock &block,
     CDiskBlockPos &pos,
@@ -2774,11 +2814,9 @@ static bool WriteBlockToDisk(
 
     pos.nPos = (unsigned int)fileOutPos;
 
-    std::vector<uint8_t> data;
-    CVectorWriter{SER_DISK, CLIENT_VERSION, data, 0, block};
-    metaData = { Hash(data.begin(), data.end()), data.size() };
-
-    fileout.write(reinterpret_cast<const char*>(data.data()), data.size());
+    DiskBlockDataWriter writer(fileout, SER_DISK, CLIENT_VERSION);
+    writer << block;
+    metaData = writer.GetMetaData();
 
     return true;
 }
