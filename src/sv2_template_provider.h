@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <stratumv2/sv2_noise.h>
 #include <stratumv2/sv2_messages.h>
@@ -84,20 +85,19 @@ private:
     static constexpr uint8_t TP_SUBPROTOCOL{0x02};
 
     /**
-     * Minimum cache size for low-client configurations. Each entry holds a
-     * deep-copied CBlock (vtx vector + fee/sigop arrays — transactions
-     * themselves are immutable shared_ptr so are NOT duplicated). Default
-     * config (max_clients=8) keeps this floor; high-client configs scale
-     * to `max_clients × CACHE_SLOTS_PER_CLIENT`.
+     * Each cache entry stores ordered txids and small metadata; transaction
+     * bodies are shared in m_tx_union_cache. Keep only a short window of
+     * in-flight work per connected client.
      */
-    static constexpr size_t MIN_BLOCK_TEMPLATE_CACHE_SIZE{128};
-    static constexpr size_t CACHE_SLOTS_PER_CLIENT{16};
+    static constexpr size_t MIN_BLOCK_TEMPLATE_CACHE_SIZE{16};
+    static constexpr size_t CACHE_SLOTS_PER_CLIENT{2};
+    static constexpr size_t MAX_BLOCK_TEMPLATE_CACHE_SIZE{64};
 
     /**
      * Runtime cap derived from options.max_clients in Init(). Sized so each
-     * connected client can keep ~16 generations of templates alive (~8 min
-     * of churn at fee_check_interval=30s) before older ids start getting
-     * evicted out from under in-flight miner submissions.
+     * connected client can keep a short window of templates alive before
+     * older ids start getting evicted out from under in-flight miner
+     * submissions.
      */
     size_t m_max_block_template_cache_size{MIN_BLOCK_TEMPLATE_CACHE_SIZE};
 
@@ -151,10 +151,25 @@ private:
     std::chrono::nanoseconds m_last_block_time GUARDED_BY(m_tp_mutex);
 
     /**
-     * A cache that maps ids used in NewTemplate messages and its associated block template.
+     * Per-template metadata is intentionally light. Full transaction bodies are
+     * shared through m_tx_union_cache and referenced by ordered txid lists.
      */
-    using BlockTemplateCache = std::map<uint64_t, std::shared_ptr<BlockTemplate>>;
+    struct CachedTemplate
+    {
+        CBlockHeader header;
+        std::vector<uint256> txids;
+    };
+
+    struct CachedTransaction
+    {
+        CTransactionRef tx;
+        size_t refs{0};
+    };
+
+    using BlockTemplateCache = std::map<uint64_t, CachedTemplate>;
+    using TxUnionCache = std::map<uint256, CachedTransaction>;
     BlockTemplateCache m_block_template_cache GUARDED_BY(m_tp_mutex);
+    TxUnionCache m_tx_union_cache GUARDED_BY(m_tp_mutex);
 
     /**
      * The currently supported protocol version.
@@ -302,6 +317,10 @@ private:
 
     /* Forget templates from before the last block, but with a few seconds margin. */
     void PruneBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    void ClearBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    BlockTemplateCache::iterator EraseBlockTemplateCacheEntry(BlockTemplateCache::iterator it) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    bool CacheBlockTemplate(uint64_t template_id, const std::shared_ptr<BlockTemplate>& block_template) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    bool GetCachedTemplateTransactions(const CachedTemplate& cached_template, std::vector<CTransactionRef>& txs) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
 
     /**
      * Sends the best NewTemplate and (optionally) SetNewPrevHash to a client.

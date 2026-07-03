@@ -1,6 +1,7 @@
 #include "sv2_template_provider.h"
 
 #include <base58.h>
+#include <consensus/merkle.h>
 #include <iostream>
 #include <thread>
 #include <sstream>
@@ -191,18 +192,17 @@ void Sv2TemplateProvider::Init(const Sv2TemplateProviderOptions& options)
             SV2_CAP_INITIAL_INTERVAL, SV2_CAP_CONVERGENCE_SECS, SV2_CAP_DELTA);
     }
 
-    // Size the block template cache against max_clients. Each connected
-    // client may keep up to ~CACHE_SLOTS_PER_CLIENT generations of templates
-    // alive simultaneously (initial NewTemplate + periodic fee-update sends
-    // + capacitor discharges, before the miner moves off the old id).
-    // Without scaling, max_clients=1024 would burn the 96-entry default in
-    // a single tip-change fan-out and start dropping live work.
-    m_max_block_template_cache_size = std::max<size_t>(
-        MIN_BLOCK_TEMPLATE_CACHE_SIZE,
-        options.max_clients * CACHE_SLOTS_PER_CLIENT);
-    LogPrint(BCLog::SV2, "Block template cache cap=%zu (max_clients=%zu × %zu, floor=%zu)\n",
+    // Size the block template cache against max_clients. Each entry keeps a
+    // CBlock vtx vector plus fee/sigop arrays alive, so a large-block workload
+    // needs a short in-flight window rather than a deep history of template ids.
+    m_max_block_template_cache_size = std::min<size_t>(
+        MAX_BLOCK_TEMPLATE_CACHE_SIZE,
+        std::max<size_t>(MIN_BLOCK_TEMPLATE_CACHE_SIZE,
+                         options.max_clients * CACHE_SLOTS_PER_CLIENT));
+    LogPrint(BCLog::SV2, "Block template cache cap=%zu (max_clients=%zu x %zu, floor=%zu, ceiling=%zu)\n",
         m_max_block_template_cache_size, options.max_clients,
-        CACHE_SLOTS_PER_CLIENT, MIN_BLOCK_TEMPLATE_CACHE_SIZE);
+        CACHE_SLOTS_PER_CLIENT, MIN_BLOCK_TEMPLATE_CACHE_SIZE,
+        MAX_BLOCK_TEMPLATE_CACHE_SIZE);
 }
 
 Sv2TemplateProvider::~Sv2TemplateProvider()
@@ -320,6 +320,7 @@ void Sv2TemplateProvider::ThreadSv2Handler()
                 m_last_block_time = GetTime<std::chrono::seconds>();
                 m_template_last_update = GetTime<std::chrono::seconds>();
                 m_cached_workset.reset();   // C1: tip moved, old template stale
+                ClearBlockTemplateCache();
                 if (m_cap_current_interval > 0.0 && !m_cap_pending) {
                     m_cap_pending = true;
                     signal_cap = true;  // first arm: need to wake capacitor thread
@@ -531,8 +532,8 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
 
     size_t pruned = 0;
     for (auto it = m_block_template_cache.begin(); it != m_block_template_cache.end(); ) {
-        if (it->second->getBlockRef()->hashPrevBlock != prev_hash) {
-            it = m_block_template_cache.erase(it);
+        if (it->second.header.hashPrevBlock != prev_hash) {
+            it = EraseBlockTemplateCacheEntry(it);
             ++pruned;
         } else {
             ++it;
@@ -542,6 +543,86 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
         LogPrint(BCLog::SV2, "PruneBlockTemplateCache: removed %zu stale entries, %zu remaining\n",
             pruned, m_block_template_cache.size());
     }
+}
+
+void Sv2TemplateProvider::ClearBlockTemplateCache()
+{
+    AssertLockHeld(m_tp_mutex);
+
+    const size_t templates = m_block_template_cache.size();
+    const size_t txs = m_tx_union_cache.size();
+    m_block_template_cache.clear();
+    m_tx_union_cache.clear();
+    if (templates > 0 || txs > 0) {
+        LogPrint(BCLog::SV2, "ClearBlockTemplateCache: removed %zu templates and %zu shared txs\n",
+            templates, txs);
+    }
+}
+
+Sv2TemplateProvider::BlockTemplateCache::iterator
+Sv2TemplateProvider::EraseBlockTemplateCacheEntry(BlockTemplateCache::iterator it)
+{
+    AssertLockHeld(m_tp_mutex);
+
+    for (const auto& txid : it->second.txids) {
+        auto tx_it = m_tx_union_cache.find(txid);
+        if (tx_it == m_tx_union_cache.end()) {
+            continue;
+        }
+        if (tx_it->second.refs > 1) {
+            --tx_it->second.refs;
+        } else {
+            m_tx_union_cache.erase(tx_it);
+        }
+    }
+    return m_block_template_cache.erase(it);
+}
+
+bool Sv2TemplateProvider::CacheBlockTemplate(uint64_t template_id, const std::shared_ptr<BlockTemplate>& block_template)
+{
+    AssertLockHeld(m_tp_mutex);
+
+    auto block = block_template->getBlockRef();
+    CachedTemplate cached_template;
+    cached_template.header = block->GetBlockHeader();
+
+    if (block->vtx.size() > 1) {
+        cached_template.txids.reserve(block->vtx.size() - 1);
+        for (auto tx_it = block->vtx.begin() + 1; tx_it != block->vtx.end(); ++tx_it) {
+            const uint256 txid = (*tx_it)->GetId();
+            cached_template.txids.push_back(txid);
+
+            auto& entry = m_tx_union_cache[txid];
+            if (!entry.tx) {
+                entry.tx = *tx_it;
+            }
+            ++entry.refs;
+        }
+    }
+
+    auto existing = m_block_template_cache.find(template_id);
+    if (existing != m_block_template_cache.end()) {
+        EraseBlockTemplateCacheEntry(existing);
+    }
+    m_block_template_cache.emplace(template_id, std::move(cached_template));
+    return true;
+}
+
+bool Sv2TemplateProvider::GetCachedTemplateTransactions(const CachedTemplate& cached_template, std::vector<CTransactionRef>& txs)
+{
+    AssertLockHeld(m_tp_mutex);
+
+    txs.clear();
+    txs.reserve(cached_template.txids.size());
+    for (const auto& txid : cached_template.txids) {
+        auto tx_it = m_tx_union_cache.find(txid);
+        if (tx_it == m_tx_union_cache.end() || !tx_it->second.tx) {
+            LogPrint(BCLog::SV2, "SV2 tx union cache missing txid=%s\n", txid.ToString());
+            return false;
+        }
+        txs.push_back(tx_it->second.tx);
+    }
+    return true;
 }
 
 bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Amount& fees_before)
@@ -574,14 +655,10 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
         // the originally-built workset (which was built for a new-block context).
         new_work_set.new_template.m_future_template = send_new_prevhash;
 
-        // "Selection time" on cache hit: only updates the local
-        // prev_hash copy. We deliberately do NOT mutate
-        // block_template->getBlockRef()->nTime — that BlockTemplate is
-        // shared via shared_ptr with m_block_template_cache, and
-        // SubmitSolution writes to block->nTime under m_submit_mutex
-        // (after m_tp_mutex is released). Writing nTime here would race
-        // with that path and could overwrite the miner's submitted
-        // timestamp, causing PoW hash mismatch and a dropped solution.
+        // "Selection time" on cache hit: only updates the local prev_hash
+        // copy. The cached workset may be reused for more template ids, while
+        // SubmitSolution reconstructs a separate CBlock from lightweight
+        // template metadata.
         //
         // In this branch send_new_prevhash=false, so prev_hash is not
         // emitted on the wire anyway; the local update keeps the field
@@ -674,16 +751,11 @@ bool Sv2TemplateProvider::SendWork(Sv2Client& client, bool send_new_prevhash, Am
     // template a miner is still working on.
     PruneBlockTemplateCache();
     if (m_block_template_cache.size() >= m_max_block_template_cache_size) {
-        m_block_template_cache.erase(m_block_template_cache.begin());
+        EraseBlockTemplateCacheEntry(m_block_template_cache.begin());
         LogPrint(BCLog::SV2, "Block template cache full (cap=%zu), evicted oldest entry\n",
             m_max_block_template_cache_size);
     }
-    // Deep-copy per template_id so SubmitSolution's in-place mutation of
-    // vtx[0]/nTime/hashMerkleRoot on one id can't corrupt the state another
-    // id is still pointed at. m_cached_workset also keeps its own copy
-    // because new_work_set.block_template is now a clone, not the shared
-    // pointer from the cache.
-    m_block_template_cache.insert({m_template_id, new_work_set.block_template->clone()});
+    CacheBlockTemplate(m_template_id, new_work_set.block_template);
 
     return true;
 }
@@ -750,12 +822,9 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
                 if (ttl_ok && delta_ok && prev_ok) {
                     shared_work_set = *m_cached_workset;
                     // Only update the local prev_hash copy with selection
-                    // time. Do NOT write block_template->getBlockRef()->nTime:
-                    // that BlockTemplate is shared with m_block_template_cache
-                    // and SubmitSolution mutates block->nTime under
-                    // m_submit_mutex (with m_tp_mutex released). A write here
-                    // would race with that path and could corrupt the
-                    // miner-submitted timestamp.
+                    // time. SubmitSolution reconstructs a separate CBlock
+                    // from lightweight template metadata, so the cached
+                    // workset remains reusable for other template ids.
                     //
                     // The prev_hash field IS sent on the wire by capacitor
                     // discharge (send_new_prevhash semantics), so updating
@@ -799,10 +868,9 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
         }
 
         // Step 3: dispatch the shared workset to each client that needs it.
-        // Each client gets its own m_template_id (and a per-id entry in
-        // m_block_template_cache for SubmitSolution lookups), but the
-        // underlying BlockTemplate is shared via shared_ptr — submitSolution
-        // overrides nTime/nonce/coinbase per submission, so the share is safe.
+        // Each client gets its own m_template_id. The cache stores only
+        // ordered txids and small header metadata; transaction bodies are
+        // shared in the SV2 tx union cache.
         if (have_workset) {
             m_connman->ForEachClient([this, &shared_work_set, cache_hit](Sv2Client& client) {
                 if (!client.m_coinbase_output_data_size_recv) return;
@@ -818,13 +886,9 @@ void Sv2TemplateProvider::ThreadSv2CapacitorHandler()
 
                 PruneBlockTemplateCache();
                 if (m_block_template_cache.size() >= m_max_block_template_cache_size) {
-                    m_block_template_cache.erase(m_block_template_cache.begin());
+                    EraseBlockTemplateCacheEntry(m_block_template_cache.begin());
                 }
-                // Per-id deep copy — see SendWork insert site for rationale.
-                // Each client's template_id owns an isolated BlockTemplate,
-                // so SubmitSolution can mutate without affecting sibling ids
-                // built off the same shared_work_set.
-                m_block_template_cache.insert({m_template_id, client_work_set.block_template->clone()});
+                CacheBlockTemplate(m_template_id, client_work_set.block_template);
 
                 // Human-readable discharge summary — mirrors SendWork's
                 // NewTemplate log so the per-id audit trail (time / txs /
@@ -1024,11 +1088,10 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
     LOCKMt(m_tp_mutex);
     auto cached_block = m_block_template_cache.find(msg.m_template_id);
     if (cached_block != m_block_template_cache.end()) {
-        auto block = (*cached_block->second).getBlockRef();
-
-        if (block->hashPrevBlock != m_best_prev_hash) {
+        const auto& cached_template = cached_block->second;
+        if (cached_template.header.hashPrevBlock != m_best_prev_hash) {
             LogPrint(BCLog::SV2, "RequestTransactionData: stale template id=%lu prevhash=%s tip=%s client=%zu\n",
-                msg.m_template_id, HexStr(bsv::span(block->hashPrevBlock)),
+                msg.m_template_id, HexStr(bsv::span(cached_template.header.hashPrevBlock)),
                 HexStr(bsv::span(m_best_prev_hash)), client.m_id);
             node::Sv2RequestTransactionDataErrorMsg request_tx_data_error{msg.m_template_id, "stale-template-id"};
             client.m_send_messages.emplace_back(request_tx_data_error);
@@ -1036,8 +1099,12 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
         }
 
         std::vector<CTransactionRef> txs;
-        if (block->vtx.size() > 0) {
-            std::copy(block->vtx.begin() + 1, block->vtx.end(), std::back_inserter(txs));
+        if (!GetCachedTemplateTransactions(cached_template, txs)) {
+            LogPrint(BCLog::SV2, "RequestTransactionData: template id=%lu tx data unavailable, client=%zu\n",
+                msg.m_template_id, client.m_id);
+            node::Sv2RequestTransactionDataErrorMsg request_tx_data_error{msg.m_template_id, "transaction-data-unavailable"};
+            client.m_send_messages.emplace_back(request_tx_data_error);
+            return;
         }
 
         size_t tx_count = txs.size();
@@ -1062,10 +1129,8 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 
         auto cb = MakeTransactionRef(std::move(solution.m_coinbase_tx));
 
-        // Use shared_ptr so the template stays alive after releasing m_tp_mutex.
-        // We can't hold the lock through submitSolution() because a concurrent
-        // new block via p2p would deadlock on g_best_block_mutex.
-        std::shared_ptr<BlockTemplate> block_template;
+        CachedTemplate cached_template;
+        std::vector<CTransactionRef> txs;
         {
             LOCKMt(m_tp_mutex);
             auto cached_block_template = m_block_template_cache.find(solution.m_template_id);
@@ -1073,31 +1138,36 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                 LogPrintf("SV2 SubmitSolution: template id=%lu not in cache, solution dropped\n", solution.m_template_id);
                 return;
             }
-            block_template = cached_block_template->second; // shared ownership — safe after lock release
+            cached_template = cached_block_template->second;
 
-            if (block_template->getBlockRef()->hashPrevBlock != m_best_prev_hash) {
+            if (cached_template.header.hashPrevBlock != m_best_prev_hash) {
                 LogPrintf("SV2 SubmitSolution: stale template id=%lu prevhash=%s sv2_tip=%s, solution dropped\n",
                     solution.m_template_id,
-                    block_template->getBlockRef()->hashPrevBlock.ToString(),
+                    cached_template.header.hashPrevBlock.ToString(),
                     m_best_prev_hash.ToString());
                 return;
             }
+            if (!GetCachedTemplateTransactions(cached_template, txs)) {
+                LogPrintf("SV2 SubmitSolution: template id=%lu tx data unavailable, solution dropped\n",
+                    solution.m_template_id);
+                return;
+            }
+            EraseBlockTemplateCacheEntry(cached_block_template);
 
             // Audit trail for miner-side nTime rolling. tpl_ntime is what the
             // assembler set when this template was built (or, for cache-hit
-            // dispatches, the original build's time — the cached value is the
-            // same shared BlockTemplate). rolled is the miner's chosen
+            // dispatches, the original build's time). rolled is the miner's chosen
             // timestamp minus that. Cross-reference vs the corresponding
             // "NewTemplate id=N" / "Capacitor: discharge ... id=N" log entry
             // and the prev-tip's UpdateTip date to see whether the miner
             // rolled forward, backward, or beyond the SetNewPrevHash window.
-            int tpl_txs = static_cast<int>(block_template->getBlockRef()->vtx.size()) - 1;
-            uint32_t tpl_ntime = block_template->getBlockRef()->nTime;
+            int tpl_txs = static_cast<int>(cached_template.txids.size());
+            uint32_t tpl_ntime = cached_template.header.nTime;
             int64_t rolled = static_cast<int64_t>(solution.m_header_timestamp) - static_cast<int64_t>(tpl_ntime);
             LogPrint(BCLog::SV2,
                 "SubmitSolution audit id=%lu tpl_ntime=%u submit_ntime=%u rolled=%+lld s  txs=%d  prevhash=%s\n",
                 solution.m_template_id, tpl_ntime, solution.m_header_timestamp, (long long)rolled,
-                tpl_txs, block_template->getBlockRef()->hashPrevBlock.ToString());
+                tpl_txs, cached_template.header.hashPrevBlock.ToString());
         }
 
         LOCKMt(m_submit_mutex);
@@ -1105,29 +1175,42 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         const int64_t get_tip_start = GetTimeMicros();
         auto current_tip = m_mining.getTip();
         const int64_t get_tip_end = GetTimeMicros();
-        if (!current_tip || block_template->getBlockRef()->hashPrevBlock != current_tip->hash) {
+        if (!current_tip || cached_template.header.hashPrevBlock != current_tip->hash) {
             LogPrintf("SV2 SubmitSolution: stale template id=%lu prevhash=%s chain_tip=%s, solution dropped\n",
                 solution.m_template_id,
-                block_template->getBlockRef()->hashPrevBlock.ToString(),
+                cached_template.header.hashPrevBlock.ToString(),
                 current_tip ? current_tip->hash.ToString() : "none");
             return;
         }
 
         LogPrint(BCLog::SV2, "SubmitSolution: template_id=%lu prevhash=%s\n",
-            solution.m_template_id, block_template->getBlock().hashPrevBlock.ToString());
+            solution.m_template_id, cached_template.header.hashPrevBlock.ToString());
 
-        auto* block = block_template->getBlockRef().get();
-        const size_t txs = block->vtx.size() > 0 ? block->vtx.size() - 1 : 0;
+        auto block = std::make_shared<CBlock>(cached_template.header);
+        block->vtx.reserve(txs.size() + 1);
+        block->vtx.push_back(std::move(cb));
+        block->vtx.insert(block->vtx.end(), txs.begin(), txs.end());
+        block->nVersion = solution.m_version;
+        block->nTime = solution.m_header_timestamp;
+        block->nNonce = solution.m_header_nonce;
+        block->hashMerkleRoot = BlockMerkleRoot(*block);
+
+        const size_t tx_count = block->vtx.size() > 0 ? block->vtx.size() - 1 : 0;
         const size_t size_no_cb = block->GetSizeWithoutCoinbase();
         const std::string prevhash = block->hashPrevBlock.ToString();
         const int height = current_tip->height + 1;
         const int64_t validation_start = GetTimeMicros();
-        const bool accepted = block_template->submitSolution(solution.m_version, solution.m_header_timestamp, solution.m_header_nonce, std::move(cb));
+        const bool accepted = m_mining.submitBlock(block);
         const int64_t validation_end = GetTimeMicros();
+        if (accepted) {
+            LOCKMt(m_tp_mutex);
+            m_cached_workset.reset();
+            ClearBlockTemplateCache();
+        }
         LogPrint(BCLog::SV2,
             "SV2PERF event=submit_solution template_id=%lu ok=%d height=%d txs=%zu size_no_cb=%zu "
             "total_size=%llu get_tip_us=%lld process_new_block_us=%lld total_us=%lld prevhash=%s submit_ntime=%u nonce=%08x\n",
-            solution.m_template_id, accepted ? 1 : 0, height, txs, size_no_cb,
+            solution.m_template_id, accepted ? 1 : 0, height, tx_count, size_no_cb,
             static_cast<unsigned long long>(GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION)),
             static_cast<long long>(get_tip_end - get_tip_start),
             static_cast<long long>(validation_end - validation_start),

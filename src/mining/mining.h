@@ -69,11 +69,6 @@ public:
 
     /**
      * Deep-copy this template (header + transaction list + fee/sigop arrays).
-     *
-     * Used by the SV2 path so that each entry in m_block_template_cache owns
-     * its own underlying CBlock; submitSolution() mutates header/coinbase
-     * in-place, so without this clone, multiple template_id entries built
-     * from the same source would alias and corrupt each other on submit.
      * Transactions themselves are immutable (CTransactionRef = shared_ptr to
      * const), so the vtx vector is copied but its elements remain shared.
      */
@@ -124,6 +119,11 @@ public:
      * @returns a block template
      */
     virtual std::unique_ptr<BlockTemplate> createNewBlock(const CScript& script_pub_key) = 0;
+
+    /**
+     * Submit a fully reconstructed block to validation.
+     */
+    virtual bool submitBlock(std::shared_ptr<CBlock> block) = 0;
 
     /**
      * Checks if a given block is valid.

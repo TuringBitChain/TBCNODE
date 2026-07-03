@@ -155,6 +155,11 @@ public:
         return std::make_unique<BlockTemplateImpl>(std::move(pblocktemplate), m_config);
     }
 
+    bool submitBlock(std::shared_ptr<CBlock> block) override
+    {
+        return ProcessNewBlock(m_config, std::move(block), true, nullptr);
+    }
+
     bool checkBlock(const CBlock& block, const BlockCheckOptions& options, std::string& reason, std::string& debug) override
     {
         LOCK(::cs_main);
