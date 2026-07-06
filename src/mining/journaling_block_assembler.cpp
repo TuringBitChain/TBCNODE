@@ -97,6 +97,10 @@ std::unique_ptr<CBlockTemplate> JournalingBlockAssembler::CreateNewBlock(const C
 
     uint64_t serializeSize { GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION) };
 
+    // Expose the last assembled block's size/txn count for getmininginfo.
+    nLastBlockSize = serializeSize;
+    nLastBlockTx = block->vtx.size();
+
     bool isGenesisEnabled = IsGenesisEnabled(mConfig, chainActive.Height() + 1);
     bool sigOpCountError;
 

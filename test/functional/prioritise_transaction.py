@@ -132,7 +132,7 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         tx2_hex = self.nodes[0].signrawtransaction(raw_tx2)["hex"]
         tx2_id = self.nodes[0].decoderawtransaction(tx2_hex)["txid"]
 
-        # This will raise an exception due to min relay fee not being met
+        # This will raise an exception due to mempool minimum fee not being met
         assert_raises_rpc_error(-26, "66: insufficient priority",
                                 self.nodes[0].sendrawtransaction, tx2_hex)
         assert(tx2_id not in self.nodes[0].getrawmempool())

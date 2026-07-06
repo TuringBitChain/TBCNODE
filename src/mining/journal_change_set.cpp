@@ -6,6 +6,10 @@
 #include <txmempool.h>
 #include <validation.h>
 
+#include <functional>
+#include <map>
+#include <set>
+
 using mining::CJournalEntry;
 using mining::CJournalChangeSet;
 using mining::JournalUpdateReason;
@@ -110,14 +114,62 @@ void CJournalChangeSet::applyNL()
         // from the mempool with no attempt to put things in the correct order.
         if(mUpdateReason == JournalUpdateReason::REORG || mUpdateReason == JournalUpdateReason::RESET)
         {
-            // FIXME: Once C++17 parallel algorithms are widely supported, make this
-            // use them.
-            std::stable_sort(mChangeSet.begin(), mChangeSet.end(),
-                [](const Change& change1, const Change& change2)
+            // Sort so that a transaction always appears after every other
+            // transaction in the change set whose output it spends. The change
+            // set can be built in a non-topological order (REORG re-adds a
+            // previously-confirmed parent after its already-present child; RESET
+            // is built straight from the mempool), so order by each transaction's
+            // depth within the change set, computed from the actual input/output
+            // dependencies rather than any cached mempool ancestor count.
+            std::map<TxId, CTransactionRef> txnsInSet;
+            for(const Change& change : mChangeSet)
+            {
+                txnsInSet.emplace(change.second.GetTxId(), change.second.getTxn());
+            }
+
+            std::map<TxId, size_t> depthMemo;
+            std::set<TxId> visiting;
+            std::function<size_t(const TxId&)> ancestorDepth =
+                [&](const TxId& txid) -> size_t
+            {
+                auto memoIt = depthMemo.find(txid);
+                if(memoIt != depthMemo.end())
                 {
-                    size_t h1 { change1.second.getAncestorsHeight() };
-                    size_t h2 { change2.second.getAncestorsHeight() };
-                    return h1 < h2;
+                    return memoIt->second;
+                }
+                auto txnIt = txnsInSet.find(txid);
+                if(txnIt == txnsInSet.end())
+                {
+                    return 0;
+                }
+                // Guard against unexpected cycles (should never happen).
+                if(!visiting.insert(txid).second)
+                {
+                    return 0;
+                }
+                size_t depth = 0;
+                for(const CTxIn& in : txnIt->second->vin)
+                {
+                    const TxId& parent { in.prevout.GetTxId() };
+                    if(txnsInSet.count(parent))
+                    {
+                        depth = std::max(depth, ancestorDepth(parent) + 1);
+                    }
+                }
+                visiting.erase(txid);
+                depthMemo.emplace(txid, depth);
+                return depth;
+            };
+            for(const Change& change : mChangeSet)
+            {
+                ancestorDepth(change.second.GetTxId());
+            }
+
+            std::stable_sort(mChangeSet.begin(), mChangeSet.end(),
+                [&depthMemo](const Change& change1, const Change& change2)
+                {
+                    return depthMemo[change1.second.GetTxId()] <
+                           depthMemo[change2.second.GetTxId()];
                 }
             );
         }
@@ -177,4 +229,3 @@ void CJournalChangeSet::addOperationCommonNL(Operation op, const TxId& txid)
         applyNL();
     }
 }
-

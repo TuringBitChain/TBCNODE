@@ -22,10 +22,9 @@ class DustRelayFeeTest(BitcoinTestFramework):
     # - wallet accepts sending amount which meets dust threshold
     # - node does not accept tx output with dust
     # - node accepts tx output which meets dust threshold
-    def test_node_with_fees(self, dustrelayfee_sats, minrelayfee_sats):
+    def test_node_with_fees(self, dustrelayfee_sats, mempoolminfee_sats):
         dustrelayfee = Decimal(dustrelayfee_sats)/COIN
-        minrelayfee = Decimal(minrelayfee_sats)/COIN
-        self.restart_node(0, extra_args=["-dustrelayfee="+str(dustrelayfee), "-minrelaytxfee="+str(minrelayfee), "-acceptnonstdtxn=0"])
+        self.restart_node(0, extra_args=["-dustrelayfee="+str(dustrelayfee), "-mempoolminfeerate="+str(mempoolminfee_sats), "-acceptnonstdtxn=0"])
 
         # Calculate dust threshold as defined in transaction.h, GetDustThreshold()
         # dustrelayfee 1000 --> threshold 546
@@ -74,13 +73,13 @@ class DustRelayFeeTest(BitcoinTestFramework):
         self.nodes[0].generate(120)
 
         # 1. Default settings of BSV node before Genesis release
-        self.test_node_with_fees(dustrelayfee_sats=1000, minrelayfee_sats=1000)
+        self.test_node_with_fees(dustrelayfee_sats=1000, mempoolminfee_sats=1000)
 
         # 2. Default settings of BSV node running Genesis release
-        self.test_node_with_fees(dustrelayfee_sats=1000, minrelayfee_sats=250)
+        self.test_node_with_fees(dustrelayfee_sats=1000, mempoolminfee_sats=250)
         
-        # 3. BSV node where dustrelayfee is lowered to match minrelayfee
-        self.test_node_with_fees(dustrelayfee_sats=250, minrelayfee_sats=250)
+        # 3. BSV node where dustrelayfee is lowered to match mempoolminfee
+        self.test_node_with_fees(dustrelayfee_sats=250, mempoolminfee_sats=250)
 
 if __name__ == '__main__':
     DustRelayFeeTest().main()

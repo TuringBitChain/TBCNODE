@@ -21,10 +21,10 @@ class ConsolidationP2PKHTest(BitcoinTestFramework):
         self.utxo_test_sats = 100000
         self.utxo_test_bsvs = satoshi_round(self.utxo_test_sats / COIN)
         self.blockmintxfee_sats = 500
-        self.minrelaytxfee_sats = 250
+        self.mempoolminfeerate_sats = 250
         self.extra_args = [[
             "-whitelist=127.0.0.1",
-            "-minrelaytxfee={}".format(Decimal(self.minrelaytxfee_sats)/COIN),
+            "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
             "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
             "-minconsolidationfactor=2",
             "-maxconsolidationinputscriptsize=151",
@@ -33,21 +33,21 @@ class ConsolidationP2PKHTest(BitcoinTestFramework):
             "-acceptnonstdconsolidationinput=1"
             ],[
             "-whitelist=127.0.0.1",
-            "-minrelaytxfee={}".format(Decimal(self.minrelaytxfee_sats)/COIN),
+            "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
             "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",
             "-acceptnonstdconsolidationinput=1"
             ],[
             "-whitelist=127.0.0.1",
-            "-minrelaytxfee={}".format(Decimal(self.minrelaytxfee_sats)/COIN),
+            "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
             "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
             "-minconsolidationfactor=0",  #disables consolidation factor
             "-acceptnonstdtxn=1",
             "-acceptnonstdconsolidationinput=1"
             ],[
             "-whitelist=127.0.0.1",
-            "-minrelaytxfee={}".format(Decimal(self.minrelaytxfee_sats)/COIN),
+            "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
             "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",

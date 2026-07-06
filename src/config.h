@@ -63,12 +63,6 @@ public:
     virtual bool SetAcceptNonStdConsolidationInput(uint64_t value, std::string* err = nullptr) = 0;
     virtual bool GetAcceptNonStdConsolidationInput() const = 0;
 
-    virtual void SetMinFeePerKB(CFeeRate amt) = 0;
-    virtual CFeeRate GetMinFeePerKB() const = 0;
-
-    virtual void SetBlockMinFeePerKB(CFeeRate amt) = 0;
-    virtual CFeeRate GetBlockMinFeePerKB() const = 0;
-
     virtual void SetPreferredBlockFileSize(uint64_t preferredBlockFileSize) = 0;
     virtual uint64_t GetPreferredBlockFileSize() const = 0;
 
@@ -161,8 +155,13 @@ public:
     virtual bool SetMemPoolExpiry(int64_t memPoolExpiry, std::string* err) = 0;
     virtual uint64_t GetMemPoolExpiry() const = 0;
 
-    virtual bool SetLimitFreeRelay(int64_t limitFreeRelay, std::string* err) = 0;
-    virtual uint64_t GetLimitFreeRelay() const = 0;
+    // Mempool admission fee curve (no-trim policy). N1 = ramp start (bytes),
+    // N2 = GetMaxMempool(). Below N1 the floor applies; between N1 and N2 the
+    // required feerate rises hyperbolically with a pole at N2.
+    virtual bool SetMempoolFeeRampStart(int64_t rampStart, std::string* err) = 0;
+    virtual uint64_t GetMempoolFeeRampStart() const = 0;
+    virtual bool SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) = 0;
+    virtual CFeeRate GetMempoolMinFeePerKB() const = 0;
 
     virtual bool SetMaxOrphanTxSize(int64_t maxOrphanTxSize, std::string* err) = 0;
     virtual uint64_t GetMaxOrphanTxSize() const = 0;
@@ -214,12 +213,6 @@ public:
 
     bool SetAcceptNonStdConsolidationInput(uint64_t value, std::string* err = nullptr) override;
     bool GetAcceptNonStdConsolidationInput() const  override;
-
-    void SetMinFeePerKB(CFeeRate amt) override;
-    CFeeRate GetMinFeePerKB() const override;
-
-    void SetBlockMinFeePerKB(CFeeRate amt) override;
-    CFeeRate GetBlockMinFeePerKB() const override;
 
     void SetPreferredBlockFileSize(uint64_t preferredBlockFileSize) override;
     uint64_t GetPreferredBlockFileSize() const override;
@@ -319,8 +312,10 @@ public:
     bool SetMemPoolExpiry(int64_t memPoolExpiry, std::string* err) override;
     uint64_t GetMemPoolExpiry() const override;
 
-    bool SetLimitFreeRelay(int64_t limitFreeRelay, std::string* err) override;
-    uint64_t GetLimitFreeRelay() const override;
+    bool SetMempoolFeeRampStart(int64_t rampStart, std::string* err) override;
+    uint64_t GetMempoolFeeRampStart() const override;
+    bool SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) override;
+    CFeeRate GetMempoolMinFeePerKB() const override;
 
     bool SetMaxOrphanTxSize(int64_t maxOrphanTxSize, std::string* err) override;
     uint64_t GetMaxOrphanTxSize() const override;
@@ -338,9 +333,7 @@ public:
     static GlobalConfig& GetConfig();
 
 private:
-    // All fileds are initialized in Reset()    
-    CFeeRate feePerKB;
-    CFeeRate blockMinFeePerKB;
+    // All fileds are initialized in Reset()
     uint64_t blockPriorityPercentage;
     uint64_t preferredBlockFileSize;
     uint64_t factorMaxSendQueuesBytes;
@@ -405,7 +398,8 @@ private:
 
     uint64_t mMaxMempool;
     uint64_t mMemPoolExpiry;
-    uint64_t mLimitFreeRelay;
+    uint64_t mMempoolFeeRampStart;
+    CFeeRate mMempoolMinFeePerKB;
     uint64_t mMaxOrphanTxSize;
     uint64_t mStopAtHeight;
     uint64_t mPromiscuousMempoolFlags;
@@ -494,12 +488,6 @@ public:
 
     void SetChainParams(std::string net);
     const CChainParams &GetChainParams() const override { return *chainParams; }
-
-    void SetMinFeePerKB(CFeeRate amt) override{};
-    CFeeRate GetMinFeePerKB() const override { return CFeeRate(Amount(0)); }
-
-    void SetBlockMinFeePerKB(CFeeRate amt) override{};
-    CFeeRate GetBlockMinFeePerKB() const override { return CFeeRate(Amount(0)); }
 
     void SetPreferredBlockFileSize(uint64_t preferredBlockFileSize) override {}
     uint64_t GetPreferredBlockFileSize() const override { return 0; }
@@ -670,13 +658,20 @@ public:
     }
     uint64_t GetMemPoolExpiry() const override { return DEFAULT_MEMPOOL_EXPIRY * SECONDS_IN_ONE_HOUR; }
 
-    bool SetLimitFreeRelay(int64_t limitFreeRelay, std::string* err) override
+    bool SetMempoolFeeRampStart(int64_t rampStart, std::string* err) override
     {
         SetErrorMsg(err);
 
         return true;
     }
-    uint64_t GetLimitFreeRelay() const override { return DEFAULT_LIMITFREERELAY * ONE_KILOBYTE; }
+    uint64_t GetMempoolFeeRampStart() const override { return DEFAULT_MEMPOOL_FEE_RAMP_START * ONE_MEGABYTE; }
+    bool SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) override
+    {
+        SetErrorMsg(err);
+
+        return true;
+    }
+    CFeeRate GetMempoolMinFeePerKB() const override { return CFeeRate(DEFAULT_MEMPOOL_MIN_FEE_RATE); }
 
     bool SetMaxOrphanTxSize(int64_t maxOrphanTxSize, std::string* err) override
     {

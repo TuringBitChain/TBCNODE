@@ -24,7 +24,6 @@
 #include "key.h"
 #include "mining/journal_builder.h"
 #include "mining/journaling_block_assembler.h"
-#include "mining/legacy.h"
 #include "mining/mining.h"
 #include "net/net.h"
 #include "net/net_processing.h"
@@ -519,6 +518,7 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage +=
         HelpMessageOpt("-rejectmempoolrequest", _("Reject every mempool request from "
                                      "non-whitelisted peers."));
+    strUsage +=
         HelpMessageOpt("-mempoolpull", strprintf(_("Actively request peer mempool when tx "
                                      "sync stalls (BIP35 pull recovery). Default: %u"),
                                      DEFAULT_MEMPOOL_PULL));
@@ -869,15 +869,19 @@ std::string HelpMessage(HelpMessageMode mode) {
             "-blocksizeactivationtime=<n>",
             "Change time that specifies when new defaults for -blockmaxsize are used");
         strUsage += HelpMessageOpt(
-            "-limitfreerelay=<n>",
-            strprintf("Continuously rate-limit free transactions to <n> "
-                      "kilobytes per minute (default: %u). The value may be given in kilobytes or with unit (B, kB, MB, GB).",
-                      DEFAULT_LIMITFREERELAY));
-        strUsage +=
-            HelpMessageOpt("-relaypriority",
-                           strprintf("Require high priority for relaying free "
-                                     "or low-fee transactions (default: %d)",
-                                     DEFAULT_RELAYPRIORITY));
+            "-mempoolminfeerate=<n>",
+            strprintf("The mempool admission fee floor in satoshis per kB, "
+                      "charged while mempool usage is below -mempoolfeerampstart "
+                      "(default: %d)",
+                      DEFAULT_MEMPOOL_MIN_FEE_RATE.GetSatoshis()));
+        strUsage += HelpMessageOpt(
+            "-mempoolfeerampstart=<n>",
+            strprintf("Mempool usage (N1) below which the admission fee equals "
+                      "-mempoolminfeerate (default: %uMB). Between N1 and "
+                      "-maxmempool (N2) the required feerate rises hyperbolically "
+                      "with a pole at N2. The value may be given in bytes or with "
+                      "unit (B, kB, MB, GB).",
+                      DEFAULT_MEMPOOL_FEE_RAMP_START));
         strUsage += HelpMessageOpt(
             "-maxsigcachesize=<n>",
             strprintf("Limit size of signature cache to <n> MiB (default: %u). The value may be given in megabytes or with unit (B, KiB, MiB, GiB).",
@@ -897,12 +901,6 @@ std::string HelpMessage(HelpMessageMode mode) {
                       DEFAULT_MAX_TIP_AGE));
     }
     strUsage += HelpMessageOpt(
-        "-minrelaytxfee=<amt>",
-        strprintf(
-            _("Fees (in %s/kB) smaller than this are considered zero fee for "
-              "relaying, mining and transaction creation (default: %s)"),
-            CURRENCY_UNIT, FormatMoney(DEFAULT_MIN_RELAY_TX_FEE)));
-    strUsage += HelpMessageOpt(
         "-maxtxfee=<amt>",
         strprintf(_("Maximum total fees (in %s) to use in a single wallet "
                     "transaction or raw transaction; setting this too low may "
@@ -911,12 +909,6 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage += HelpMessageOpt(
         "-printtoconsole",
         _("Send trace/debug info to console instead of bitcoind.log file"));
-    if (showDebug) {
-        strUsage += HelpMessageOpt(
-            "-printpriority", strprintf("Log transaction priority and fee per "
-                                        "kB when mining blocks (default: %d)",
-                                        DEFAULT_PRINTPRIORITY));
-    }
     strUsage += HelpMessageOpt("-shrinkdebugfile",
                                _("Shrink bitcoind.log file on client startup "
                                  "(default: 1 when no -debug)"));
@@ -1092,8 +1084,8 @@ std::string HelpMessage(HelpMessageMode mode) {
     /** Block assembler */
     strUsage += HelpMessageOpt(
         "-blockassembler=<type>",
-        strprintf(_("Set the type of block assembler to use for mining. Supported options are "
-                    "LEGACY or JOURNALING. (default: %s)"),
+        strprintf(_("Set the type of block assembler to use for mining. Supported option is "
+                    "JOURNALING. (default: %s)"),
                   enum_cast<std::string>(mining::DEFAULT_BLOCK_ASSEMBLER_TYPE).c_str()));
     strUsage += HelpMessageOpt( 
         "-jbamaxtxnbatch=<max batch size>",
@@ -1847,9 +1839,14 @@ bool AppInitParameterInteraction(Config &config) {
         return InitError(err);
     }
     
-    // Configure free transactions limit 
-    if (std::string err; !config.SetLimitFreeRelay(
-        gArgs.GetArgAsBytes("-limitfreerelay", DEFAULT_LIMITFREERELAY, ONE_KILOBYTE), &err))
+    // Configure the mempool admission fee curve (no-trim policy).
+    if (std::string err; !config.SetMempoolMinFeePerKB(
+        gArgs.GetArg("-mempoolminfeerate", DEFAULT_MEMPOOL_MIN_FEE_RATE.GetSatoshis()), &err))
+    {
+        return InitError(err);
+    }
+    if (std::string err; !config.SetMempoolFeeRampStart(
+        gArgs.GetArgAsBytes("-mempoolfeerampstart", DEFAULT_MEMPOOL_FEE_RAMP_START, ONE_MEGABYTE), &err))
     {
         return InitError(err);
     }
@@ -2098,22 +2095,6 @@ bool AppInitParameterInteraction(Config &config) {
 
     nConnectTimeout = gArgs.GetArg("-timeout", DEFAULT_CONNECT_TIMEOUT);
     if (nConnectTimeout <= 0) nConnectTimeout = DEFAULT_CONNECT_TIMEOUT;
-
-    // Fee-per-kilobyte amount considered the same as "free". If you are mining,
-    // be careful setting this: if you set it to zero then a transaction spammer
-    // can cheaply fill blocks using 1-satoshi-fee transactions. It should be
-    // set above the real cost to you of processing a transaction.
-    if (gArgs.IsArgSet("-minrelaytxfee")) {
-        Amount n(0);
-        auto parsed = ParseMoney(gArgs.GetArg("-minrelaytxfee", ""), n);
-        if (!parsed || Amount(0) == n)
-            return InitError(AmountErrMsg("minrelaytxfee",
-                                          gArgs.GetArg("-minrelaytxfee", "")));
-        // High fee check is done afterward in CWallet::ParameterInteraction()
-        config.SetMinFeePerKB(CFeeRate(n));
-    } else {
-        config.SetMinFeePerKB(CFeeRate(DEFAULT_MIN_RELAY_TX_FEE));
-    }
 
     // Sanity check argument for min fee for including tx in block
     // TODO: Harmonize which arguments need sanity checking and where that

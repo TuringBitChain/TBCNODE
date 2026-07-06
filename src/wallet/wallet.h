@@ -946,7 +946,7 @@ public:
                          const CCoinControl &coin_control,
                          const CTxMemPool &pool);
 
-    CFeeRate GetRequiredFeeRate();
+    CFeeRate GetRequiredFeeRate(const CTxMemPool& pool);
 
     CFeeRate GetMinimumFeeRate(const CCoinControl & coin_control, const CTxMemPool & pool);
 

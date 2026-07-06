@@ -15,6 +15,7 @@
 #include "rpc/blockchain.h"
 #include "rpc/server.h"
 #include "timedata.h"
+#include "txmempool.h"
 #include "util.h"
 #include "utilstrencodings.h"
 #include "validation.h"
@@ -77,8 +78,8 @@ static UniValue getinfo(const Config &config, const JSONRPCRequest &request) {
             "  \"paytxfee\": x.xxxx,         (numeric) the transaction fee set "
             "in " +
             CURRENCY_UNIT + "/kB\n"
-                            "  \"relayfee\": x.xxxx,         (numeric) minimum "
-                            "relay fee for non-free transactions in " +
+                            "  \"relayfee\": x.xxxx,         (numeric) current "
+                            "mempool relay fee for transactions in " +
             CURRENCY_UNIT +
             "/kB\n"
             "  \"errors\": \"...\",            (string) any error messages\n"
@@ -142,7 +143,7 @@ static UniValue getinfo(const Config &config, const JSONRPCRequest &request) {
     obj.push_back(Pair("paytxfee", ValueFromAmount(payTxFee.GetFeePerK())));
 #endif
     obj.push_back(Pair("relayfee",
-                       ValueFromAmount(config.GetMinFeePerKB().GetFeePerK())));
+                       ValueFromAmount(mempool.GetMinFee(config.GetMaxMempool()).GetFeePerK())));
     obj.push_back(Pair("errors", GetWarnings("statusbar")));
     obj.push_back(Pair("maxblocksize", config.GetMaxBlockSize()));
     obj.push_back(Pair("maxminedblocksize", config.GetMaxGeneratedBlockSize()));
