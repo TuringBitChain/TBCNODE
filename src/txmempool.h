@@ -284,11 +284,9 @@ public:
  *
  * CTxMemPool::mapTx, and CTxMemPoolEntry bookkeeping:
  *
- * mapTx is a boost::multi_index that sorts the mempool on 4 criteria:
+ * mapTx is a boost::multi_index that indexes the mempool by:
  * - transaction hash
- * - feerate [we use max(feerate of tx, feerate of tx with all descendants)]
  * - time in mempool
- * - mining score (feerate modified by any fee deltas from PrioritiseTransaction)
  *
  * Note: mapTx will become private and may be modified extensively in the future. It will
  * not be part of the public definition of this class.
@@ -297,13 +295,8 @@ public:
  * this one, while "ancestor" refers to in-mempool transactions that a given
  * transaction depends on.
  *
- * Note: the feerate sort (referenced below) will be removed in future.
- * In order for the feerate sort to remain correct, we must update transactions
- * in the mempool when new descendants arrive. To facilitate this, we track the
- * set of in-mempool direct parents and direct children in mapLinks. Within each
- * CTxMemPoolEntry, we track the size and fees of all descendants.
- *
- * Note: tracking of ancestors and descendants may be removed in the future.
+ * We track the set of in-mempool direct parents and direct children in mapLinks.
+ * Aggregate ancestor/descendant size, fee and count totals are not cached.
  *
  * Usually when a new transaction is added to the mempool, it has no in-mempool
  * children (because any such children would be an orphan). So in
@@ -617,11 +610,10 @@ public:
 
     /**
      * Try to calculate all in-mempool ancestors of entry.
-     *  (these are all calculated including the tx itself)
-     *  limitAncestorCount = max number of ancestors
-     *  limitAncestorSize = max size of ancestors
-     *  limitDescendantCount = max number of descendants any ancestor can have
-     *  limitDescendantSize = max size of descendants any ancestor can have
+     *  limitAncestorCount = max ancestor chain height
+     *  limitAncestorSize = deprecated; retained for API compatibility
+     *  limitDescendantCount = deprecated; retained for API compatibility
+     *  limitDescendantSize = deprecated; retained for API compatibility
      *  errString = populated with error reason if any limits are hit
      * fSearchForParents = whether to search a tx's vin for in-mempool parents,
      * or look up parents from mapLinks. Must be true for entries not in the
@@ -819,8 +811,10 @@ private:
     // - only transactions for which filter returns true are considered
     // - every transaction from the set will have all its in-mempool ancestors included in the set (if they pass filter)
     // - if the limit is not std::nullopt, not all children/siblings will be added. adding new transactions to the set is stopped when the size of the 
-    //   entries set is reached, but we have to ensure that all parents of all transactions in the set, so
-    //   we have to add parents of the last added entry too, this can extend the size of the entries set by up to {-limitdescendantcount - 1} transactions
+    //   entries set is reached, but we have to ensure that all parents of all
+    //   transactions in the set, so we have to add parents of the last added
+    //   entry too. Because ancestor inclusion is mandatory, the returned set can
+    //   exceed the limit.
     setEntries getConnectedNL(const setEntries& entries, std::function<bool(txiter)> filter, std::optional<size_t> limit= std::nullopt) const;
     
     // returns a set of entries which are connected to any of items in the given set, but not elements of the given set.

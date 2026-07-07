@@ -21,6 +21,56 @@
 namespace
 {
     mining::CJournalChangeSetPtr nullChangeSet {nullptr};
+
+    CMutableTransaction MakeRootTx(size_t outputs = 1)
+    {
+        CMutableTransaction tx;
+        tx.vin.resize(1);
+        tx.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+        tx.vin[0].scriptSig = CScript() << OP_11;
+        tx.vout.resize(outputs);
+        for (auto& out : tx.vout) {
+            out.scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+            out.nValue = 10 * COIN;
+        }
+        return tx;
+    }
+
+    CMutableTransaction MakeChildTx(const CTransaction& parent,
+                                    uint32_t output = 0,
+                                    size_t outputs = 1)
+    {
+        CMutableTransaction tx;
+        tx.vin.resize(1);
+        tx.vin[0].prevout = COutPoint(parent.GetId(), output);
+        tx.vin[0].scriptSig = CScript() << OP_11;
+        tx.vout.resize(outputs);
+        for (auto& out : tx.vout) {
+            out.scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+            out.nValue = 9 * COIN;
+        }
+        return tx;
+    }
+
+    CMutableTransaction MakeTwoParentTx(const CTransaction& parent1,
+                                        const CTransaction& parent2)
+    {
+        CMutableTransaction tx;
+        tx.vin.resize(2);
+        tx.vin[0].prevout = COutPoint(parent1.GetId(), 0);
+        tx.vin[0].scriptSig = CScript() << OP_11;
+        tx.vin[1].prevout = COutPoint(parent2.GetId(), 0);
+        tx.vin[1].scriptSig = CScript() << OP_11;
+        tx.vout.resize(1);
+        tx.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+        tx.vout[0].nValue = 8 * COIN;
+        return tx;
+    }
+
+    uint64_t InsertionIndex(const CTxMemPool& pool, const uint256& txid)
+    {
+        return pool.mapTx.find(txid)->GetInsertionIndex();
+    }
 }
 
 BOOST_FIXTURE_TEST_SUITE(mempool_tests, TestingSetup)
@@ -277,6 +327,64 @@ BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndex) {
 
     // After fixup the parent precedes the child topologically.
     BOOST_CHECK(pIdx() < cIdx());
+}
+
+BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndexForConnectedComponent) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    // Shape:
+    //
+    //   r
+    //   |-- a -- c
+    //   |-- b -- d        r/a/b are re-added from disconnected blocks after
+    //          c/d -- e   their descendants are already in the mempool.
+    //
+    // This covers the connected-component case rather than only a single
+    // parent/child edge: multiple resurrected ancestors, siblings, and a
+    // descendant with two in-mempool parents.
+    CMutableTransaction r = MakeRootTx(2);
+    CMutableTransaction a = MakeChildTx(CTransaction(r), 0);
+    CMutableTransaction b = MakeChildTx(CTransaction(r), 1);
+    CMutableTransaction c = MakeChildTx(CTransaction(a), 0);
+    CMutableTransaction d = MakeChildTx(CTransaction(b), 0);
+    CMutableTransaction e = MakeTwoParentTx(CTransaction(c), CTransaction(d));
+
+    // Existing mempool descendants. c/d can be present while a/b are still
+    // confirmed; e is then added normally and links to its in-mempool parents.
+    pool.AddUnchecked(c.GetId(), entry.Fee(Amount(10000LL)).FromTx(c), nullChangeSet);
+    pool.AddUnchecked(d.GetId(), entry.Fee(Amount(10000LL)).FromTx(d), nullChangeSet);
+    pool.AddUnchecked(e.GetId(), entry.Fee(Amount(10000LL)).FromTx(e), nullChangeSet);
+
+    // Disconnected-block transactions are resurrected after their descendants,
+    // which leaves their raw insertion order non-topological until the reorg
+    // fixup runs.
+    pool.AddUnchecked(r.GetId(), entry.Fee(Amount(10000LL)).FromTx(r), nullChangeSet);
+    pool.AddUnchecked(a.GetId(), entry.Fee(Amount(10000LL)).FromTx(a), nullChangeSet);
+    pool.AddUnchecked(b.GetId(), entry.Fee(Amount(10000LL)).FromTx(b), nullChangeSet);
+
+    BOOST_CHECK(InsertionIndex(pool, c.GetId()) < InsertionIndex(pool, a.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, d.GetId()) < InsertionIndex(pool, b.GetId()));
+
+    std::vector<uint256> toUpdate{r.GetId(), a.GetId(), b.GetId()};
+    pool.UpdateTransactionsFromBlock(toUpdate, nullChangeSet);
+
+    BOOST_CHECK(InsertionIndex(pool, r.GetId()) < InsertionIndex(pool, a.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, r.GetId()) < InsertionIndex(pool, b.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, a.GetId()) < InsertionIndex(pool, c.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, b.GetId()) < InsertionIndex(pool, d.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, c.GetId()) < InsertionIndex(pool, e.GetId()));
+    BOOST_CHECK(InsertionIndex(pool, d.GetId()) < InsertionIndex(pool, e.GetId()));
+
+    CTxMemPool::setEntries descendants;
+    pool.CalculateDescendants(pool.mapTx.find(r.GetId()), descendants);
+    BOOST_CHECK_EQUAL(descendants.size(), 6UL);
+    BOOST_CHECK(descendants.count(pool.mapTx.find(r.GetId())));
+    BOOST_CHECK(descendants.count(pool.mapTx.find(a.GetId())));
+    BOOST_CHECK(descendants.count(pool.mapTx.find(b.GetId())));
+    BOOST_CHECK(descendants.count(pool.mapTx.find(c.GetId())));
+    BOOST_CHECK(descendants.count(pool.mapTx.find(d.GetId())));
+    BOOST_CHECK(descendants.count(pool.mapTx.find(e.GetId())));
 }
 
 BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
