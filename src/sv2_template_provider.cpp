@@ -2,6 +2,7 @@
 
 #include <base58.h>
 #include <consensus/merkle.h>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <sstream>
@@ -25,6 +26,50 @@ using node::Sv2RequestTransactionDataMsg;
 using node::Sv2RequestTransactionDataSuccessMsg;
 using node::Sv2RequestTransactionDataErrorMsg;
 using node::Sv2SubmitSolutionMsg;
+
+struct Sv2ProcMemInfo
+{
+    int64_t vm_size_kb{-1};
+    int64_t vm_rss_kb{-1};
+    int64_t vm_data_kb{-1};
+};
+
+static Sv2ProcMemInfo GetSv2ProcMemInfo()
+{
+    Sv2ProcMemInfo info;
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        std::istringstream iss(line);
+        std::string key;
+        int64_t value = 0;
+        std::string unit;
+        if (!(iss >> key >> value >> unit)) {
+            continue;
+        }
+        if (unit != "kB") {
+            continue;
+        }
+        if (key == "VmSize:") {
+            info.vm_size_kb = value;
+        } else if (key == "VmRSS:") {
+            info.vm_rss_kb = value;
+        } else if (key == "VmData:") {
+            info.vm_data_kb = value;
+        }
+    }
+    return info;
+}
+
+static void LogSv2ProcMem(const char* stage)
+{
+    const auto mem = GetSv2ProcMemInfo();
+    LogPrintf("SV2MEM stage=%s vmsize=%lldkB rss=%lldkB vmdata=%lldkB\n",
+        stage,
+        static_cast<long long>(mem.vm_size_kb),
+        static_cast<long long>(mem.vm_rss_kb),
+        static_cast<long long>(mem.vm_data_kb));
+}
 
 // ── SV2 Dispatch Rate Limiter ("Capacitor") ──────────────────────────────────
 // Initial block-dispatch delay injected after each new block on fast chains.
@@ -1194,19 +1239,46 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         block->nTime = solution.m_header_timestamp;
         block->nNonce = solution.m_header_nonce;
         block->hashMerkleRoot = BlockMerkleRoot(*block);
+        std::vector<CTransactionRef>().swap(txs);
+        cached_template.txids.clear();
+        cached_template.txids.shrink_to_fit();
 
         const size_t tx_count = block->vtx.size() > 0 ? block->vtx.size() - 1 : 0;
         const size_t size_no_cb = block->GetSizeWithoutCoinbase();
         const std::string prevhash = block->hashPrevBlock.ToString();
         const int height = current_tip->height + 1;
+
+        {
+            LOCKMt(m_tp_mutex);
+            LogPrintf("SV2MEM stage=pre_validation_builder_cache_clear templates=%zu tx_union=%zu cached_workset=%d\n",
+                m_block_template_cache.size(), m_tx_union_cache.size(),
+                m_cached_workset.has_value() ? 1 : 0);
+            m_cached_workset.reset();
+        }
+        LogSv2ProcMem("pre_validation");
+
+        std::atomic<bool> validation_done{false};
+        std::thread validation_mem_watch([&validation_done] {
+            while (!validation_done.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (!validation_done.load()) {
+                    LogSv2ProcMem("validation_in_progress");
+                }
+            }
+        });
+
         const int64_t validation_start = GetTimeMicros();
         const bool accepted = m_mining.submitBlock(block);
         const int64_t validation_end = GetTimeMicros();
+        validation_done = true;
+        if (validation_mem_watch.joinable()) {
+            validation_mem_watch.join();
+        }
         if (accepted) {
             LOCKMt(m_tp_mutex);
-            m_cached_workset.reset();
             ClearBlockTemplateCache();
         }
+        LogSv2ProcMem(accepted ? "post_validation_accepted" : "post_validation_rejected");
         LogPrint(BCLog::SV2,
             "SV2PERF event=submit_solution template_id=%lu ok=%d height=%d txs=%zu size_no_cb=%zu "
             "total_size=%llu get_tip_us=%lld process_new_block_us=%lld total_us=%lld prevhash=%s submit_ntime=%u nonce=%08x\n",
