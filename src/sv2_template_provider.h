@@ -1,10 +1,13 @@
 #ifndef BITCOIN_NODE_SV2_TEMPLATE_PROVIDER_H
 #define BITCOIN_NODE_SV2_TEMPLATE_PROVIDER_H
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <stratumv2/sv2_noise.h>
 #include <stratumv2/sv2_messages.h>
 #include <stratumv2/sv2_transport.h>
@@ -299,6 +302,21 @@ private:
         node::Sv2SetNewPrevHashMsg prev_hash;
     };
 
+    struct QueuedSubmitBlock
+    {
+        uint64_t template_id{0};
+        std::shared_ptr<CBlock> block;
+        size_t tx_count{0};
+        size_t size_no_cb{0};
+        uint64_t total_size{0};
+        int height{0};
+        std::string prevhash;
+        uint32_t submit_ntime{0};
+        uint32_t nonce{0};
+        int64_t time_start{0};
+        int64_t get_tip_us{0};
+    };
+
     /**
      * Builds a NewWorkSet that contains the Sv2NewTemplateMsg, a new full block and a Sv2SetNewPrevHashMsg that are all linked to the same work.
      */
@@ -332,6 +350,8 @@ private:
     /** Dedicated thread: waits for the capacitor to be armed, sleeps for the
      *  current interval, then dispatches all pending 0x72 messages. */
     void ThreadSv2CapacitorHandler() EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex, !m_clients_mutex);
+    void ThreadSv2SubmitHandler() EXCLUSIVE_LOCKS_REQUIRED(!m_tp_mutex);
+    bool EnqueueSubmitBlock(QueuedSubmitBlock&& submit);
 
     /**
      * Encrypt the header and message payload and send it.
@@ -428,9 +448,12 @@ private:
     std::thread m_thread_sv2_capacitor;
     // ─────────────────────────────────────────────────────────────────────
 
-    /** Serializes SubmitSolution processing to prevent stale submissions from
-     *  racing through ProcessNewBlock and becoming side-chain blocks. */
-    mutable Mutex m_submit_mutex;
+    /** Serializes SubmitSolution validation without blocking the SV2 connman thread. */
+    static constexpr size_t MAX_PENDING_SUBMIT_QUEUE_SIZE{1};
+    std::thread m_submit_thread;
+    std::mutex m_submit_queue_mutex;
+    std::condition_variable m_submit_cv;
+    std::deque<QueuedSubmitBlock> m_submit_queue;
 
 };
 

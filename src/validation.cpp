@@ -4560,6 +4560,8 @@ void PruneAndFlush() {
     FlushStateToDisk(chainparams, state, FLUSH_STATE_NONE);
 }
 
+static int64_t nTimeLastUpdateTip = 0;
+
 /**
  * Update chainActive and related internal data structures when adding a new
  * block to the chain tip.
@@ -4569,12 +4571,6 @@ static void UpdateTip(const Config &config, CBlockIndex *pindexNew) {
 
     // New best block
     mempool.AddTransactionsUpdated(1);
-
-    {
-        WAIT_LOCKMt(g_best_block_mutex, lock);
-        g_best_block = pindexNew->GetBlockHash();
-        g_best_block_cv.notify_all();
-    }
 
     std::vector<std::string> warningMessages;
     if (!IsInitialBlockDownload()) {
@@ -4615,6 +4611,43 @@ static void UpdateTip(const Config &config, CBlockIndex *pindexNew) {
                   boost::algorithm::join(warningMessages, ", "));
     }
     LogPrintf("\n");
+    nTimeLastUpdateTip = GetTimeMicros();
+}
+
+static void NotifyBestBlockChangedAfterJournal()
+{
+    CBlockIndex* tip = chainActive.Tip();
+    if (!tip) {
+        return;
+    }
+
+    const int64_t notify_time = GetTimeMicros();
+    const int64_t notify_delay_us = nTimeLastUpdateTip > 0 ? notify_time - nTimeLastUpdateTip : 0;
+    {
+        WAIT_LOCKMt(g_best_block_mutex, lock);
+        if (g_best_block == tip->GetBlockHash()) {
+            return;
+        }
+        g_best_block = tip->GetBlockHash();
+        g_best_block_cv.notify_all();
+    }
+    LogPrint(BCLog::BENCH, "  - Best block notify after journal: %.2fms\n",
+        notify_delay_us * 0.001);
+}
+
+static void NotifyBestBlockChanged()
+{
+    CBlockIndex* tip = chainActive.Tip();
+    if (!tip) {
+        return;
+    }
+
+    WAIT_LOCKMt(g_best_block_mutex, lock);
+    if (g_best_block == tip->GetBlockHash()) {
+        return;
+    }
+    g_best_block = tip->GetBlockHash();
+    g_best_block_cv.notify_all();
 }
 
 static void FinalizeGenesisCrossing(const Config &config, int height, const CJournalChangeSetPtr& changeSet)
@@ -5169,6 +5202,9 @@ static bool ActivateBestChainStep(
             changeSet->apply();
         }
         mempool.CheckMempool(pcoinsTip, changeSet);
+        if (pindexOldTip != chainActive.Tip()) {
+            NotifyBestBlockChangedAfterJournal();
+        }
     }
     catch(...) {
         // We were probably cancelled. Make the mempool consistent with the current tip.
@@ -5548,6 +5584,7 @@ bool PreciousBlock(const Config &config, CValidationState &state,
 bool InvalidateBlock(const Config &config, CValidationState &state,
                      CBlockIndex *pindex) {
     AssertLockHeld(cs_main);
+    const CBlockIndex* pindexOldTip = chainActive.Tip();
 
     // Mark the block itself as invalid.
     pindex->nStatus = pindex->nStatus.withFailed();
@@ -5608,6 +5645,9 @@ bool InvalidateBlock(const Config &config, CValidationState &state,
 
     // Check mempool & journal
     mempool.CheckMempool(pcoinsTip, changeSet);
+    if (pindexOldTip != chainActive.Tip()) {
+        NotifyBestBlockChanged();
+    }
 
     return true;
 }
@@ -7243,6 +7283,7 @@ bool RewindBlockIndex(const Config &config) {
 
     const CChainParams &params = config.GetChainParams();
     int nHeight = chainActive.Height() + 1;
+    const CBlockIndex* pindexOldTip = chainActive.Tip();
 
     // nHeight is now the height of the first insufficiently-validated block, or
     // tipheight + 1
@@ -7288,6 +7329,9 @@ bool RewindBlockIndex(const Config &config) {
 
     if (!FlushStateToDisk(params, state, FLUSH_STATE_ALWAYS)) {
         return false;
+    }
+    if (pindexOldTip != chainActive.Tip()) {
+        NotifyBestBlockChanged();
     }
 
     return true;

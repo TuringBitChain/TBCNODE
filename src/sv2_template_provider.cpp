@@ -220,6 +220,10 @@ bool Sv2TemplateProvider::Start(const Sv2TemplateProviderOptions& options)
         , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadBuilder, this)));
     RequestRebuild();   // kick an initial build so first client connect can serve from cache
 
+    m_submit_thread = std::thread(&TraceThread<std::function<void()>>
+        , "sv2submit"
+        , std::function<void()>(std::bind(&Sv2TemplateProvider::ThreadSv2SubmitHandler, this)));
+
     return true;
 }
 
@@ -277,6 +281,7 @@ void Sv2TemplateProvider::Interrupt()
     m_flag_interrupt_sv2 = true;
     m_cap_cv.notify_all();      // wake capacitor thread so it exits cleanly
     m_builder_cv.notify_all();  // C2: wake builder thread
+    m_submit_cv.notify_all();
 }
 
 void Sv2TemplateProvider::StopThreads()
@@ -292,6 +297,9 @@ void Sv2TemplateProvider::StopThreads()
     }
     if (m_builder_thread.joinable()) {
         m_builder_thread.join();   // C2
+    }
+    if (m_submit_thread.joinable()) {
+        m_submit_thread.join();
     }
 }
 
@@ -1165,6 +1173,88 @@ void Sv2TemplateProvider::RequestTransactionData(Sv2Client& client, node::Sv2Req
     }
 }
 
+bool Sv2TemplateProvider::EnqueueSubmitBlock(QueuedSubmitBlock&& submit)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_submit_queue_mutex);
+        if (m_submit_queue.size() >= MAX_PENDING_SUBMIT_QUEUE_SIZE) {
+            LogPrintf("SV2 SubmitSolution: submit queue full (cap=%zu), template id=%lu dropped\n",
+                MAX_PENDING_SUBMIT_QUEUE_SIZE, submit.template_id);
+            return false;
+        }
+        m_submit_queue.emplace_back(std::move(submit));
+    }
+    m_submit_cv.notify_one();
+    return true;
+}
+
+void Sv2TemplateProvider::ThreadSv2SubmitHandler()
+{
+    while (true) {
+        QueuedSubmitBlock submit;
+        {
+            std::unique_lock<std::mutex> lock(m_submit_queue_mutex);
+            m_submit_cv.wait(lock, [this] {
+                return m_flag_interrupt_sv2.load() || !m_submit_queue.empty();
+            });
+            if (m_submit_queue.empty()) {
+                if (m_flag_interrupt_sv2.load()) {
+                    break;
+                }
+                continue;
+            }
+            submit = std::move(m_submit_queue.front());
+            m_submit_queue.pop_front();
+        }
+
+        auto current_tip = m_mining.getTip();
+        if (!current_tip || submit.block->hashPrevBlock != current_tip->hash) {
+            LogPrintf("SV2 SubmitSolution: queued template id=%lu became stale prevhash=%s chain_tip=%s, solution dropped\n",
+                submit.template_id,
+                submit.block->hashPrevBlock.ToString(),
+                current_tip ? current_tip->hash.ToString() : "none");
+            continue;
+        }
+
+        LogSv2ProcMem("pre_validation");
+
+        std::atomic<bool> validation_done{false};
+        std::thread validation_mem_watch([&validation_done] {
+            while (!validation_done.load()) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (!validation_done.load()) {
+                    LogSv2ProcMem("validation_in_progress");
+                }
+            }
+        });
+
+        const int64_t validation_start = GetTimeMicros();
+        const bool accepted = m_mining.submitBlock(submit.block);
+        const int64_t validation_end = GetTimeMicros();
+        validation_done = true;
+        if (validation_mem_watch.joinable()) {
+            validation_mem_watch.join();
+        }
+        if (accepted) {
+            LOCKMt(m_tp_mutex);
+            ClearBlockTemplateCache();
+        }
+        LogSv2ProcMem(accepted ? "post_validation_accepted" : "post_validation_rejected");
+        LogPrint(BCLog::SV2,
+            "SV2PERF event=submit_solution template_id=%lu ok=%d height=%d txs=%zu size_no_cb=%zu "
+            "total_size=%llu get_tip_us=%lld process_new_block_us=%lld total_us=%lld prevhash=%s submit_ntime=%u nonce=%08x\n",
+            submit.template_id, accepted ? 1 : 0, submit.height, submit.tx_count, submit.size_no_cb,
+            static_cast<unsigned long long>(submit.total_size),
+            static_cast<long long>(submit.get_tip_us),
+            static_cast<long long>(validation_end - validation_start),
+            static_cast<long long>(validation_end - submit.time_start),
+            submit.prevhash, submit.submit_ntime, submit.nonce);
+        if (!accepted) {
+            LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", submit.template_id);
+        }
+    }
+}
+
 void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
 {
         const int64_t time_start = GetTimeMicros();
@@ -1215,8 +1305,6 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                 tpl_txs, cached_template.header.hashPrevBlock.ToString());
         }
 
-        LOCKMt(m_submit_mutex);
-
         const int64_t get_tip_start = GetTimeMicros();
         auto current_tip = m_mining.getTip();
         const int64_t get_tip_end = GetTimeMicros();
@@ -1247,6 +1335,7 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
         const size_t size_no_cb = block->GetSizeWithoutCoinbase();
         const std::string prevhash = block->hashPrevBlock.ToString();
         const int height = current_tip->height + 1;
+        const uint64_t total_size = GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION);
 
         {
             LOCKMt(m_tp_mutex);
@@ -1255,41 +1344,22 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
                 m_cached_workset.has_value() ? 1 : 0);
             m_cached_workset.reset();
         }
-        LogSv2ProcMem("pre_validation");
 
-        std::atomic<bool> validation_done{false};
-        std::thread validation_mem_watch([&validation_done] {
-            while (!validation_done.load()) {
-                std::this_thread::sleep_for(std::chrono::seconds(5));
-                if (!validation_done.load()) {
-                    LogSv2ProcMem("validation_in_progress");
-                }
-            }
-        });
+        QueuedSubmitBlock queued_submit;
+        queued_submit.template_id = solution.m_template_id;
+        queued_submit.block = std::move(block);
+        queued_submit.tx_count = tx_count;
+        queued_submit.size_no_cb = size_no_cb;
+        queued_submit.total_size = total_size;
+        queued_submit.height = height;
+        queued_submit.prevhash = prevhash;
+        queued_submit.submit_ntime = solution.m_header_timestamp;
+        queued_submit.nonce = solution.m_header_nonce;
+        queued_submit.time_start = time_start;
+        queued_submit.get_tip_us = get_tip_end - get_tip_start;
 
-        const int64_t validation_start = GetTimeMicros();
-        const bool accepted = m_mining.submitBlock(block);
-        const int64_t validation_end = GetTimeMicros();
-        validation_done = true;
-        if (validation_mem_watch.joinable()) {
-            validation_mem_watch.join();
-        }
-        if (accepted) {
-            LOCKMt(m_tp_mutex);
-            ClearBlockTemplateCache();
-        }
-        LogSv2ProcMem(accepted ? "post_validation_accepted" : "post_validation_rejected");
-        LogPrint(BCLog::SV2,
-            "SV2PERF event=submit_solution template_id=%lu ok=%d height=%d txs=%zu size_no_cb=%zu "
-            "total_size=%llu get_tip_us=%lld process_new_block_us=%lld total_us=%lld prevhash=%s submit_ntime=%u nonce=%08x\n",
-            solution.m_template_id, accepted ? 1 : 0, height, tx_count, size_no_cb,
-            static_cast<unsigned long long>(GetSerializeSize(*block, SER_NETWORK, PROTOCOL_VERSION)),
-            static_cast<long long>(get_tip_end - get_tip_start),
-            static_cast<long long>(validation_end - validation_start),
-            static_cast<long long>(validation_end - time_start),
-            prevhash, solution.m_header_timestamp, solution.m_header_nonce);
-        if (!accepted) {
-            LogPrintf("SV2 SubmitSolution: ProcessNewBlock failed for template id=%lu\n", solution.m_template_id);
+        if (!EnqueueSubmitBlock(std::move(queued_submit))) {
+            LogSv2ProcMem("submit_queue_full");
         }
 }
 
