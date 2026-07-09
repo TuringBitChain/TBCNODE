@@ -1049,9 +1049,9 @@ std::string HelpMessage(HelpMessageMode mode) {
                     ));
     strUsage += HelpMessageOpt(
         "-blockprioritypercentage=<n>",
-        strprintf(_("Set maximum percentage of a block reserved to "
-                    "high-priority/low-fee transactions (default: %d). NOTE: This is supported only by the legacy block assembler which"
-                    " is not default block assembler any more and will be removed in the upcoming release."),
+        strprintf(_("Deprecated. Legacy priority-area block assembly has been "
+                    "removed; this option is parsed for compatibility but is "
+                    "not used by the journaling block assembler (default: %d)."),
                   DEFAULT_BLOCK_PRIORITY_PERCENTAGE));
     strUsage += HelpMessageOpt(
         "-blockmintxfee=<amt>",
@@ -1084,8 +1084,9 @@ std::string HelpMessage(HelpMessageMode mode) {
     /** Block assembler */
     strUsage += HelpMessageOpt(
         "-blockassembler=<type>",
-        strprintf(_("Set the type of block assembler to use for mining. Supported option is "
-                    "JOURNALING. (default: %s)"),
+        strprintf(_("Set the type of block assembler to use for mining. "
+                    "Supported option is JOURNALING. Legacy or unknown values "
+                    "fall back to the default. (default: %s)"),
                   enum_cast<std::string>(mining::DEFAULT_BLOCK_ASSEMBLER_TYPE).c_str()));
     strUsage += HelpMessageOpt( 
         "-jbamaxtxnbatch=<max batch size>",

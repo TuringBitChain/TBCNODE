@@ -13,6 +13,7 @@
 #include "consensus/merkle.h"
 #include "consensus/validation.h"
 #include "policy/policy.h"
+#include "pow.h"
 #include "pubkey.h"
 #include "script/script_num.h"
 #include "script/standard.h"
@@ -40,7 +41,7 @@ namespace
     {
     public:
         JournalingTestingSetup()
-            : TestingSetup(CBaseChainParams::MAIN, mining::CMiningFactory::BlockAssemblerType::JOURNALING)
+            : TestingSetup(CBaseChainParams::REGTEST, mining::CMiningFactory::BlockAssemblerType::JOURNALING)
         {}
     };
 
@@ -82,6 +83,14 @@ static struct {
     {2, 0xd351e722}, {1, 0xf4ca48c9}, {1, 0x5b19c670}, {1, 0xa164bf0e},
     {2, 0xbbbeb305}, {2, 0xfe1c810a},
 };
+
+CScript BuildCoinbaseScriptSig(int height, uint8_t extraNonce)
+{
+    CScript scriptSig;
+    scriptSig << CScriptNum(height);
+    scriptSig.push_back(extraNonce);
+    return scriptSig;
+}
 
 CBlockIndex CreateBlockIndex(int nHeight) {
     CBlockIndex index;
@@ -132,9 +141,8 @@ void Test_CreateNewBlock_validity(TestingSetup& testingSetup)
         pblock->nTime = chainActive.Tip()->GetMedianTimePast() + 1;
         CMutableTransaction txCoinbase(*pblock->vtx[0]);
         txCoinbase.nVersion = 1;
-        txCoinbase.vin[0].scriptSig = CScript();
-        txCoinbase.vin[0].scriptSig.push_back(blockinfo[i].extranonce);
-        txCoinbase.vin[0].scriptSig.push_back(chainActive.Height());
+        txCoinbase.vin[0].scriptSig =
+            BuildCoinbaseScriptSig(chainActive.Height(), blockinfo[i].extranonce);
         // Ignore the (optional) segwit commitment added by CreateNewBlock (as
         // the hardcoded nonces don't account for this)
         txCoinbase.vout.resize(1);
@@ -143,7 +151,11 @@ void Test_CreateNewBlock_validity(TestingSetup& testingSetup)
         if (txFirst.size() == 0) baseheight = chainActive.Height();
         if (txFirst.size() < 4) txFirst.push_back(pblock->vtx[0]);
         pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
-        pblock->nNonce = blockinfo[i].nonce;
+        pblock->nNonce = 0;
+        while (!CheckProofOfWork(pblock->GetHash(), pblock->nBits,
+                                 testingSetup.testConfig)) {
+            ++pblock->nNonce;
+        }
         std::shared_ptr<const CBlock> shared_pblock =
             std::make_shared<const CBlock>(*pblock);
         BOOST_CHECK(ProcessNewBlock(testingSetup.testConfig, shared_pblock, true, nullptr));
@@ -790,16 +802,19 @@ void Test_CreateNewBlock_JBA_Config(TestingSetup& testingSetup)
         pblock->nTime = chainActive.Tip()->GetMedianTimePast() + 1;
         CMutableTransaction txCoinbase(*pblock->vtx[0]);
         txCoinbase.nVersion = 1;
-        txCoinbase.vin[0].scriptSig = CScript();
-        txCoinbase.vin[0].scriptSig.push_back(blockinfo[i].extranonce);
-        txCoinbase.vin[0].scriptSig.push_back(chainActive.Height());
+        txCoinbase.vin[0].scriptSig =
+            BuildCoinbaseScriptSig(chainActive.Height(), blockinfo[i].extranonce);
         txCoinbase.vout.resize(1);
         txCoinbase.vout[0].scriptPubKey = CScript();
         pblock->vtx[0] = MakeTransactionRef(std::move(txCoinbase));
         if (txFirst.size() < 4)
             txFirst.push_back(pblock->vtx[0]);
         pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
-        pblock->nNonce = blockinfo[i].nonce;
+        pblock->nNonce = 0;
+        while (!CheckProofOfWork(pblock->GetHash(), pblock->nBits,
+                                 testingSetup.testConfig)) {
+            ++pblock->nNonce;
+        }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(*pblock);
         BOOST_CHECK(ProcessNewBlock(testingSetup.testConfig, shared_pblock, true, nullptr));
         pblock->hashPrevBlock = pblock->GetHash();
