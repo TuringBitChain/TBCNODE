@@ -2152,13 +2152,13 @@ static UniValue getblockstats(const Config &config,
 
     LOCK(cs_main);
 
-    CBlockIndex *pindex;
     const std::string strHash = request.params[0].get_str();
     const uint256 hash(uint256S(strHash));
-    pindex = mapBlockIndex[hash];
-    if (!pindex) {
+    const auto it = mapBlockIndex.find(hash);
+    if (it == mapBlockIndex.end() || !it->second) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
     }
+    CBlockIndex *pindex = it->second;
     if (!chainActive.Contains(pindex)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER,
                             strprintf("Block is not in chain %s",
