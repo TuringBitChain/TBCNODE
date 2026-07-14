@@ -14,6 +14,7 @@
 #include "protocol.h"
 #include "sync.h"
 #include "timedata.h"
+#include "txmempool.h"
 #include "txn_propagator.h"
 #include "ui_interface.h"
 #include "util.h"
@@ -562,8 +563,8 @@ static UniValue getnetworkinfo(const Config &config,
             "  }\n"
             "  ,...\n"
             "  ],\n"
-            "  \"relayfee\": x.xxxxxxxx,                (numeric) minimum "
-            "relay fee for non-free transactions in " +
+            "  \"relayfee\": x.xxxxxxxx,                (numeric) current "
+            "mempool relay fee for transactions in " +
             CURRENCY_UNIT +
             "/kB\n"
 			    "  \"minconsolidationfactor\": xxxxx        (numeric) minimum ratio between scriptPubKey inputs and outputs, "
@@ -610,7 +611,7 @@ static UniValue getnetworkinfo(const Config &config,
 
     obj.push_back(Pair("networks", GetNetworksInfo()));
     obj.push_back(Pair("relayfee",
-                       ValueFromAmount(config.GetMinFeePerKB().GetFeePerK())));
+                       ValueFromAmount(mempool.GetMinFee(config.GetMaxMempool()).GetFeePerK())));
     obj.push_back(Pair("minconsolidationfactor",  config.GetMinConsolidationFactor()));
     obj.push_back(Pair("maxconsolidationinputscriptsize",  config.GetMaxConsolidationInputScriptSize()));
     obj.push_back(Pair("minconsolidationinputmaturity",  config.GetMinConsolidationInputMaturity()));

@@ -145,9 +145,6 @@ void getrawtransaction(const Config& config,
                        bool processedInBatch,
                        std::function<void()> httpCallback) 
 {
-    
-    LOCK(cs_main);
-
     TxId txid = TxId(ParseHashV(request.params[0], "parameter 1"));
 
     // Accept either a bool (true) or a num (>=1) to indicate verbose output.
@@ -179,7 +176,21 @@ void getrawtransaction(const Config& config,
     CTransactionRef tx;
     uint256 hashBlock;
     bool isGenesisEnabled;
-    if (!GetTransaction(config, txid, tx, true, hashBlock, isGenesisEnabled)) 
+
+    // A non-verbose response only needs the immutable transaction data. Try
+    // the mempool first so this common path does not have to take cs_main.
+    // Get() releases the mempool lock before returning and the shared
+    // transaction reference keeps the transaction alive while it is encoded.
+    if (!fVerbose)
+    {
+        tx = mempool.Get(txid);
+    }
+
+    // Query the mempool again inside GetTransaction after a miss: the
+    // transaction may have been added between the cs_main-free fast-path
+    // lookup and acquiring cs_main.
+    if (!tx &&
+        !GetTransaction(config, txid, tx, true, hashBlock, isGenesisEnabled))
     {
         throw JSONRPCError(
             RPC_INVALID_ADDRESS_OR_KEY,
@@ -201,6 +212,8 @@ void getrawtransaction(const Config& config,
         textWriter.Write("\", \"error\": " + NullUniValue.write() + ", \"id\": " + request.id.write() + "}");
         return;
     }
+
+    LOCK(cs_main);
 
     textWriter.Write("{\"result\": ");
 

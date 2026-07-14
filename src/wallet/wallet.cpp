@@ -58,8 +58,8 @@ const uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
 CFeeRate CWallet::minTxFee = CFeeRate(DEFAULT_TRANSACTION_MINFEE);
 
 /**
- * If fee estimation does not have enough data to provide estimates and 
- * -minrelaytxfee is set to 0, use this fee instead. 
+ * If fee estimation does not have enough data to provide estimates, use this
+ * fee instead.
  * Has no effect if not using fee estimation.
  * Override with -fallbackfee
  */
@@ -2562,9 +2562,8 @@ bool CWallet::SelectCoins(
         }
     }
 
-    size_t nMaxChainLength = std::min(
-        gArgs.GetArg("-limitancestorcount", DEFAULT_ANCESTOR_LIMIT),
-        gArgs.GetArg("-limitdescendantcount", DEFAULT_DESCENDANT_LIMIT));
+    size_t nMaxChainLength =
+        gArgs.GetArg("-limitancestorcount", DEFAULT_ANCESTOR_LIMIT);
     bool fRejectLongChains = gArgs.GetBoolArg(
         "-walletrejectlongchains", DEFAULT_WALLET_REJECT_LONG_CHAINS);
 
@@ -2947,7 +2946,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient> &vecSend,
             // If we made it here and we aren't even able to meet the relay fee
             // on the next pass, give up because we must be at the maximum
             // allowed fee.
-            Amount minFee = config.GetMinFeePerKB().GetFee(nBytes);
+            Amount minFee = mempool.GetMinFee(config.GetMaxMempool()).GetFee(nBytes);
             if (nFeeNeeded < minFee) {
                 strFailReason = _("Transaction too large for fee policy");
                 return false;
@@ -3138,8 +3137,9 @@ Amount CWallet::GetMinimumFee(unsigned int nTxBytes,
     return nFeeNeeded;
 }
 
-CFeeRate CWallet::GetRequiredFeeRate() {
-    return std::max(minTxFee, GlobalConfig::GetConfig().GetMinFeePerKB());
+CFeeRate CWallet::GetRequiredFeeRate(const CTxMemPool& pool) {
+    const Config& config = GlobalConfig::GetConfig();
+    return std::max(minTxFee, pool.GetMinFee(config.GetMaxMempool()));
 }
 
 CFeeRate CWallet::GetMinimumFeeRate(
@@ -3158,8 +3158,8 @@ CFeeRate CWallet::GetMinimumFeeRate(
         }
     }
 
-    // Prevent user from paying a fee below minRelayTxFee or minTxFee.
-    return std::max(neededFeeRate, GetRequiredFeeRate());
+    // Prevent user from paying a fee below the current mempool minimum or minTxFee.
+    return std::max(neededFeeRate, GetRequiredFeeRate(pool));
 }
 
 
@@ -4320,7 +4320,7 @@ void CWallet::postInitProcess(CScheduler &scheduler) {
 }
 
 bool CWallet::ParameterInteraction() {
-    CFeeRate minRelayTxFee = GlobalConfig::GetConfig().GetMinFeePerKB();
+    CFeeRate currentMempoolMinFee = mempool.GetMinFee(GlobalConfig::GetConfig().GetMaxMempool());
 
     gArgs.SoftSetArg("-wallet", DEFAULT_WALLET_DAT);
     const bool is_multiwallet = gArgs.GetArgs("-wallet").size() > 1;
@@ -4393,10 +4393,10 @@ bool CWallet::ParameterInteraction() {
               "-reindex which will download the whole blockchain again."));
     }
 
-    if (minRelayTxFee.GetFeePerK() > HIGH_TX_FEE_PER_KB) {
+    if (currentMempoolMinFee.GetFeePerK() > HIGH_TX_FEE_PER_KB) {
         InitWarning(
-            AmountHighWarn("-minrelaytxfee") + " " +
-            _("The wallet will avoid paying less than the minimum relay fee."));
+            AmountHighWarn("-mempoolminfeerate") + " " +
+            _("The wallet will avoid paying less than the current mempool minimum fee."));
     }
 
     if (gArgs.IsArgSet("-mintxfee")) {
@@ -4447,11 +4447,11 @@ bool CWallet::ParameterInteraction() {
         }
 
         payTxFee = CFeeRate(nFeePerK, 1000);
-        if (payTxFee < minRelayTxFee) {
+        if (payTxFee < currentMempoolMinFee) {
             return InitError(strprintf(
                 _("Invalid amount for -paytxfee=<amount>: '%s' (must "
                   "be at least %s)"),
-                gArgs.GetArg("-paytxfee", ""), minRelayTxFee.ToString()));
+                gArgs.GetArg("-paytxfee", ""), currentMempoolMinFee.ToString()));
         }
     }
 
@@ -4468,12 +4468,12 @@ bool CWallet::ParameterInteraction() {
         }
 
         maxTxFee = nMaxFee;
-        if (CFeeRate(maxTxFee, 1000) < minRelayTxFee) {
+        if (CFeeRate(maxTxFee, 1000) < currentMempoolMinFee) {
             return InitError(strprintf(
                 _("Invalid amount for -maxtxfee=<amount>: '%s' (must "
-                  "be at least the minrelay fee of %s to prevent "
+                  "be at least the current mempool minimum fee of %s to prevent "
                   "stuck transactions)"),
-                gArgs.GetArg("-maxtxfee", ""), minRelayTxFee.ToString()));
+                gArgs.GetArg("-maxtxfee", ""), currentMempoolMinFee.ToString()));
         }
     }
 

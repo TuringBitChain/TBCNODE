@@ -64,7 +64,7 @@ static const uint64_t STN_DEFAULT_MAX_GENERATED_BLOCK_SIZE_AFTER = 128 * ONE_MEG
 static const uint64_t DEFAULT_BLOCK_PRIORITY_PERCENTAGE = 5;
 /** Default for -blockmintxfee, which sets the minimum feerate for a transaction
  * in blocks created by mining code **/
-static const Amount DEFAULT_BLOCK_MIN_TX_FEE(500);
+static const Amount DEFAULT_BLOCK_MIN_TX_FEE(60);
 /** The maximum size for transactions we're willing to relay/mine - before genesis*/
 static const uint64_t MAX_TX_SIZE_POLICY_BEFORE_GENESIS = 100000 - 1; // -1 because pre genesis policy validation was >=
 /** The default size for transactions we're willing to relay/mine */
@@ -87,21 +87,31 @@ static const unsigned int MAX_TX_SIGOPS_COUNT_POLICY_BEFORE_GENESIS = MAX_TX_SIG
 static const unsigned int MAX_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS = UINT32_MAX;
 /** Default policy value for -maxtxsigopscountspolicy, maximum number of sigops we're willing to relay/mine in a single tx after Genesis */
 static const unsigned int DEFAULT_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS = MAX_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS;
-/** Default for -maxmempool, maximum megabytes of mempool memory usage */
+/** Default for -maxmempool, maximum megabytes of mempool memory usage.
+ *  Also acts as the hard size cap (N2): once reached, the mempool is never
+ *  trimmed (no eviction) and further transactions are rejected. */
 static const unsigned int DEFAULT_MAX_MEMPOOL_SIZE = 1000;
 /** Default for -maxnonfinalmempool, maximum megabytes of non-final mempool memory usage */
 static const unsigned int DEFAULT_MAX_NONFINAL_MEMPOOL_SIZE = 50;
-/** Minimum feerate increase for mempool limiting **/
-static const CFeeRate MEMPOOL_FULL_FEE_INCREMENT(Amount(1000));
+/** Default for -mempoolminfeerate: the mempool admission fee floor (satoshis per
+ *  kB) charged while mempool usage is below the ramp-start size (N1). */
+static constexpr Amount DEFAULT_MEMPOOL_MIN_FEE_RATE(60);
+/** Default for -mempoolfeerampstart in megabytes (N1): mempool usage below which
+ *  the admission fee equals the floor. Between N1 and N2 the required feerate
+ *  rises hyperbolically with a pole at N2, so N2 is in practice unreachable. */
+static const uint64_t DEFAULT_MEMPOOL_FEE_RAMP_START = 500;
+/** Upper clamp (satoshis per kB) for the hyperbolic ramp, to avoid overflow as
+ *  the mempool approaches its hard size cap (N2). */
+static const Amount MAX_MEMPOOL_RAMP_FEE_RATE(int64_t(1) << 40);
 /** Default for -maxscriptsizepolicy **/
 static const unsigned int DEFAULT_MAX_SCRIPT_SIZE_POLICY_AFTER_GENESIS = 10000;
 /**
  * Min feerate for defining dust. Historically this has been the same as the
- * minRelayTxFee, however changing the dust limit changes which transactions are
+ * mempool minimum fee, however changing the dust limit changes which transactions are
  * standard and should be done with care and ideally rarely. It makes sense to
  * only increase the dust limit after prior releases were already not creating
  * outputs below the new threshold.
- * We will statically assert this to be the same value as DEFAULT_MIN_RELAY_TX_FEE
+ * We will statically assert this to be the same value as DEFAULT_MEMPOOL_MIN_FEE_RATE
  * because of CORE-647
  */
 static constexpr Amount DUST_RELAY_TX_FEE(60);
