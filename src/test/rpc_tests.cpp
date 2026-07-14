@@ -7,15 +7,25 @@
 
 #include "base58.h"
 #include "config.h"
+#include "core_io.h"
+#include "mining/journal_builder.h"
 #include "net/netbase.h"
 #include "policy/policy.h"
+#include "primitives/transaction.h"
+#include "script/script.h"
+#include "txmempool.h"
 #include "util.h"
+#include "validation.h"
 
 #include "test/test_bitcoin.h"
 #include "rpc/tojson.h"
 
 #include <boost/algorithm/string.hpp>
 #include <boost/test/unit_test.hpp>
+
+#include <chrono>
+#include <future>
+#include <thread>
 
 #include <univalue.h>
 
@@ -158,6 +168,58 @@ BOOST_AUTO_TEST_CASE(rpc_rawparams) {
     BOOST_CHECK_THROW(
         CallRPC(std::string("sendrawtransaction ") + rawtx + " extra"),
         std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(rpc_getrawtransaction_mempool_does_not_wait_for_cs_main)
+{
+    CMutableTransaction mutableTx;
+    mutableTx.vin.resize(1);
+    mutableTx.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+    mutableTx.vin[0].scriptSig = CScript() << OP_11;
+    mutableTx.vout.resize(1);
+    mutableTx.vout[0].nValue = Amount(1);
+    mutableTx.vout[0].scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+    const CTransaction tx {mutableTx};
+
+    mining::CJournalChangeSetPtr nullChangeSet {nullptr};
+    TestMemPoolEntryHelper entry;
+    mempool.Clear();
+    mempool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullChangeSet);
+
+    std::promise<void> csMainLockedPromise;
+    auto csMainLocked = csMainLockedPromise.get_future();
+    std::promise<void> releaseCsMainPromise;
+    auto releaseCsMain = releaseCsMainPromise.get_future();
+
+    std::thread csMainHolder {
+        [&csMainLockedPromise, &releaseCsMain]() {
+            LOCK(cs_main);
+            csMainLockedPromise.set_value();
+            releaseCsMain.wait();
+        }};
+
+    csMainLocked.wait();
+
+    auto rpcResult = std::async(
+        std::launch::async,
+        [&tx]() {
+            return CallRPC("getrawtransaction " + tx.GetId().ToString());
+        });
+
+    // Release cs_main even on failure so a regression cannot hang the test.
+    const bool completedWhileCsMainLocked =
+        rpcResult.wait_for(std::chrono::seconds {2}) ==
+        std::future_status::ready;
+    releaseCsMainPromise.set_value();
+    csMainHolder.join();
+
+    UniValue result;
+    BOOST_CHECK_NO_THROW(result = rpcResult.get());
+    mempool.Clear();
+
+    BOOST_CHECK(completedWhileCsMainLocked);
+    BOOST_REQUIRE(!result.isNull());
+    BOOST_CHECK_EQUAL(find_value(result, "result").get_str(), EncodeHexTx(tx));
 }
 
 BOOST_AUTO_TEST_CASE(rpc_togglenetwork) {
