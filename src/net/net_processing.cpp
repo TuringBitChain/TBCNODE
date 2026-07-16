@@ -1384,6 +1384,10 @@ static void ProcessGetData(const Config &config, const CNodePtr& pfrom,
                                       __func__, pfrom->GetId());
                         }
                     }
+                } else {
+                    LogPrint(BCLog::NET, "%s: ignoring request from peer=%i for "
+                              "unknown block\n",
+                              __func__, pfrom->GetId());
                 }
 
                 // Disconnect node in case we have reached the outbound limit
@@ -1407,7 +1411,7 @@ static void ProcessGetData(const Config &config, const CNodePtr& pfrom,
                     send = false;
                 }
 
-                bool isMostRecentBlock = chainActive.Tip() == mi->second;
+                bool isMostRecentBlock = send && chainActive.Tip() == mi->second;
                 // Pruned nodes may have deleted the block, so check whether
                 // it's available before trying to send.
                 if (send && (mi->second->nStatus.hasData())) {
@@ -4414,4 +4418,3 @@ bool SendMessages(const Config &config, const CNodePtr& pto, CConnman &connman,
 
     return true;
 }
-
