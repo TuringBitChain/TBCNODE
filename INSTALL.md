@@ -41,6 +41,9 @@ sudo apt-get install cmake
 # Install additional libraries
 sudo apt-get install libzmq3-dev libminiupnpc-dev libnatpmp-dev
 
+# Install IPC build dependencies
+sudo apt-get install capnproto libcapnp-dev
+
 # Remove newer Boost versions if installed
 sudo apt-get remove libboost*-dev
 
@@ -60,12 +63,78 @@ brew install automake berkeley-db libtool boost@1.76 openssl pkg-config libevent
 C++ compilers are memory-hungry. It is recommended to have at least 1.5 GB of
 memory available when compiling. 
 
+IPC support is disabled by default.
+
 **For Memory > 1.5GB:**
 
 ```bash
 cmake -B build -S . -DENABLE_PROD_BUILD=ON
 cmake --build build -j$(nproc)
 ```
+
+### IPC-enabled block-producing node
+
+The IPC build produces the multiprocess `bitcoin-node` binary used to expose
+the Mining interface. On Ubuntu 24.04, install the IPC dependencies and enable
+IPC when configuring CMake:
+
+```bash
+sudo apt-get install capnproto libcapnp-dev
+cmake -B build -S . -DENABLE_PROD_BUILD=ON -DENABLE_IPC=ON
+cmake --build build -j$(nproc)
+```
+
+The IPC-capable node binary is `build/src/bitcoin-node`. IPC listening is
+runtime opt-in and uses a local Unix domain socket. `ipcbind` may be supplied
+as a command-line option or as a configuration-file setting:
+
+| Setting | Socket path |
+| --- | --- |
+| No `ipcbind` setting | IPC does not listen. |
+| `ipcbind=unix` | `<datadir>/node.sock` |
+| `ipcbind=unix:` | `<datadir>/node.sock` |
+| `ipcbind=unix:name.sock` | `<datadir>/name.sock` |
+| `ipcbind=unix:/absolute/path/name.sock` | `/absolute/path/name.sock` |
+
+For example, with `-datadir=/home/nemo/TBCNODE/node_data_dir`, either of these
+configurations creates `/home/nemo/TBCNODE/node_data_dir/node.sock`:
+
+```bash
+build/src/bitcoin-node \
+  -datadir=/home/nemo/TBCNODE/node_data_dir \
+  -ipcbind=unix
+```
+
+```ini
+# bitcoin.conf
+ipcbind=unix
+```
+
+A relative custom socket name is resolved underneath `datadir`:
+
+```ini
+ipcbind=unix:mining.sock
+# Creates <datadir>/mining.sock
+```
+
+An absolute socket path is used unchanged:
+
+```ini
+ipcbind=unix:/run/tbcnode/mining.sock
+```
+
+The setting may be repeated with distinct paths to listen on multiple Unix
+sockets:
+
+```ini
+ipcbind=unix:mining.sock
+ipcbind=unix:admin.sock
+```
+
+Do not repeat the same socket path. Each client must connect to one of the
+configured addresses. Parent directories are created automatically when
+possible; the node process must have permission to write to the selected
+location.
 
 ## How to Launch the TBCNODE software
 

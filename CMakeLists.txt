@@ -99,14 +99,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR
     endif()
 endif()
 
-# IPC (Cap'n Proto / libmultiprocess). Default ON except Windows. Runtime IPC stays
-# default-off (no socket without -ipcbind, added in M3); monolithic bitcoind never links it.
-if(WIN32)
-  set(_ipc_default OFF)
-else()
-  set(_ipc_default ON)
-endif()
-option(ENABLE_IPC "Build the multiprocess IPC layer (Cap'n Proto/libmultiprocess)" ${_ipc_default})
+# IPC (Cap'n Proto / libmultiprocess) is opt-in. Most operators only need the
+# monolithic bitcoind binary; enabling IPC additionally builds bitcoin-node.
+option(ENABLE_IPC "Build the multiprocess IPC layer (Cap'n Proto/libmultiprocess)" OFF)
 
 # Add path for custom modules.
 set(CMAKE_MODULE_PATH
