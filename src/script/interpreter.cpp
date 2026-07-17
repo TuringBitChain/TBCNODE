@@ -812,7 +812,10 @@ std::optional<bool> EvalScript(
                         uint8_t condition = static_cast<uint8_t>(vch[0]);
                         stack.pop_back(); 
                         
-                        const CTransaction *tx =checker.GetTx(); 
+                        const CTransaction *tx = checker.GetTx();
+                        if (tx == nullptr) {
+                            return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                        }
                         uint256 result;
                         switch (condition) {
                         case 1:
@@ -863,7 +866,10 @@ std::optional<bool> EvalScript(
                         {
                                 valtype combinedResult;
                                 uint32_t temp32;
-                                unsigned int n =checker.GetnIn();
+                                unsigned int n = checker.GetnIn();
+                                if (n >= tx->vin.size()) {
+                                    return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+                                }
                                 result = tx->vin[n].prevout.GetTxId();
                                 valtype txidBytes(32);
                                 memcpy(txidBytes.data(), result.begin(), 32);
