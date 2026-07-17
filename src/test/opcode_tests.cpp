@@ -158,6 +158,40 @@ static void CheckAllBitwiseOpErrors(const stacktype &stack, ScriptError expected
     CheckOpError(stack, OP_XOR, expected_error);
 }
 
+BOOST_AUTO_TEST_CASE(push_meta_requires_transaction_context)
+{
+    for (int64_t condition = 1; condition <= 7; ++condition) {
+        CheckErrorForAllFlags(
+            {},
+            CScript() << condition << OP_PUSH_META,
+            SCRIPT_ERR_INVALID_STACK_OPERATION);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(push_meta_input_metadata_requires_valid_input_index)
+{
+    const Config& config = GlobalConfig::GetConfig();
+    CMutableTransaction mutableTx;
+    CTransaction tx(mutableTx);
+    TransactionSignatureChecker sigchecker(&tx, 0, Amount(0));
+    ScriptError err = SCRIPT_ERR_OK;
+    LimitedStack stack(UINT32_MAX);
+    auto source = task::CCancellationSource::Make();
+
+    auto r = EvalScript(
+        config,
+        true,
+        source->GetToken(),
+        stack,
+        CScript() << int64_t{6} << OP_PUSH_META,
+        0,
+        sigchecker,
+        &err);
+
+    BOOST_CHECK(!r.value());
+    BOOST_CHECK_EQUAL(err, SCRIPT_ERR_INVALID_STACK_OPERATION);
+}
+
 static void CheckBinaryOp(const valtype &a, const valtype &b, opcodetype op, const valtype &expected) {
     CheckTestResultForAllFlags({a, b}, CScript() << op, {expected});
 }
