@@ -120,6 +120,10 @@ CTxMemPool mempool;
 
 static void CheckBlockIndex(const Consensus::Params &consensusParams);
 
+static bool GetTransactionNL(const Config& config, const TxId& txid,
+                             CTransactionRef& txOut, bool fAllowSlow,
+                             uint256& hashBlock, bool& isGenesisEnabled);
+
 /** Constant stuff for coinbase transactions we create: */
 CScript COINBASE_FLAGS;
 
@@ -1723,6 +1727,14 @@ CTxnValResult TxnValidation(
     // previous transaction is required: look in the mempool first, then fall
     // back to txindex / disk. Reject admission when it cannot be fetched, so
     // the check cannot be bypassed.
+    // DEADLOCK WARNING: GetTransactionNL must be used here, never
+    // GetTransaction. TxnValidation runs on parallel validation workers while
+    // threadNewTxnHandler holds cs_main and blocks on the workers' futures;
+    // taking cs_main from a worker would deadlock the node. cs_main is
+    // guaranteed to be held during TxnValidation: by this thread for
+    // synchronous single-transaction validation, or by the coordinator thread
+    // waiting for PTV workers for synchronous batch and asynchronous
+    // validation. This makes the non-locking lookup safe.
     if (config.GetTokenProtectionEnabled()) {
         const token_protection::PrevTxFetcher prevTxFetcher =
             [&config, &pool](const TxId& prevTxId) -> CTransactionRef {
@@ -1732,8 +1744,9 @@ CTxnValResult TxnValidation(
                 CTransactionRef prevTx {};
                 uint256 hashBlock {};
                 bool prevTxGenesisEnabled {true};
-                if (GetTransaction(config, prevTxId, prevTx, true, hashBlock,
-                                   prevTxGenesisEnabled)) {
+                if (GetTransactionNL(config, prevTxId, prevTx,
+                                     true /* fAllowSlow */, hashBlock,
+                                     prevTxGenesisEnabled)) {
                     return prevTx;
                 }
                 return nullptr;
@@ -2659,19 +2672,30 @@ static void UpdateMempoolForReorg(const Config &config,
 }
 
 /**
- * Return transaction in txOut, and if it was found inside a block, its hash is
- * placed in hashBlock and info about if this is post-Genesis transactions is placed into isGenesisEnabled
+ * Non-locking version of GetTransaction: identical lookup logic but does NOT
+ * take cs_main.
+ *
+ * PRECONDITION: cs_main must already be held, either by the calling thread
+ * itself, or by a parent thread that is blocked waiting for the calling
+ * thread to finish (so no other thread can mutate chainActive /
+ * mapBlockIndex / flush pcoinsTip meanwhile). This cross-thread case cannot
+ * be checked with AssertLockHeld, so it is a documented convention only.
+ *
+ * The intended caller is the token protection prev-tx fetcher inside
+ * TxnValidation. Single-transaction synchronous validation takes cs_main on
+ * the calling thread; synchronous batch and asynchronous validation keep it
+ * on the coordinator thread while waiting for PTV workers. Calling
+ * GetTransaction (which takes cs_main) from one of those workers would
+ * deadlock the node. See CTxnValidator::threadNewTxnHandler.
  */
-bool GetTransaction(const Config &config, const TxId &txid,
-                    CTransactionRef &txOut,
-                    bool fAllowSlow,
-                    uint256 &hashBlock,
-                    bool& isGenesisEnabled
-                    ) {
+static bool GetTransactionNL(const Config &config, const TxId &txid,
+                             CTransactionRef &txOut,
+                             bool fAllowSlow,
+                             uint256 &hashBlock,
+                             bool& isGenesisEnabled
+                             ) {
     CBlockIndex *pindexSlow = nullptr;
     isGenesisEnabled = true;
-
-    LOCK(cs_main);
 
     CTransactionRef ptx = mempool.Get(txid);
     if (ptx) {
@@ -2739,6 +2763,21 @@ bool GetTransaction(const Config &config, const TxId &txid,
     }
 
     return false;
+}
+
+/**
+ * Return transaction in txOut, and if it was found inside a block, its hash is
+ * placed in hashBlock and info about if this is post-Genesis transactions is placed into isGenesisEnabled
+ */
+bool GetTransaction(const Config &config, const TxId &txid,
+                    CTransactionRef &txOut,
+                    bool fAllowSlow,
+                    uint256 &hashBlock,
+                    bool& isGenesisEnabled
+                    ) {
+    LOCK(cs_main);
+    return GetTransactionNL(config, txid, txOut, fAllowSlow, hashBlock,
+                            isGenesisEnabled);
 }
 
 //////////////////////////////////////////////////////////////////////////////

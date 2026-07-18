@@ -502,6 +502,40 @@ BOOST_AUTO_TEST_CASE(txnvalidation_rejects_negative_ftape_amount) {
     BOOST_CHECK_EQUAL(state.GetRejectCode(), REJECT_NONSTANDARD);
 }
 
+BOOST_AUTO_TEST_CASE(batch_validation_fetches_confirmed_parent_without_deadlock) {
+    GlobalConfig& config = GlobalConfig::GetConfig();
+    config.SetTokenProtectionEnabled(true);
+
+    // A positive FTape makes token protection fetch every input's complete
+    // previous transaction. The coinbase parent is confirmed and absent from
+    // the mempool, forcing the GetTransactionNL chain/disk lookup on a PTV
+    // worker while the batch-validation coordinator holds cs_main.
+    const CScript p2pk = GetP2PK(coinbaseKey);
+    CMutableTransaction spend;
+    spend.nVersion = 1;
+    spend.vin.resize(1);
+    spend.vin[0].prevout = COutPoint(coinbaseTxns[0].GetId(), 0);
+    spend.vout.resize(2);
+    spend.vout[0].nValue = 49 * COIN;
+    spend.vout[0].scriptPubKey = p2pk;
+    spend.vout[1].nValue = Amount(0);
+    spend.vout[1].scriptPubKey = MakeFTapeScript({1, 0, 0, 0, 0, 0});
+    SignP2PKInput(spend, 0, coinbaseTxns[0], coinbaseKey);
+
+    mempool.Clear();
+    BOOST_REQUIRE(!mempool.Exists(coinbaseTxns[0].GetId()));
+
+    auto validator = MakeValidator(config);
+    mining::CJournalChangeSetPtr changeSet{nullptr};
+    TxInputDataSPtrVec txs{MakeTxInput(spend)};
+    const auto rejected =
+        validator->processValidation(std::move(txs), changeSet);
+
+    BOOST_CHECK(rejected.first.empty());
+    BOOST_CHECK(rejected.second.empty());
+    BOOST_CHECK(mempool.Exists(spend.GetId()));
+}
+
 BOOST_AUTO_TEST_CASE(txnvalidation_rejects_amount_mismatch_via_mempool_parent) {
     GlobalConfig& config = GlobalConfig::GetConfig();
     config.SetTokenProtectionEnabled(true);
