@@ -77,6 +77,8 @@ static const uint64_t DEFAULT_MAX_CONSOLIDATION_INPUT_SCRIPT_SIZE = 150;
 static const uint64_t DEFAULT_MIN_CONSOLIDATION_INPUT_MATURITY = 6;
 /** consolidation transaction with non standard inputs */
 static const uint64_t DEFAULT_ACCEPT_NON_STD_CONSOLIDATION_INPUT = 0;
+/** Default for -tokenprotection, mempool token / poolnft 2.0 protection checks */
+static const bool DEFAULT_TOKEN_PROTECTION_ENABLED = false;
 
 /** Maximum number of signature check operations in an IsStandard() P2SH script
  */

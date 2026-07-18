@@ -145,6 +145,10 @@ public:
     virtual void SetAcceptNonStandardOutput(bool accept) = 0;
     virtual bool GetAcceptNonStandardOutput(bool isGenesisEnabled) const = 0;
 
+    // Mempool token / PoolNFT 2.0 protection checks switch (-tokenprotection)
+    virtual void SetTokenProtectionEnabled(bool enabled) = 0;
+    virtual bool GetTokenProtectionEnabled() const = 0;
+
     virtual bool SetMaxCoinsViewCacheSize(int64_t max, std::string* err) = 0;
     virtual uint64_t GetMaxCoinsViewCacheSize() const = 0;
 
@@ -303,6 +307,9 @@ public:
     void SetAcceptNonStandardOutput(bool accept) override;
     bool GetAcceptNonStandardOutput(bool isGenesisEnabled) const override;
 
+    void SetTokenProtectionEnabled(bool enabled) override;
+    bool GetTokenProtectionEnabled() const override;
+
     bool SetMaxCoinsViewCacheSize(int64_t max, std::string* err) override;
     uint64_t GetMaxCoinsViewCacheSize() const override {return mMaxCoinsViewCacheSize;}
 
@@ -400,6 +407,8 @@ private:
     uint64_t maxScriptNumLengthPolicy;
 
     bool mAcceptNonStandardOutput;
+
+    bool mTokenProtectionEnabled;
 
     uint64_t mMaxCoinsViewCacheSize;
 
@@ -645,6 +654,9 @@ public:
     {
         return isGenesisEnabled ? true : !fRequireStandard;
     }
+
+    void SetTokenProtectionEnabled(bool) override {}
+    bool GetTokenProtectionEnabled() const override { return true; }
 
     bool SetMaxCoinsViewCacheSize(int64_t max, std::string* err) override
     {

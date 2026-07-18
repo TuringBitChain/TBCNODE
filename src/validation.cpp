@@ -36,6 +36,7 @@
 #include "taskcancellation.h"
 #include "timedata.h"
 #include "tinyformat.h"
+#include "token_protection.h"
 #include "txdb.h"
 #include "txmempool.h"
 #include "txn_validator.h"
@@ -1712,6 +1713,36 @@ CTxnValResult TxnValidation(
         if (!CheckSequenceLocks(tx, pool, config, lockTimeFlags, &lp)) {
             state.DoS(0, false, REJECT_NONSTANDARD,
                      "non-BIP68-final");
+            return Result{state, pTxInputData, vCoinsToUncache};
+        }
+    }
+
+    // Mempool token / PoolNFT 2.0 protection checks (mempool admission policy
+    // only; does not affect block consensus). Input-side tapes are
+    // OP_FALSE OP_RETURN outputs that never enter the UTXO set, so the full
+    // previous transaction is required: look in the mempool first, then fall
+    // back to txindex / disk. Reject admission when it cannot be fetched, so
+    // the check cannot be bypassed.
+    if (config.GetTokenProtectionEnabled()) {
+        const token_protection::PrevTxFetcher prevTxFetcher =
+            [&config, &pool](const TxId& prevTxId) -> CTransactionRef {
+                if (auto prevTx = pool.Get(prevTxId); prevTx) {
+                    return prevTx;
+                }
+                CTransactionRef prevTx {};
+                uint256 hashBlock {};
+                bool prevTxGenesisEnabled {true};
+                if (GetTransaction(config, prevTxId, prevTx, true, hashBlock,
+                                   prevTxGenesisEnabled)) {
+                    return prevTx;
+                }
+                return nullptr;
+            };
+        const auto tokenResult =
+            token_protection::CheckTokenTransaction(tx, prevTxFetcher);
+        if (tokenResult != token_protection::TokenCheckResult::OK) {
+            state.DoS(0, false, REJECT_NONSTANDARD,
+                      token_protection::TokenCheckResultToRejectReason(tokenResult));
             return Result{state, pTxInputData, vCoinsToUncache};
         }
     }

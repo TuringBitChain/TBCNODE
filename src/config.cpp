@@ -69,6 +69,8 @@ void GlobalConfig::Reset()
 
     mAcceptNonStandardOutput = true;
 
+    mTokenProtectionEnabled = DEFAULT_TOKEN_PROTECTION_ENABLED;
+
     mMaxCoinsViewCacheSize = 0;
     
     mMaxMempool = DEFAULT_MAX_MEMPOOL_SIZE * ONE_MEGABYTE;
@@ -833,6 +835,16 @@ void GlobalConfig::SetAcceptNonStandardOutput(bool accept)
 bool GlobalConfig::GetAcceptNonStandardOutput(bool isGenesisEnabled) const
 {
     return isGenesisEnabled ? mAcceptNonStandardOutput : !fRequireStandard;
+}
+
+void GlobalConfig::SetTokenProtectionEnabled(bool enabled)
+{
+    mTokenProtectionEnabled = enabled;
+}
+
+bool GlobalConfig::GetTokenProtectionEnabled() const
+{
+    return mTokenProtectionEnabled;
 }
 
 bool GlobalConfig::SetMaxCoinsViewCacheSize(int64_t max, std::string* err)

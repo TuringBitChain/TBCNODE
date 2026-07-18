@@ -906,6 +906,12 @@ std::string HelpMessage(HelpMessageMode mode) {
                       CURRENCY_UNIT, FormatMoney(DUST_RELAY_TX_FEE)));
     }
     strUsage += HelpMessageOpt(
+        "-tokenprotection",
+        strprintf(_("Enable mempool token / poolnft 2.0 protection checks: "
+                    "tape amount non-negative, token amount conservation and "
+                    "poolnft tape tamper detection (default: %d)"),
+                  DEFAULT_TOKEN_PROTECTION_ENABLED));
+    strUsage += HelpMessageOpt(
         "-datacarrier",
         strprintf(_("Relay and mine data carrier transactions (default: %d)"),
                   DEFAULT_ACCEPT_DATACARRIER));
@@ -2095,6 +2101,9 @@ bool AppInitParameterInteraction(Config &config) {
 
     config.SetAcceptNonStandardOutput(
         gArgs.GetBoolArg("-acceptnonstdoutputs", config.GetAcceptNonStandardOutput(true)));
+
+    config.SetTokenProtectionEnabled(
+        gArgs.GetBoolArg("-tokenprotection", DEFAULT_TOKEN_PROTECTION_ENABLED));
 
 #ifdef ENABLE_WALLET
     if (!CWallet::ParameterInteraction()) return false;
