@@ -5737,6 +5737,12 @@ static CBlockIndex *AddToBlockIndex(const CBlockHeader &block) {
         pindexNew->pprev = (*miPrev).second;
         pindexNew->nHeight = pindexNew->pprev->nHeight + 1;
         pindexNew->BuildSkip();
+    } else if (fPruneBlocksMode &&
+               hash == Params().GetConsensus().TBCFirstBlockHash) {
+        // The history before TBCFirstBlockHeight is intentionally absent in
+        // pruneblocks mode.  Treat the configured first retained block as a
+        // trusted chain anchor when rebuilding the block index.
+        pindexNew->nHeight = Params().GetConsensus().TBCFirstBlockHeight;
     }
     pindexNew->nTimeReceived = GetTime();
     pindexNew->nTimeMax =
@@ -6313,21 +6319,28 @@ static bool AcceptBlockHeader(const Config &config, const CBlockHeader &block,
                          hash.ToString(), FormatStateMessage(state));
         }
 
-        const CBlockIndex *pindexPrev = FindPreviousBlockIndex(block, state);
-        if (!pindexPrev)
-        {
-            // Error state is logged in FindPreviousBlockIndex
-            return false;
+        const bool isTBCPrunedAnchor =
+            fPruneBlocksMode &&
+            hash == chainparams.GetConsensus().TBCFirstBlockHash;
+        const CBlockIndex *pindexPrev = nullptr;
+        if (!isTBCPrunedAnchor) {
+            pindexPrev = FindPreviousBlockIndex(block, state);
+            if (!pindexPrev)
+            {
+                // Error state is logged in FindPreviousBlockIndex
+                return false;
+            }
         }
 
-        if (fCheckpointsEnabled &&
+        if (!isTBCPrunedAnchor && fCheckpointsEnabled &&
             !CheckIndexAgainstCheckpoint(pindexPrev, state, chainparams,
                                          hash)) {
             return error("%s: CheckIndexAgainstCheckpoint(): %s", __func__,
                          state.GetRejectReason().c_str());
         }
 
-        if (!ContextualCheckBlockHeader(config, block, state, pindexPrev,
+        if (!isTBCPrunedAnchor &&
+            !ContextualCheckBlockHeader(config, block, state, pindexPrev,
                                         GetAdjustedTime())) {
             return error("%s: Consensus::ContextualCheckBlockHeader: %s, %s",
                          __func__, hash.ToString(), FormatStateMessage(state));
@@ -6588,15 +6601,23 @@ std::function<bool()> ProcessNewBlockWithAsyncBestChainActivation(
         {
             LOCK(cs_main);
             // We need previous block index to calculate current block height used by CheckBlock. This check is later repeated in AcceptBlockHeader
-            pindexPrev = FindPreviousBlockIndex(*pblock, state);
-            if (!pindexPrev)
-            {
-                return {};
+            const bool isTBCPrunedAnchor =
+                fPruneBlocksMode &&
+                pblock->GetHash() == chainparams.GetConsensus().TBCFirstBlockHash;
+            if (!isTBCPrunedAnchor) {
+                pindexPrev = FindPreviousBlockIndex(*pblock, state);
+                if (!pindexPrev)
+                {
+                    return {};
+                }
             }
         }
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
-        bool ret = CheckBlock(config, *pblock, state, pindexPrev->nHeight + 1);
+        const int blockHeight = pindexPrev
+            ? pindexPrev->nHeight + 1
+            : chainparams.GetConsensus().TBCFirstBlockHeight;
+        bool ret = CheckBlock(config, *pblock, state, blockHeight);
 
         LOCK(cs_main);
 
@@ -7517,7 +7538,11 @@ bool LoadExternalBlockFile(const Config &config, FILE *fileIn,
 
                 // detect out of order blocks, and store them for later
                 uint256 hash = block.GetHash();
+                const bool isTBCPrunedAnchor =
+                    fPruneBlocksMode &&
+                    hash == chainparams.GetConsensus().TBCFirstBlockHash;
                 if (hash != chainparams.GetConsensus().hashGenesisBlock &&
+                    !isTBCPrunedAnchor &&
                     mapBlockIndex.find(block.hashPrevBlock) ==
                         mapBlockIndex.end()) {
                     LogPrint(BCLog::REINDEX,
