@@ -380,6 +380,9 @@ public:
 
     //! block header
     int32_t nVersion;
+    // Serialized previous-block hash. This is needed when the previous index
+    // is intentionally absent at a retained-history root.
+    uint256 hashPrevBlock;
     uint256 hashMerkleRoot;
     uint32_t nTime;
     uint32_t nBits;
@@ -411,6 +414,7 @@ public:
         nTimeMax = 0;
 
         nVersion = 0;
+        hashPrevBlock = uint256();
         hashMerkleRoot = uint256();
         nTime = 0;
         nTimeReceived = 0;
@@ -429,6 +433,7 @@ public:
         SetNull();
 
         nVersion = block.nVersion;
+        hashPrevBlock = block.hashPrevBlock;
         hashMerkleRoot = block.hashMerkleRoot;
         nTime = block.nTime;
         // Default to block time if nTimeReceived is never set, which
@@ -440,7 +445,9 @@ public:
         nNonce = block.nNonce;
     }
 
-    void LoadFromPersistentData(const CBlockIndex& other, CBlockIndex* previous)
+    void LoadFromPersistentData(const CBlockIndex& other,
+                                CBlockIndex* previous,
+                                const uint256& persistedHashPrev)
     {
         pprev = previous;
         nHeight = other.nHeight;
@@ -448,6 +455,7 @@ public:
         nDataPos = other.nDataPos;
         nUndoPos = other.nUndoPos;
         nVersion = other.nVersion;
+        hashPrevBlock = persistedHashPrev;
         hashMerkleRoot = other.hashMerkleRoot;
         nTime = other.nTime;
         nBits = other.nBits;
@@ -529,9 +537,8 @@ public:
     CBlockHeader GetBlockHeader() const {
         CBlockHeader block;
         block.nVersion = nVersion;
-        if (pprev) {
-            block.hashPrevBlock = pprev->GetBlockHash();
-        }
+        block.hashPrevBlock =
+            pprev ? pprev->GetBlockHash() : hashPrevBlock;
         block.hashMerkleRoot = hashMerkleRoot;
         block.nTime = nTime;
         block.nBits = nBits;
@@ -682,7 +689,7 @@ public:
     CDiskBlockIndex() { hashPrev = uint256(); }
 
     explicit CDiskBlockIndex(const CBlockIndex *pindex) : CBlockIndex(*pindex) {
-        hashPrev = (pprev ? pprev->GetBlockHash() : uint256());
+        hashPrev = pindex->GetBlockHeader().hashPrevBlock;
     }
 
     ADD_SERIALIZE_METHODS;

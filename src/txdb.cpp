@@ -319,11 +319,22 @@ bool CBlockTreeDB::LoadBlockIndexGuts(
             return error("LoadBlockIndex() : failed to read value");
         }
 
-        // Construct block index object
-        CBlockIndex *pindexNew = insertBlockIndex(diskindex.GetBlockHash());
+        // Construct block index object. The retained TBC anchor deliberately
+        // has no in-memory parent, but its real previous hash remains part of
+        // the serialized header so its block hash is stable after restart.
+        const uint256 blockHash = diskindex.GetBlockHash();
+        const Consensus::Params& consensus =
+            config.GetChainParams().GetConsensus();
+        const bool isTBCPrunedAnchor =
+            fPruneBlocksMode &&
+            diskindex.nHeight == consensus.TBCFirstBlockHeight &&
+            blockHash == consensus.TBCFirstBlockHash;
+        CBlockIndex *pindexNew = insertBlockIndex(blockHash);
         pindexNew->LoadFromPersistentData(
             diskindex,
-            insertBlockIndex(diskindex.hashPrev));
+            isTBCPrunedAnchor ? nullptr
+                              : insertBlockIndex(diskindex.hashPrev),
+            diskindex.hashPrev);
 
         if (!CheckProofOfWork(pindexNew->GetBlockHash(), pindexNew->nBits,
                               config)) {
