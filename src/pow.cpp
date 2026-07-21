@@ -179,22 +179,15 @@ uint32_t GetNextWorkRequired(const CBlockIndex *pindexPrev,
     if (IsDAAEnabled(config, pindexPrev)) {
         if (fPruneBlocksMode &&
             pindexPrev->nHeight >= params.TBCFirstBlockHeight) {
-            // The BCH DAA needs a 144-block window and GetSuitableBlock()
-            // needs two additional ancestors at both ends of that window.
-            // Those ancestors do not exist immediately after the trusted TBC
-            // pruning anchor.  During this bootstrap window, trust the target
-            // encoded in the retained block header; CheckBlockHeader() still
-            // verifies that the block hash satisfies that target.  Resume the
-            // normal DAA as soon as all required retained ancestors exist.
-            const int firstHeight = pindexPrev->nHeight - 144;
-            const CBlockIndex *pindexFirst =
-                pindexPrev->GetAncestor(firstHeight);
-            const bool haveLastSuitableBlock =
-                pindexPrev->pprev && pindexPrev->pprev->pprev;
-            const bool haveFirstSuitableBlock =
-                pindexFirst && pindexFirst->pprev &&
-                pindexFirst->pprev->pprev;
-            if (!haveLastSuitableBlock || !haveFirstSuitableBlock) {
+            // TBC's DAA additionally derives its target spacing from backNum
+            // blocks. Until that complete retained window exists, recomputing
+            // the historical target without the pruned timestamps would give
+            // a different result. Trust the target encoded in each retained
+            // header during this bootstrap window; CheckBlockHeader() still
+            // verifies that the block hash satisfies the encoded target.
+            const uint64_t retainedHistory =
+                pindexPrev->nHeight - params.TBCFirstBlockHeight;
+            if (retainedHistory < params.backNum) {
                 return pblock->nBits;
             }
         }

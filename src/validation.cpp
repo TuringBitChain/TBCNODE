@@ -4869,8 +4869,9 @@ static bool ConnectTip(
 {
     const Consensus::Params &consensusParams =
         config.GetChainParams().GetConsensus();
-    assert(pindexNew->pprev == chainActive.Tip() || 
-        (fPruneBlocksMode && consensusParams.TBCFirstBlockHash == pblock->GetHash()));
+    assert(pindexNew->pprev == chainActive.Tip() ||
+        (fPruneBlocksMode &&
+         consensusParams.TBCFirstBlockHash == pindexNew->GetBlockHash()));
     // Read block from disk.
     int64_t nTime1 = GetTimeMicros();
     std::shared_ptr<const CBlock> pthisBlock;
@@ -5096,11 +5097,31 @@ static bool ActivateBestChainStep(
     AssertLockHeld(cs_main);
     const CBlockIndex *pindexOldTip = chainActive.Tip();
     const CBlockIndex *pindexFork = chainActive.FindFork(pindexMostWork);
+    const Consensus::Params &consensusParams =
+        config.GetChainParams().GetConsensus();
+    const CBlockIndex *pindexPrunedAnchor =
+        fPruneBlocksMode &&
+                pindexMostWork->nHeight >= consensusParams.TBCFirstBlockHeight
+            ? pindexMostWork->GetAncestor(consensusParams.TBCFirstBlockHeight)
+            : nullptr;
+    const bool startingPrunedChain =
+        pindexFork == nullptr && pindexPrunedAnchor != nullptr &&
+        pindexPrunedAnchor->GetBlockHash() ==
+            consensusParams.TBCFirstBlockHash &&
+        chainActive.Tip() != nullptr &&
+        chainActive.Tip()->GetBlockHash() == consensusParams.hashGenesisBlock;
 
     // Disconnect active blocks which are no longer in the best chain.
     bool fBlocksDisconnected = false;
     DisconnectedBlockTransactions disconnectpool;
     try {
+        if (startingPrunedChain) {
+            // The genesis block and the retained TBC chain are separate roots
+            // in the rebuilt index. Genesis has no spendable transaction and
+            // no undo record, so switch to an empty active chain instead of
+            // trying to disconnect it as an ordinary fork.
+            chainActive.SetTip(nullptr);
+        }
         while (chainActive.Tip() && chainActive.Tip() != pindexFork) {
             if (!DisconnectTip(config, state, &disconnectpool, changeSet)) {
                 // This is likely a fatal error, but keep the mempool consistent,
@@ -5114,17 +5135,15 @@ static bool ActivateBestChainStep(
         // Build list of new blocks to connect.
         std::vector<CBlockIndex *> vpindexToConnect;
         bool fContinue = true;
-        int nHeight = pindexFork ? pindexFork->nHeight : -1;
+        int nHeight = pindexFork
+            ? pindexFork->nHeight
+            : (startingPrunedChain
+                   ? consensusParams.TBCFirstBlockHeight - 1
+                   : -1);
         while (fContinue && nHeight != pindexMostWork->nHeight) {
             // Don't iterate the entire list of potential improvements toward the
             // best tip, as we likely only need a few blocks along the way.
             int nTargetHeight = std::min(nHeight + 32, pindexMostWork->nHeight);
-            const Consensus::Params &consensusParams =
-                config.GetChainParams().GetConsensus();
-            if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindexMostWork->nHeight){
-                nTargetHeight = consensusParams.TBCFirstBlockHeight;
-                nHeight = consensusParams.TBCFirstBlockHeight - 1;
-            }
             vpindexToConnect.clear();
             vpindexToConnect.reserve(nTargetHeight - nHeight);
             CBlockIndex *pindexIter = pindexMostWork->GetAncestor(nTargetHeight);
@@ -5144,7 +5163,9 @@ static bool ActivateBestChainStep(
                         from older chain items are once again eligible for parallel
                         validation thus wasting resources. We also don't wish to
                         end up announcing older chain items as new best tip.*/
-                        pindexOldTip && chainActive.Tip()->nChainWork == pindexOldTip->nChainWork,
+                        pindexOldTip && chainActive.Tip() &&
+                            chainActive.Tip()->nChainWork ==
+                                pindexOldTip->nChainWork,
                         token,
                         config,
                         state,
