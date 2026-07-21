@@ -3891,31 +3891,36 @@ static uint32_t GetBlockScriptFlags(const Config &config,
                                     const CBlockIndex *pChainTip) {
     const Consensus::Params &consensusparams =
         config.GetChainParams().GetConsensus();
+    const int nextHeight = pChainTip
+        ? pChainTip->nHeight + 1
+        : consensusparams.TBCFirstBlockHeight;
 
     uint32_t flags = SCRIPT_VERIFY_NONE;
 
     // P2SH didn't become active until Apr 1 2012
-    if (pChainTip->GetMedianTimePast() >= P2SH_ACTIVATION_TIME) {
+    if (!pChainTip ||
+        pChainTip->GetMedianTimePast() >= P2SH_ACTIVATION_TIME) {
         flags |= SCRIPT_VERIFY_P2SH;
     }
 
     // Start enforcing the DERSIG (BIP66) rule
-    if ((pChainTip->nHeight + 1) >= consensusparams.BIP66Height) {
+    if (nextHeight >= consensusparams.BIP66Height) {
         flags |= SCRIPT_VERIFY_DERSIG;
     }
 
     // Start enforcing CHECKLOCKTIMEVERIFY (BIP65) rule
-    if ((pChainTip->nHeight + 1) >= consensusparams.BIP65Height) {
+    if (nextHeight >= consensusparams.BIP65Height) {
         flags |= SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY;
     }
 
     // Start enforcing BIP112 (CSV).
-    if ((pChainTip->nHeight + 1) >= consensusparams.CSVHeight) {
+    if (nextHeight >= consensusparams.CSVHeight) {
         flags |= SCRIPT_VERIFY_CHECKSEQUENCEVERIFY;
     }
 
     // If the UAHF is enabled, we start accepting replay protected txns
-    if (IsUAHFenabled(config, pChainTip)) {
+    if (pChainTip ? IsUAHFenabled(config, pChainTip)
+                  : IsUAHFenabled(config, nextHeight - 1)) {
         flags |= SCRIPT_VERIFY_STRICTENC;
         flags |= SCRIPT_ENABLE_SIGHASH_FORKID;
     }
@@ -3924,12 +3929,13 @@ static uint32_t GetBlockScriptFlags(const Config &config,
     // s in their signature. We also make sure that signature that are supposed
     // to fail (for instance in multisig or other forms of smart contracts) are
     // null.
-    if (IsDAAEnabled(config, pChainTip)) {
+    if (pChainTip ? IsDAAEnabled(config, pChainTip)
+                  : IsDAAEnabled(config, nextHeight - 1)) {
         flags |= SCRIPT_VERIFY_LOW_S;
         flags |= SCRIPT_VERIFY_NULLFAIL;
     }
 
-    if (IsGenesisEnabled(config, pChainTip->nHeight + 1)) {
+    if (IsGenesisEnabled(config, nextHeight)) {
         flags |= SCRIPT_GENESIS;
         flags |= SCRIPT_VERIFY_SIGPUSHONLY;
     }
@@ -4094,8 +4100,9 @@ static bool ConnectBlock(
     // further duplicate transactions descending from the known pairs either. If
     // we're on the known chain at height greater than where BIP34 activated, we
     // can save the db accesses needed for the BIP30 check.
-    CBlockIndex *pindexBIP34height =
-        pindex->pprev->GetAncestor(consensusParams.BIP34Height);
+    CBlockIndex *pindexBIP34height = pindex->pprev
+        ? pindex->pprev->GetAncestor(consensusParams.BIP34Height)
+        : nullptr;
     // Only continue to enforce if we're below BIP34 activation height or the
     // block hash at that height doesn't correspond.
     fEnforceBIP30 =
@@ -4357,7 +4364,10 @@ static bool ConnectBlock(
                         40, fCheckForPruning)) {
                 return error("ConnectBlock(): FindUndoPos failed");
             }
-            if (!UndoWriteToDisk(blockundo, _pos, pindex->pprev->GetBlockHash(),
+            const uint256 undoPrevHash = pindex->pprev
+                ? pindex->pprev->GetBlockHash()
+                : block.hashPrevBlock;
+            if (!UndoWriteToDisk(blockundo, _pos, undoPrevHash,
                                  config.GetChainParams().DiskMagic())) {
                 return AbortNode(state, "Failed to write undo data");
             }
