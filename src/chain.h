@@ -774,6 +774,15 @@ public:
         return vChain.size() > 0 ? vChain[0] : nullptr;
     }
 
+    /** Return the earliest retained index entry in this chain. */
+    CBlockIndex *Root() const {
+        CBlockIndex *root = Tip();
+        while (root && root->pprev) {
+            root = root->pprev;
+        }
+        return root;
+    }
+
     /**
      * Returns the index entry for the tip of this chain, or nullptr if none.
      */

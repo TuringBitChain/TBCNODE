@@ -265,7 +265,7 @@ CBlockIndex *FindForkInGlobalIndex(const CChain &chain,
             }
         }
     }
-    return chain.Genesis();
+    return chain.Root();
 }
 
 CCoinsViewCache *pcoinsTip = nullptr;
@@ -3792,7 +3792,13 @@ static DisconnectResult DisconnectBlock(const CBlock &block,
         return DISCONNECT_FAILED;
     }
 
-    if (!UndoReadFromDisk(blockUndo, pos, pindex->pprev->GetBlockHash())) {
+    // The retained TBC anchor deliberately has no in-memory parent. It is not
+    // normally disconnectable, but use the serialized parent hash here too so
+    // malformed recovery paths fail cleanly instead of dereferencing nullptr.
+    const uint256& hashPrev = pindex->pprev != nullptr
+                                  ? pindex->pprev->GetBlockHash()
+                                  : pindex->GetBlockHeader().hashPrevBlock;
+    if (!UndoReadFromDisk(blockUndo, pos, hashPrev)) {
         error("DisconnectBlock(): failure reading undo data");
         return DISCONNECT_FAILED;
     }
@@ -4691,6 +4697,13 @@ static bool DisconnectTip(const Config &config, CValidationState &state,
 {
     CBlockIndex *pindexDelete = chainActive.Tip();
     assert(pindexDelete);
+
+    if (fPruneBlocksMode &&
+        pindexDelete->GetBlockHash() ==
+            config.GetChainParams().GetConsensus().TBCFirstBlockHash) {
+        return state.Error(
+            "Cannot disconnect the retained TBC history anchor");
+    }
 
     FinalizeGenesisCrossing(config, pindexDelete->nHeight, changeSet);
 
@@ -5781,6 +5794,17 @@ static CBlockIndex *AddToBlockIndex(const CBlockHeader &block) {
              ? std::max(pindexNew->pprev->nTimeMax, pindexNew->nTime)
              : pindexNew->nTime);
     pindexNew->SetChainWork();
+    if (fPruneBlocksMode &&
+        hash == Params().GetConsensus().TBCFirstBlockHash &&
+        pindexNew->nChainWork <
+            UintToArith256(Params().GetConsensus().nMinimumChainWork)) {
+        // The retained anchor commits to omitted history. Use the configured
+        // minimum chain work as a conservative trusted lower bound so the
+        // retained node does not remain in IBD solely because that historical
+        // work is unavailable locally.
+        pindexNew->nChainWork =
+            UintToArith256(Params().GetConsensus().nMinimumChainWork);
+    }
     pindexNew->RaiseValidity(BlockValidity::TREE);
     if (pindexBestHeader == nullptr ||
         pindexBestHeader->nChainWork < pindexNew->nChainWork) {
@@ -6929,6 +6953,14 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
     for (const std::pair<int, CBlockIndex *> &item : vSortedByHeight) {
         CBlockIndex *pindex = item.second;
         pindex->SetChainWork();
+        const Consensus::Params &consensusParams = chainparams.GetConsensus();
+        if (fPruneBlocksMode &&
+            pindex->GetBlockHash() == consensusParams.TBCFirstBlockHash &&
+            pindex->nChainWork <
+                UintToArith256(consensusParams.nMinimumChainWork)) {
+            pindex->nChainWork =
+                UintToArith256(consensusParams.nMinimumChainWork);
+        }
         pindex->nTimeMax =
             (pindex->pprev ? std::max(pindex->pprev->nTimeMax, pindex->nTime)
                            : pindex->nTime);
@@ -6948,7 +6980,6 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
             }
         }
 
-        const Consensus::Params &consensusParams = chainparams.GetConsensus();
         if(fPruneBlocksMode && consensusParams.TBCFirstBlockHeight == pindex->nHeight) {
             pindex->nChainTx = pindex->nTx;
         }
@@ -7135,7 +7166,9 @@ bool CVerifyDB::VerifyDB(const Config &config, CCoinsView *coinsview,
             CDiskBlockPos pos = pindex->GetUndoPos();
             if (!pos.IsNull()) {
                 if (!UndoReadFromDisk(undo, pos,
-                                      pindex->pprev->GetBlockHash())) {
+                                      pindex->pprev
+                                          ? pindex->pprev->GetBlockHash()
+                                          : pindex->hashPrevBlock)) {
                     return error(
                         "VerifyDB(): *** found bad undo data at %d, hash=%s\n",
                         pindex->nHeight, pindex->GetBlockHash().ToString());
@@ -7281,8 +7314,25 @@ bool ReplayBlocks(const Config &config, CCoinsView *view) {
                 "ReplayBlocks(): reorganization from unknown block requested");
         }
         pindexOld = mapBlockIndex[hashHeads[1]];
-        pindexFork = LastCommonAncestor(pindexOld, pindexNew);
-        assert(pindexFork != nullptr);
+        const Consensus::Params& consensus =
+            config.GetChainParams().GetConsensus();
+        const CBlockIndex* retainedAnchor =
+            fPruneBlocksMode &&
+                    pindexNew->nHeight >= consensus.TBCFirstBlockHeight
+                ? pindexNew->GetAncestor(consensus.TBCFirstBlockHeight)
+                : nullptr;
+        const bool crossingRetainedRoot =
+            retainedAnchor &&
+            retainedAnchor->GetBlockHash() == consensus.TBCFirstBlockHash &&
+            pindexOld->GetBlockHash() == consensus.hashGenesisBlock;
+        if (crossingRetainedRoot) {
+            pindexOld = nullptr;
+        } else {
+            pindexFork = LastCommonAncestor(pindexOld, pindexNew);
+            if (!pindexFork) {
+                return error("ReplayBlocks(): no retained common ancestor");
+            }
+        }
     }
 
     // Rollback along the old branch.
@@ -7317,7 +7367,19 @@ bool ReplayBlocks(const Config &config, CCoinsView *view) {
     }
 
     // Roll forward from the forking point to the new tip.
-    int nForkHeight = pindexFork ? pindexFork->nHeight : 0;
+    const Consensus::Params& consensus =
+        config.GetChainParams().GetConsensus();
+    const CBlockIndex* retainedAnchor =
+        fPruneBlocksMode &&
+                pindexNew->nHeight >= consensus.TBCFirstBlockHeight
+            ? pindexNew->GetAncestor(consensus.TBCFirstBlockHeight)
+            : nullptr;
+    int nForkHeight = pindexFork
+        ? pindexFork->nHeight
+        : (retainedAnchor &&
+                   retainedAnchor->GetBlockHash() == consensus.TBCFirstBlockHash
+               ? consensus.TBCFirstBlockHeight - 1
+               : 0);
     for (int nHeight = nForkHeight + 1; nHeight <= pindexNew->nHeight;
          ++nHeight) {
         const CBlockIndex *pindex = pindexNew->GetAncestor(nHeight);
@@ -7679,7 +7741,10 @@ bool LoadExternalBlockFile(const Config &config, FILE *fileIn,
 }
 
 static void CheckBlockIndex(const Consensus::Params &consensusParams) {
-    if (!fCheckBlockIndex) {
+    if (!fCheckBlockIndex || fPruneBlocksMode) {
+        // The legacy checker assumes exactly one height-zero root and a dense
+        // path to genesis. Those invariants intentionally do not hold for a
+        // retained-history TBC chain.
         return;
     }
 

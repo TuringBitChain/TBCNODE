@@ -596,11 +596,26 @@ void FindNextBlocksToDownload(NodeId nodeid, unsigned int count,
         return;
     }
 
+    // A retained-history node cannot find a common ancestor below its local
+    // root. Only attempt block download from peers whose announced chain
+    // contains the trusted TBC anchor.
+    const CBlockIndex* retainedRoot = chainActive.Root();
+    if (retainedRoot != nullptr) {
+        const CBlockIndex* peerRoot =
+            state->pindexBestKnownBlock->GetAncestor(retainedRoot->nHeight);
+        if (peerRoot != retainedRoot) {
+            return;
+        }
+    }
+
     if (state->pindexLastCommonBlock == nullptr) {
         // Bootstrap quickly by guessing a parent of our best tip is the forking
         // point. Guessing wrong in either direction is not a problem.
         state->pindexLastCommonBlock = chainActive[std::min(
             state->pindexBestKnownBlock->nHeight, chainActive.Height())];
+        if (state->pindexLastCommonBlock == nullptr) {
+            state->pindexLastCommonBlock = retainedRoot;
+        }
     }
 
     // If the peer reorganized, our previous pindexLastCommonBlock may not be an

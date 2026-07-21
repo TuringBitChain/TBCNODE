@@ -161,7 +161,7 @@ UniValue importprivkey(const Config &config, const JSONRPCRequest &request) {
         pwallet->UpdateTimeFirstKey(1);
 
         if (fRescan) {
-            pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
+            pwallet->ScanForWalletTransactions(chainActive.Root(), true);
         }
     }
 
@@ -290,7 +290,7 @@ UniValue importaddress(const Config &config, const JSONRPCRequest &request) {
     }
 
     if (fRescan) {
-        pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
+            pwallet->ScanForWalletTransactions(chainActive.Root(), true);
         pwallet->ReacceptWalletTransactions();
     }
 
@@ -488,7 +488,7 @@ UniValue importpubkey(const Config &config, const JSONRPCRequest &request) {
     ImportScript(pwallet, GetScriptForRawPubKey(pubKey), strLabel, false);
 
     if (fRescan) {
-        pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
+            pwallet->ScanForWalletTransactions(chainActive.Root(), true);
         pwallet->ReacceptWalletTransactions();
     }
 
@@ -1284,7 +1284,7 @@ UniValue importmulti(const Config &config, const JSONRPCRequest &mainRequest) {
             nLowestTimestamp > minimumTimestamp
                 ? chainActive.FindEarliestAtLeast(
                       std::max<int64_t>(nLowestTimestamp - TIMESTAMP_WINDOW, 0))
-                : chainActive.Genesis();
+                : chainActive.Root();
         CBlockIndex *scannedRange = nullptr;
         if (pindex) {
             scannedRange = pwallet->ScanForWalletTransactions(pindex, true);

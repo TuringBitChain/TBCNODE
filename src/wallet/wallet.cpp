@@ -3833,8 +3833,10 @@ void CWallet::GetKeyBirthTimes(
 
     // Map in which we'll infer heights of other keys the tip can be
     // reorganized; use a 144-block safety margin.
-    CBlockIndex *pindexMax =
-        chainActive[std::max(0, chainActive.Height() - 144)];
+    CBlockIndex *chainRoot = chainActive.Root();
+    const int oldestAvailableHeight = chainRoot ? chainRoot->nHeight : 0;
+    CBlockIndex *pindexMax = chainActive[
+        std::max(oldestAvailableHeight, chainActive.Height() - 144)];
     std::map<CKeyID, CBlockIndex *> mapKeyFirstBlock;
     std::set<CKeyID> setKeys;
     GetKeys(setKeys);
@@ -4213,7 +4215,7 @@ CWallet *CWallet::CreateWalletFromFile(const CChainParams &chainParams,
 
     LOCK(cs_main);
 
-    CBlockIndex *pindexRescan = chainActive.Genesis();
+    CBlockIndex *pindexRescan = chainActive.Root();
     if (!gArgs.GetBoolArg("-rescan", false)) {
         CWalletDB walletdb(*walletInstance->dbw);
         CBlockLocator locator;

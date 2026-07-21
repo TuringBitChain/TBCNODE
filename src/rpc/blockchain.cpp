@@ -99,9 +99,11 @@ UniValue blockheaderToJSON(const CBlockIndex *blockindex) {
     result.push_back(Pair("difficulty", GetDifficulty(blockindex)));
     result.push_back(Pair("chainwork", blockindex->nChainWork.GetHex()));
 
-    if (blockindex->pprev) {
+    const uint256 previousHash =
+        blockindex->GetBlockHeader().hashPrevBlock;
+    if (!previousHash.IsNull()) {
         result.push_back(Pair("previousblockhash",
-                              blockindex->pprev->GetBlockHash().GetHex()));
+                              previousHash.GetHex()));
     }
 
     if (pnext) {
@@ -581,6 +583,10 @@ UniValue getblockhash(const Config &config, const JSONRPCRequest &request) {
     }
 
     CBlockIndex *pblockindex = chainActive[nHeight];
+    if (!pblockindex) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+                           "Block height is outside retained history");
+    }
     return pblockindex->GetBlockHash().GetHex();
 }
 
@@ -991,6 +997,10 @@ void getblockbyheight(const Config &config, const JSONRPCRequest &jsonRPCReq,
     }
 
     CBlockIndex *pblockindex = chainActive.operator[](nHeight);
+    if (!pblockindex) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+                           "Block height is outside retained history");
+    }
 
     getblockdata(pblockindex, config, jsonRPCReq, httpReq, processedInBatch);
 }
@@ -1181,9 +1191,11 @@ std::string headerBlockToJSON(const Config &config,
     result.push_back(Pair("difficulty", GetDifficulty(blockindex)));
     result.push_back(Pair("chainwork", blockindex->nChainWork.GetHex()));
 
-    if (blockindex->pprev) {
+    const uint256 previousHash =
+        blockindex->GetBlockHeader().hashPrevBlock;
+    if (!previousHash.IsNull()) {
         result.push_back(Pair("previousblockhash",
-                              blockindex->pprev->GetBlockHash().GetHex()));
+                              previousHash.GetHex()));
     }
 
     if (pnext) {
@@ -1599,7 +1611,7 @@ UniValue getblockchaininfo(const Config &config,
              GuessVerificationProgress(config.GetChainParams().TxData(),
                                        chainActive.Tip())));
     obj.push_back(Pair("chainwork", chainActive.Tip()->nChainWork.GetHex()));
-    obj.push_back(Pair("pruned", fPruneMode));
+    obj.push_back(Pair("pruned", fPruneMode || fPruneBlocksMode));
 
     const Consensus::Params &consensusParams =
         config.GetChainParams().GetConsensus();
@@ -1613,7 +1625,12 @@ UniValue getblockchaininfo(const Config &config,
     softforks.push_back(SoftForkDesc("csv", 5, tip, consensusParams));
     obj.push_back(Pair("softforks", softforks));
 
-    if (fPruneMode) {
+    if (fPruneBlocksMode) {
+        CBlockIndex *root = chainActive.Root();
+        if (root) {
+            obj.push_back(Pair("pruneheight", root->nHeight));
+        }
+    } else if (fPruneMode) {
         CBlockIndex *block = chainActive.Tip();
         while (block && block->pprev && block->pprev->nStatus.hasData()) {
             block = block->pprev;
@@ -1894,6 +1911,13 @@ UniValue invalidateblock(const Config &config, const JSONRPCRequest &request) {
         }
 
         CBlockIndex *pblockindex = mapBlockIndex[hash];
+        if (fPruneBlocksMode &&
+            pblockindex->GetBlockHash() ==
+                config.GetChainParams().GetConsensus().TBCFirstBlockHash) {
+            throw JSONRPCError(
+                RPC_INVALID_PARAMETER,
+                "Cannot invalidate the retained TBC history anchor");
+        }
         InvalidateBlock(config, state, pblockindex);
     }
 
@@ -2014,17 +2038,20 @@ UniValue getchaintxstats(const Config &config, const JSONRPCRequest &request) {
     }
 
     assert(pindex != nullptr);
+    const CBlockIndex* chainRoot = chainActive.Root();
+    const int availableBlocks = chainRoot
+        ? pindex->nHeight - chainRoot->nHeight
+        : 0;
 
     if (request.params[0].isNull()) {
-        blockcount = std::max(0, std::min(blockcount, pindex->nHeight - 1));
+        blockcount = std::max(0, std::min(blockcount, availableBlocks));
     } else {
         blockcount = request.params[0].get_int();
 
         if (blockcount < 0 ||
-            (blockcount > 0 && blockcount >= pindex->nHeight)) {
+            blockcount > availableBlocks) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid block count: "
-                                                      "should be between 0 and "
-                                                      "the block's height - 1");
+                                                      "window exceeds retained history");
         }
     }
 
@@ -2272,8 +2299,10 @@ static UniValue getblockstatsbyheight(const Config &config,
                         current_tip));
     }
     pindex = chainActive[height];
-
-    assert(pindex != nullptr);
+    if (!pindex) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+                           "Block height is outside retained history");
+    }
     return getblockstats_impl(config, request, pindex);
 }
 
