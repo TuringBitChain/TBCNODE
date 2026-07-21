@@ -6197,8 +6197,11 @@ bool ContextualCheckTransactionForCurrentBlock(
 
 static bool ContextualCheckBlock(const Config &config, const CBlock &block,
                                  CValidationState &state,
-                                 const CBlockIndex *pindexPrev) {
-    const int nHeight = pindexPrev == nullptr ? 0 : pindexPrev->nHeight + 1;
+                                 const CBlockIndex *pindexPrev,
+                                 int nHeightOverride = -1) {
+    const int nHeight = nHeightOverride >= 0
+        ? nHeightOverride
+        : (pindexPrev == nullptr ? 0 : pindexPrev->nHeight + 1);
     const Consensus::Params &consensusParams =
         config.GetChainParams().GetConsensus();
 
@@ -6489,7 +6492,8 @@ static bool AcceptBlock(const Config& config,
     }
 
     if (!CheckBlock(config, block, state, pindex->nHeight) ||
-        !ContextualCheckBlock(config, block, state, pindex->pprev)) {
+        !ContextualCheckBlock(config, block, state, pindex->pprev,
+                              pindex->nHeight)) {
         if (state.IsInvalid() && !state.CorruptionPossible()) {
             pindex->nStatus = pindex->nStatus.withFailed();
             setDirtyBlockIndex.insert(pindex);
