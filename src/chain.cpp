@@ -114,7 +114,12 @@ CBlockIndex *CBlockIndex::GetAncestor(int height) {
             pindexWalk = pindexWalk->pskip;
             heightWalk = heightSkip;
         } else {
-            assert(pindexWalk->pprev);
+            // A pruned TBC history starts at a trusted block whose absolute
+            // height is greater than zero but whose previous index is not
+            // retained.  The requested ancestor is unavailable in that case.
+            if (!pindexWalk->pprev) {
+                return nullptr;
+            }
             pindexWalk = pindexWalk->pprev;
             heightWalk--;
         }
