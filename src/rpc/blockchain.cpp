@@ -1708,7 +1708,9 @@ UniValue getchaintips(const Config &config, const JSONRPCRequest &request) {
     }
 
     // Always report the currently active tip.
-    setTips.insert(chainActive.Tip());
+    if (chainActive.Tip()) {
+        setTips.insert(chainActive.Tip());
+    }
 
     /* Construct the output array.  */
     UniValue res(UniValue::VARR);
@@ -1717,8 +1719,13 @@ UniValue getchaintips(const Config &config, const JSONRPCRequest &request) {
         obj.push_back(Pair("height", block->nHeight));
         obj.push_back(Pair("hash", block->phashBlock->GetHex()));
 
-        const int branchLen =
-            block->nHeight - chainActive.FindFork(block)->nHeight;
+        const CBlockIndex* fork = chainActive.FindFork(block);
+        // A retained-history chain and the separately indexed genesis block
+        // need not have a common in-memory ancestor. Treat a disconnected root
+        // as forking before height zero instead of dereferencing a null fork.
+        const int branchLen = fork
+            ? block->nHeight - fork->nHeight
+            : block->nHeight + 1;
         obj.push_back(Pair("branchlen", branchLen));
 
         std::string status;
