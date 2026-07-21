@@ -598,6 +598,33 @@ void Sv2TemplateProvider::PruneBlockTemplateCache()
     }
 }
 
+void Sv2TemplateProvider::PruneBlockTemplateCacheByPrevHash(const uint256& stale_prevhash)
+{
+    AssertLockHeld(m_tp_mutex);
+
+    size_t pruned = 0;
+    for (auto it = m_block_template_cache.begin(); it != m_block_template_cache.end(); ) {
+        if (it->second.header.hashPrevBlock == stale_prevhash) {
+            it = EraseBlockTemplateCacheEntry(it);
+            ++pruned;
+        } else {
+            ++it;
+        }
+    }
+
+    bool cleared_cached_workset = false;
+    if (m_cached_workset &&
+        m_cached_workset->block_template->getBlockRef()->hashPrevBlock == stale_prevhash) {
+        m_cached_workset.reset();
+        cleared_cached_workset = true;
+    }
+
+    LogPrint(BCLog::SV2,
+        "PruneBlockTemplateCacheByPrevHash: stale_prevhash=%s removed=%zu remaining=%zu cached_workset_cleared=%d\n",
+        stale_prevhash.ToString(), pruned, m_block_template_cache.size(),
+        cleared_cached_workset ? 1 : 0);
+}
+
 void Sv2TemplateProvider::ClearBlockTemplateCache()
 {
     AssertLockHeld(m_tp_mutex);
@@ -1237,7 +1264,11 @@ void Sv2TemplateProvider::ThreadSv2SubmitHandler()
         }
         if (accepted) {
             LOCKMt(m_tp_mutex);
-            ClearBlockTemplateCache();
+            // submitBlock() may update the chain tip before returning. During that
+            // interval the SV2 handler can already cache templates for the newly
+            // accepted block. Only remove work built on the submitted block's old
+            // parent; a full clear here would also discard those new-tip templates.
+            PruneBlockTemplateCacheByPrevHash(submit.block->hashPrevBlock);
         }
         LogSv2ProcMem(accepted ? "post_validation_accepted" : "post_validation_rejected");
         LogPrint(BCLog::SV2,

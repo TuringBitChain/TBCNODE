@@ -335,6 +335,7 @@ private:
 
     /* Forget templates from before the last block, but with a few seconds margin. */
     void PruneBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
+    void PruneBlockTemplateCacheByPrevHash(const uint256& stale_prevhash) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
     void ClearBlockTemplateCache() EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
     BlockTemplateCache::iterator EraseBlockTemplateCacheEntry(BlockTemplateCache::iterator it) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
     bool CacheBlockTemplate(uint64_t template_id, const std::shared_ptr<BlockTemplate>& block_template) EXCLUSIVE_LOCKS_REQUIRED(m_tp_mutex);
