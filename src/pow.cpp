@@ -164,9 +164,6 @@ static uint32_t GetNextEDAWorkRequired(const CBlockIndex *pindexPrev,
 
 uint32_t GetNextWorkRequired(const CBlockIndex *pindexPrev,
                              const CBlockHeader *pblock, const Config &config) {
-    if(824188 == pindexPrev->nHeight){
-        return 0x1d00ffff;
-    }
     const Consensus::Params &params = config.GetChainParams().GetConsensus();
 
     // Genesis block
@@ -180,6 +177,27 @@ uint32_t GetNextWorkRequired(const CBlockIndex *pindexPrev,
     }
 
     if (IsDAAEnabled(config, pindexPrev)) {
+        if (fPruneBlocksMode &&
+            pindexPrev->nHeight >= params.TBCFirstBlockHeight) {
+            // The BCH DAA needs a 144-block window and GetSuitableBlock()
+            // needs two additional ancestors at both ends of that window.
+            // Those ancestors do not exist immediately after the trusted TBC
+            // pruning anchor.  During this bootstrap window, trust the target
+            // encoded in the retained block header; CheckBlockHeader() still
+            // verifies that the block hash satisfies that target.  Resume the
+            // normal DAA as soon as all required retained ancestors exist.
+            const int firstHeight = pindexPrev->nHeight - 144;
+            const CBlockIndex *pindexFirst =
+                pindexPrev->GetAncestor(firstHeight);
+            const bool haveLastSuitableBlock =
+                pindexPrev->pprev && pindexPrev->pprev->pprev;
+            const bool haveFirstSuitableBlock =
+                pindexFirst && pindexFirst->pprev &&
+                pindexFirst->pprev->pprev;
+            if (!haveLastSuitableBlock || !haveFirstSuitableBlock) {
+                return pblock->nBits;
+            }
+        }
         return GetNextCashWorkRequired(pindexPrev, pblock, config);
     }
 
