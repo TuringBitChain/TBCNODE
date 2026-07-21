@@ -1277,7 +1277,7 @@ std::vector<TxMempoolInfo> CTxMemPool::InfoAllNL() const {
 }
 
 CTransactionRef CTxMemPool::Get(const uint256 &txid) const {
-    std::unique_lock lock(smtx);
+    std::shared_lock lock(smtx);
     return GetNL(txid);
 }
 
