@@ -351,6 +351,14 @@ void Sv2TemplateProvider::ThreadSv2Handler()
         // Note: initial work is sent in CoinbaseOutputDataSize() callback,
         // so no duplicate initial-work dispatch is needed here.
 
+        // AppInit starts the import thread asynchronously, so the SV2 server
+        // may already be listening while -reindex is still rebuilding the
+        // active chain. Never publish work on an intermediate reindex tip.
+        if (IsInitialBlockDownload()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            continue;
+        }
+
         auto current_tip = m_mining.getTip();
         if (!current_tip) {
             // Node not yet ready (IBD or startup); wait and retry
@@ -462,6 +470,11 @@ void Sv2TemplateProvider::ThreadSv2MempoolHandler()
     };
 
     while (!m_flag_interrupt_sv2) {
+        if (IsInitialBlockDownload()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            continue;
+        }
+
         auto timeout{std::min(std::chrono::milliseconds(100), std::chrono::milliseconds(m_options.fee_check_interval))};
         last_fees = fees_previous_interval;
         bool tip_changed{false};
@@ -518,6 +531,15 @@ bool Sv2TemplateProvider::BuildNewWorkSetWithId(bool future_template,
                                                  uint64_t template_id,
                                                  NewWorkSet& newWorkSet)
 {
+    // This is the common backstop for handler, capacitor and builder callers.
+    // A template built during reindex can be valid for the temporary tip but
+    // become a stale fork as soon as the remaining block file is imported.
+    if (IsInitialBlockDownload()) {
+        LogPrint(BCLog::SV2,
+                 "BuildNewWorkSetWithId: node is in initial block download; work suppressed\n");
+        return false;
+    }
+
     // No m_tp_mutex required — only touches the mining interface and a
     // throwaway BlockTemplate. createNewBlock takes its own cs_main / mempool
     // locks internally.
@@ -1094,6 +1116,10 @@ void Sv2TemplateProvider::ThreadBuilder()
             continue;
         }
 
+        if (IsInitialBlockDownload()) {
+            continue;
+        }
+
         // Decide whether a rebuild is warranted; grab a placeholder id.
         // Three independent triggers:
         //   - cold start: nothing in cache yet
@@ -1293,6 +1319,13 @@ void Sv2TemplateProvider::SubmitSolution(node::Sv2SubmitSolutionMsg solution)
             solution.m_template_id, solution.m_version,
             solution.m_header_timestamp, solution.m_header_nonce);
 
+        // Do not accept work created against an intermediate import/reindex
+        // tip, including work a client retained across a node restart.
+        if (IsInitialBlockDownload()) {
+            LogPrintf("SV2 SubmitSolution: node is in initial block download, solution dropped\n");
+            return;
+        }
+
         auto cb = MakeTransactionRef(std::move(solution.m_coinbase_tx));
 
         CachedTemplate cached_template;
@@ -1409,6 +1442,16 @@ void Sv2TemplateProvider::CoinbaseOutputDataSize(Sv2Client& client, node::Sv2Coi
     const bool size_changed = client.m_initial_work_sent &&
         (client.m_coinbase_tx_outputs_size != coinbase_tx_outputs_size.m_coinbase_output_max_additional_size);
     client.m_coinbase_tx_outputs_size = coinbase_tx_outputs_size.m_coinbase_output_max_additional_size;
+
+    // Keep the negotiated connection alive. ThreadSv2Handler will send the
+    // initial work after reindex/IBD completes because initial_work_sent stays
+    // false and coinbase_output_data_size_recv is already set.
+    if (IsInitialBlockDownload()) {
+        LogPrint(BCLog::SV2,
+                 "CoinbaseOutputDataSize: client id=%zu waiting for initial block download\n",
+                 client.m_id);
+        return;
+    }
 
     // Send (or re-send) work when the client first declares its coinbase output size,
     // or when it updates the size requirement (sv2-apps restarts monitoring in this case).
