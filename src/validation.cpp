@@ -7540,23 +7540,42 @@ bool InitBlockIndex(const Config &config) {
 
 void ReindexAllBlockFiles(const Config &config, CBlockTreeDB *pblocktree, bool& fReindex)
 {
-    
-    int nFile = 0;
-    while (true) {
-        CDiskBlockPos pos(nFile, 0);
-        if (!fs::exists(GetBlockPosFilename(pos, "blk"))) {
-            // No block files left to reindex
-            break;
+    // Do not stop at the first missing file number. TBC retained-history
+    // pruning may leave deliberate gaps, while later files still contain the
+    // active post-anchor chain.
+    std::map<int, fs::path> blockFiles;
+    const fs::path blocksDir = GetDataDir() / "blocks";
+    if (fs::exists(blocksDir)) {
+        for (fs::directory_iterator it(blocksDir);
+             it != fs::directory_iterator(); ++it) {
+            if (!fs::is_regular_file(*it)) {
+                continue;
+            }
+            const std::string name = it->path().filename().string();
+            if (name.size() != 12 || name.compare(0, 3, "blk") != 0 ||
+                name.compare(8, 4, ".dat") != 0) {
+                continue;
+            }
+            int32_t fileNumber = -1;
+            if (ParseInt32(name.substr(3, 5), &fileNumber) &&
+                fileNumber >= 0) {
+                blockFiles.emplace(fileNumber, it->path());
+            }
         }
+    }
+
+    for (const auto& entry : blockFiles) {
+        const int nFile = entry.first;
+        CDiskBlockPos pos(nFile, 0);
         FILE *file = CDiskFiles::OpenBlockFile(pos, true);
         if (!file) {
-            // This error is logged in OpenBlockFile
-            break;
+            // This error is logged in OpenBlockFile. Continue so one damaged
+            // file does not hide every later retained file as well.
+            continue;
         }
         LogPrintf("Reindexing block file blk%05u.dat...\n",
             (unsigned int)nFile);
         LoadExternalBlockFile(config, file, &pos);
-        nFile++;
     }
 
     pblocktree->WriteReindexing(false);

@@ -1348,6 +1348,13 @@ void CleanupBlockRevFiles() {
     // removing block files.
     int nContigCounter = 0;
     for (const std::pair<std::string, fs::path> &item : mapBlockFiles) {
+        // TBC retained-history data may intentionally contain gaps in block
+        // file numbering. Reindex enumerates the files that actually exist;
+        // deleting everything after the first gap would destroy retained
+        // post-anchor blocks before they can be indexed.
+        if (fPruneBlocksMode) {
+            break;
+        }
         if (atoi(item.first) == nContigCounter) {
             nContigCounter++;
             continue;
