@@ -1710,23 +1710,8 @@ UniValue getchaintips(const Config &config, const JSONRPCRequest &request) {
     std::set<const CBlockIndex *> setOrphans;
     std::set<const CBlockIndex *> setPrevs;
 
-    const CBlockIndex* retainedRoot = chainActive.Root();
-    const auto belongsToRetainedChain = [retainedRoot](const CBlockIndex* block) {
-        if (!fPruneBlocksMode || retainedRoot == nullptr) {
-            return true;
-        }
-        if (block == nullptr || block->nHeight < retainedRoot->nHeight) {
-            return false;
-        }
-        return block->GetAncestor(retainedRoot->nHeight) == retainedRoot;
-    };
-
     for (const std::pair<const uint256, CBlockIndex *> &item : mapBlockIndex) {
-        // Reindexing a retained-history blk file may also encounter standalone
-        // pre-anchor blocks (most commonly genesis). They are not usable forks
-        // of the trusted TBC chain and must not be reported as chain tips.
-        if (!chainActive.Contains(item.second) &&
-            belongsToRetainedChain(item.second)) {
+        if (!chainActive.Contains(item.second)) {
             setOrphans.insert(item.second);
             setPrevs.insert(item.second->pprev);
         }
