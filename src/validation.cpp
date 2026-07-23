@@ -50,7 +50,6 @@
 #include "versionbits.h"
 #include "warnings.h"
 #include "blockfileinfostore.h"
-#include "time_consuming.h"
 #include "script/script_num.h"
 #include "key.h"
 #include "pubkey.h"
@@ -783,12 +782,18 @@ bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
 
 bool FilledMinerBill(const CTransaction& tx)
 {
+    if (tx.vin.empty() || tx.vout.empty()) {
+        return false;
+    }
+
     const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
     const CScript &chargeInputScript = tx.vin[0].scriptSig;
     uint64_t inputScriptIndex = 0;
     uint64_t outputScriptIndex = 0;
 
-    if (chargeOutputScript.empty() || chargeInputScript.empty()) throw std::runtime_error("Empty coinbase charge input/output script");
+    if (chargeOutputScript.empty() || chargeInputScript.empty()) {
+        return false;
+    }
 
     // default pubkeyA
     std::vector<uint8_t> pubkeyA = {0x03, 0x18, 0xa2, 0x74, 0x33, 0x7b, 0x8f, 0x52, 0x72, 0x6e,
@@ -860,8 +865,9 @@ bool FilledMinerBill(const CTransaction& tx)
         LogPrintf("The invoice of this block is overdue !!! (%d < %d) \n", perHeight, nowHeight);
         return false;
     }
-    else if ( perHeight - 2016 < nowHeight ) {
-        LogPrintf("The invoice of this block will be overdue in %d blocks !!!\n", perHeight-nowHeight  );
+    const uint64_t remainingPermissionBlocks = perHeight - nowHeight;
+    if (remainingPermissionBlocks < 2016) {
+        LogPrintf("The invoice of this block will be overdue in %d blocks !!!\n", remainingPermissionBlocks);
     }
 
     // ensure coinbase fees are within the permitted range. 
@@ -870,8 +876,20 @@ bool FilledMinerBill(const CTransaction& tx)
         return false;
     }
     uint64_t minerFeeRate = vectorLEtoU64(minerFeeRateVec);
-    uint64_t lowestLimitCoinbaseFee = tx.GetValueOut().GetSatoshis() * minerFeeRate / 100;
-    uint64_t coinbaseFee =  tx.vout[0].nValue.GetSatoshis();
+    Amount totalOutputValue(0);
+    for (const auto& txout : tx.vout) {
+        if (!MoneyRange(txout.nValue)) {
+            return false;
+        }
+        totalOutputValue += txout.nValue;
+        if (!MoneyRange(totalOutputValue)) {
+            return false;
+        }
+    }
+    const uint64_t lowestLimitCoinbaseFee =
+        static_cast<uint64_t>(totalOutputValue.GetSatoshis()) * minerFeeRate / 100;
+    const uint64_t coinbaseFee =
+        static_cast<uint64_t>(tx.vout[0].nValue.GetSatoshis());
     if (coinbaseFee < lowestLimitCoinbaseFee) {
         LogPrintf("Coinbase fees are not within the permitted range.txid:%s, coinbaseFee=%ld, lowestLimitCoinbaseFee=%ld\n", tx.GetHash().ToString(), coinbaseFee, lowestLimitCoinbaseFee);
         return false;
@@ -903,6 +921,10 @@ bool FilledMinerBill(const CTransaction& tx)
 
     CPubKey cPubkeyA(pubkeyA.begin(), pubkeyA.end());
     CPubKey cPubkeyB(pubkeyB.begin(), pubkeyB.end());
+    if (sigA.empty() || sigB.empty() ||
+        !cPubkeyA.IsFullyValid() || !cPubkeyB.IsFullyValid()) {
+        return false;
+    }
 
     // get message and hash
     std::reverse(currentBlockHeightVec.begin(), currentBlockHeightVec.end());
