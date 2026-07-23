@@ -104,4 +104,29 @@ BOOST_AUTO_TEST_CASE(invalid_v2_cb_invalid_manager_sig) {
     CTransaction tx(mtx);
     BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
 }
+BOOST_AUTO_TEST_CASE(v1_invalid_inputs_fail_closed) {
+    const auto rejects = [](const CMutableTransaction& mtx) {
+        bool result = true;
+        const CTransaction tx(mtx);
+        BOOST_CHECK_NO_THROW(result = FilledMinerBill(tx));
+        BOOST_CHECK(!result);
+    };
+
+    CMutableTransaction empty;
+    rejects(empty);
+
+    CMutableTransaction inputOnly;
+    inputOnly.vin.emplace_back();
+    rejects(inputOnly);
+
+    CMutableTransaction outputOnly;
+    outputOnly.vout.emplace_back(Amount(0), CScript());
+    rejects(outputOnly);
+
+    CMutableTransaction emptyScripts;
+    emptyScripts.vin.emplace_back();
+    emptyScripts.vout.emplace_back(Amount(0), CScript());
+    rejects(emptyScripts);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
