@@ -136,6 +136,18 @@ BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
     // Solve PoW against the final merkle root (the same one submitSolution recomputes from
     // the coinbase); the assembler does not leave a valid merkle root on the template.
     block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    // A7 negative path: reject a nonce that does not satisfy PoW and leave the tip unchanged.
+    uint32_t invalid_nonce = block.nNonce;
+    while (CheckProofOfWork(block.GetHash(), block.nBits, testConfig)) {
+        block.nNonce = ++invalid_nonce;
+    }
+    BOOST_CHECK(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_invalid = mining->getTip();
+    BOOST_REQUIRE(tip_after_invalid.has_value());
+    BOOST_CHECK(tip_after_invalid->hash == tipA->hash);
+
+    // A6 positive path: solve and submit the same template.
     while (!CheckProofOfWork(block.GetHash(), block.nBits, testConfig)) ++block.nNonce;
     BOOST_CHECK(tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
 
@@ -143,8 +155,14 @@ BOOST_FIXTURE_TEST_CASE(mining_end_to_end, TestChain100Setup)
     BOOST_REQUIRE(tipB.has_value());
     BOOST_CHECK_EQUAL(tipB->height, tipA->height + 1);
 
-    // submitBlock must reject an already-connected block as a duplicate (false + "duplicate"),
-    // matching upstream submitBlock's `accepted && new_block && reason.empty()` contract.
+    // A7 negative path: resubmitting the accepted solution is rejected as a duplicate and
+    // cannot advance the tip again.
+    BOOST_CHECK(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_duplicate = mining->getTip();
+    BOOST_REQUIRE(tip_after_duplicate.has_value());
+    BOOST_CHECK(tip_after_duplicate->hash == tipB->hash);
+
+    // Preserve the existing submitBlock duplicate check.
     {
         std::string reason, debug;
         BOOST_CHECK(!mining->submitBlock(block, reason, debug));

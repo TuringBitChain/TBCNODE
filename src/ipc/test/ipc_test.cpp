@@ -333,6 +333,18 @@ void IpcMiningTest(const Config& config)
     // Solve PoW against the final merkle root (same root submitSolution recomputes).
     CBlock block = tmpl->getBlock();
     block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    // B7 negative path over IPC: an invalid nonce is rejected and the tip stays unchanged.
+    uint32_t invalid_nonce = block.nNonce;
+    while (CheckProofOfWork(block.GetHash(), block.nBits, config)) {
+        block.nNonce = ++invalid_nonce;
+    }
+    assert(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_invalid = mining->getTip();
+    assert(tip_after_invalid.has_value());
+    assert(tip_after_invalid->hash == tip->hash);
+
+    // B6 positive path: solve and submit the same template.
     while (!CheckProofOfWork(block.GetHash(), block.nBits, config)) {
         ++block.nNonce;
     }
@@ -343,6 +355,12 @@ void IpcMiningTest(const Config& config)
     auto tip2 = mining->getTip();
     assert(tip2.has_value());
     assert(tip2->height == tip->height + 1);
+
+    // B7 negative path over IPC: duplicate submission is rejected and the tip stays fixed.
+    assert(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_duplicate = mining->getTip();
+    assert(tip_after_duplicate.has_value());
+    assert(tip_after_duplicate->hash == tip2->hash);
 
     // Tear down: destroy Mining and Init first (server sees disconnects), then join.
     tmpl.reset();
@@ -408,6 +426,18 @@ void IpcListenMiningTest(const Config& config)
     // Solve PoW against the final merkle root.
     CBlock block = tmpl->getBlock();
     block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    // B7 negative path over a named Unix socket: reject invalid PoW without changing the tip.
+    uint32_t invalid_nonce = block.nNonce;
+    while (CheckProofOfWork(block.GetHash(), block.nBits, config)) {
+        block.nNonce = ++invalid_nonce;
+    }
+    assert(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_invalid = mining->getTip();
+    assert(tip_after_invalid.has_value());
+    assert(tip_after_invalid->hash == tip->hash);
+
+    // B6 positive path: solve and submit the same template.
     while (!CheckProofOfWork(block.GetHash(), block.nBits, config)) {
         ++block.nNonce;
     }
@@ -418,6 +448,12 @@ void IpcListenMiningTest(const Config& config)
     auto tip2 = mining->getTip();
     assert(tip2.has_value());
     assert(tip2->height == tip->height + 1);
+
+    // B7 negative path over a named Unix socket: reject duplicate submission and keep the tip.
+    assert(!tmpl->submitSolution(block.nVersion, block.nTime, block.nNonce, block.vtx[0]));
+    auto tip_after_duplicate = mining->getTip();
+    assert(tip_after_duplicate.has_value());
+    assert(tip_after_duplicate->hash == tip2->hash);
 
     // Teardown: destroy remote interfaces first so the server sees disconnects.
     tmpl.reset();
