@@ -866,8 +866,6 @@ void UpdateCoins(const CTransaction &tx, CCoinsViewCache &inputs,
 /** Context-independent validity checks for coinbase and non-coinbase transactions */
 bool CheckRegularTransaction(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled);
 
-void HeightFormScript(const CTransaction& tx,uint64_t &scriptSigHeight);
-
 bool CheckCoinbase(const CTransaction &tx, CValidationState &state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight = -1);
 
 namespace Consensus {
