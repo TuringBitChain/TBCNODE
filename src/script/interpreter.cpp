@@ -930,6 +930,10 @@ std::optional<bool> EvalScript(
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }
                             uint64_t partHashSize = vchSizeUint64 - remainVchSizeUint64;
+                            // The CSHA256 midstate constructor intentionally
+                            // does not restore buf[64]. A signed midstate must
+                            // represent the result of complete compression
+                            // rounds, so the pending buffer is empty.
                             if (partHashSize % 64 != 0) {
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }

@@ -170,9 +170,9 @@ BOOST_AUTO_TEST_CASE(aligned_resume_ignores_prefilled_buffer_bytes) {
 // This is the root cause behind the OP_PARTIAL_HASH issue: once hashSize % 64
 // is non-zero, resumption consumes whatever bytes happen to already live in the
 // storage slot that becomes buf[64]. The same logical inputs produce different
-// hashes when that hidden storage differs.
+// hashes when that hidden storage differs. OP_PARTIAL_HASH rejects this shape;
+// this low-level test documents why the constructor must remain block-aligned.
 BOOST_AUTO_TEST_CASE(unaligned_resume_depends_on_prefilled_buffer_bytes) {
-    // The opcode accepts this shape today because total size >= remaining size:
     // suffix = 32 bytes, declared total = 65 bytes => partHashSize = 33.
     const uint64_t declaredTotalSize = 65;
 
@@ -218,12 +218,10 @@ BOOST_AUTO_TEST_CASE(midstate_size_too_small) {
     BOOST_CHECK_EQUAL(err, SCRIPT_ERR_INVALID_STACK_OPERATION);
 }
 
-// --- Security spec for the upcoming fix (RED until the interpreter guards land) ---
+// --- OP_PARTIAL_HASH security invariants ---
 //
-// These two cases currently produce a non-deterministic / undefined result
-// because the SHA-256 midstate constructor never restores the 64-byte internal
-// buffer and the size field is read without a length bound. They encode the
-// behaviour the fix must enforce: reject rather than hash garbage.
+// These cases ensure the opcode rejects inputs that cannot safely satisfy the
+// block-aligned midstate constructor contract.
 
 // partHashSize not a multiple of 64: the midstate cannot be resumed safely
 // (Write() would consume uninitialised buffer bytes). Must be rejected.
