@@ -7,11 +7,16 @@
 #define BITCOIN_POW_H
 
 #include <cstdint>
+#include <map>
 
 class CBlockHeader;
 class CBlockIndex;
 class Config;
 class uint256;
+
+void SortingNetwork(
+    const CBlockIndex *pindex, int32_t selectSortingNum,
+    std::map<uint64_t, const CBlockIndex *> &mapBlocks);
 
 uint32_t GetNextWorkRequired(const CBlockIndex *pindexPrev,
                              const CBlockHeader *pblock, const Config &config);
