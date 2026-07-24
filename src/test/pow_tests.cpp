@@ -12,7 +12,53 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <limits>
+#include <map>
+#include <vector>
+
 BOOST_FIXTURE_TEST_SUITE(pow_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(sorting_network_uses_64_bit_keys) {
+    std::vector<CBlockIndex> blocks(4);
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        blocks[i].pprev = i == 0 ? nullptr : &blocks[i - 1];
+        blocks[i].nHeight = i;
+    }
+
+    const uint32_t maxTimestamp = std::numeric_limits<uint32_t>::max();
+    for (CBlockIndex &block : blocks) {
+        block.nTime = maxTimestamp;
+    }
+
+    std::map<uint64_t, const CBlockIndex *> sortedBlocks;
+    SortingNetwork(&blocks.back(), 3, sortedBlocks);
+
+    const uint64_t scaledMaxTimestamp =
+        static_cast<uint64_t>(maxTimestamp) * 3;
+    BOOST_REQUIRE_EQUAL(sortedBlocks.size(), 3);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(scaledMaxTimestamp), &blocks[3]);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(scaledMaxTimestamp + 1), &blocks[2]);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(scaledMaxTimestamp + 2), &blocks[1]);
+
+    // This timestamp produces UINT32_MAX after scaling. Duplicate offsets
+    // must not wrap the next two keys back to zero.
+    const uint32_t additionBoundaryTimestamp = maxTimestamp / 3;
+    for (CBlockIndex &block : blocks) {
+        block.nTime = additionBoundaryTimestamp;
+    }
+
+    sortedBlocks.clear();
+    SortingNetwork(&blocks.back(), 3, sortedBlocks);
+
+    const uint64_t additionBoundary =
+        static_cast<uint64_t>(additionBoundaryTimestamp) * 3;
+    BOOST_REQUIRE_EQUAL(additionBoundary,
+                        static_cast<uint64_t>(maxTimestamp));
+    BOOST_REQUIRE_EQUAL(sortedBlocks.size(), 3);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(additionBoundary), &blocks[3]);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(additionBoundary + 1), &blocks[2]);
+    BOOST_CHECK_EQUAL(sortedBlocks.at(additionBoundary + 2), &blocks[1]);
+}
 
 /* Test calculation of next difficulty target with no constraints applying */
 BOOST_AUTO_TEST_CASE(get_next_work) {

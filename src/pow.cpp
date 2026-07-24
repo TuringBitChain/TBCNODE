@@ -16,30 +16,30 @@
 #include "util.h"
 #include "validation.h"
 
-void SortingNetwork(const CBlockIndex *pindex,const int32_t selectSortingNum,std::map<uint32_t,const CBlockIndex*> &mapBlocks){
-    assert(selectSortingNum%2);
+void SortingNetwork(
+    const CBlockIndex *pindex, const int32_t selectSortingNum,
+    std::map<uint64_t, const CBlockIndex *> &mapBlocks) {
+    assert(pindex != nullptr);
+    assert(selectSortingNum > 0);
+    assert(selectSortingNum % 2);
     assert(pindex->nHeight >= selectSortingNum);
-    
-    std::map<uint32_t,int32_t>  mapIndex;
-    auto*                       pOperateIndex   = pindex;
-    int32_t                     bias            = selectSortingNum;
-    int32_t                     num             = 0;
 
-    for(; num < selectSortingNum; num++)
-    {
-        auto tmpNum     = pOperateIndex->nTime * bias;
-        auto mIndexit   = mapIndex.find(tmpNum);
-        if(mapIndex.end() == mIndexit)
-        {
-            mapIndex[tmpNum] = 0;
-        }
-        else
-        {
-            mapIndex[tmpNum]++;
-        }
-        mapBlocks[tmpNum + mapIndex[tmpNum]]    = pOperateIndex;
-        pOperateIndex                           = pOperateIndex->pprev;
+    std::map<uint64_t, uint32_t> duplicateOffsets;
+    const CBlockIndex *pOperateIndex = pindex;
+    const uint64_t bias = static_cast<uint64_t>(selectSortingNum);
 
+    for (int32_t num = 0; num < selectSortingNum; ++num) {
+        assert(pOperateIndex != nullptr);
+
+        const uint64_t scaledTimestamp =
+            static_cast<uint64_t>(pOperateIndex->nTime) * bias;
+        uint32_t &duplicateOffset = duplicateOffsets[scaledTimestamp];
+
+        // UINT32_MAX * INT32_MAX plus at most INT32_MAX - 1 duplicate
+        // offsets fits in uint64_t.
+        mapBlocks[scaledTimestamp + duplicateOffset] = pOperateIndex;
+        ++duplicateOffset;
+        pOperateIndex = pOperateIndex->pprev;
     }
 }
 
@@ -47,7 +47,7 @@ static const CBlockIndex *GetSuitableBlock(const CBlockIndex *pindex, const int3
     assert(freeSelectOddBlocks%2);
     assert(pindex->nHeight >= freeSelectOddBlocks);
 
-    std::map<uint32_t,const CBlockIndex*>   mapBlocks;
+    std::map<uint64_t, const CBlockIndex *> mapBlocks;
     SortingNetwork(pindex,freeSelectOddBlocks,mapBlocks);
 
     auto it = mapBlocks.begin();

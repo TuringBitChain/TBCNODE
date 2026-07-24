@@ -7,6 +7,7 @@
 #include "script/script_error.h"
 #include "script_flags.h"
 
+#include "crypto/common.h"
 #include "crypto/ripemd160.h"
 #include "crypto/sha1.h"
 #include "crypto/sha256.h"
@@ -19,6 +20,8 @@
 #include "uint256.h"
 #include "consensus/consensus.h"
 #include "script_config.h"
+
+#include <limits>
 
 namespace {
 
@@ -808,91 +811,97 @@ std::optional<bool> EvalScript(
                         if (vch[0] <1 ||vch[0] >7) {
                             return set_error(serror,SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
-                        //uint8_t condition = stack.stacktop(-1).GetElement().data();
-                        uint8_t condition = static_cast<uint8_t>(vch[0]);
+                        const uint8_t condition = vch[0];
                         stack.pop_back(); 
                         
                         const CTransaction *tx = checker.GetTx();
                         if (tx == nullptr) {
                             return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                         }
-                        uint256 result;
+
+                        // Scalar metadata uses the fixed-width little-endian
+                        // encoding defined by OP_PUSH_META.
+                        const auto pushUint32LE = [&stack](uint32_t value) {
+                            valtype bytes(4);
+                            WriteLE32(bytes.data(), value);
+                            stack.push_back(bytes);
+                        };
+                        const auto appendUint32LE =
+                            [](valtype& output, uint32_t value) {
+                                const size_t offset = output.size();
+                                output.resize(offset + 4);
+                                WriteLE32(output.data() + offset, value);
+                            };
+
                         switch (condition) {
                         case 1:
                         {
-                            uint32_t temp32;
-                            temp32 = tx->nVersion; 
-                            valtype nVersionBytes(4);
-                            memcpy(nVersionBytes.data(), (char *)&temp32, 4); 
-                            stack.push_back(nVersionBytes);
+                            pushUint32LE(
+                                static_cast<uint32_t>(tx->nVersion));
                             break;
                         }
                         case 2:
                         {
-                            uint32_t temp32;
-                            temp32 = tx->nLockTime; 
-                            valtype nLockTimeBytes(4);
-                            memcpy(nLockTimeBytes.data(), (char *)&temp32, 4); 
-                            stack.push_back(nLockTimeBytes);
+                            pushUint32LE(tx->nLockTime);
                             break;
                         }
                         case 3:
                         {
-                            uint32_t temp32;
-                            temp32 = tx->vin.size(); 
-                            valtype vinSizeBytes(4);
-                            memcpy(vinSizeBytes.data(), (char *)&temp32, 4); 
-                            stack.push_back(vinSizeBytes);
+                            if (tx->vin.size() >
+                                std::numeric_limits<uint32_t>::max()) {
+                                return set_error(
+                                    serror,
+                                    SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
+                            pushUint32LE(
+                                static_cast<uint32_t>(tx->vin.size()));
                             break;
                         }
                         case 4:
                         {
-                            uint32_t temp32;
-                            temp32 = tx->vout.size(); 
-                            valtype voutSizeBytes(4);
-                            memcpy(voutSizeBytes.data(), (char *)&temp32, 4); 
-                            stack.push_back(voutSizeBytes);
+                            if (tx->vout.size() >
+                                std::numeric_limits<uint32_t>::max()) {
+                                return set_error(
+                                    serror,
+                                    SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
+                            pushUint32LE(
+                                static_cast<uint32_t>(tx->vout.size()));
                             break;
                         }
                         case 5:
                         {
-                            result = checker.getSha256Inputs();
-                            valtype sha256InputsBytes(32);
-                            memcpy(sha256InputsBytes.data(), result.begin(), 32);
-                            stack.push_back(sha256InputsBytes);
+                            const uint256 result =
+                                checker.getSha256Inputs();
+                            stack.push_back(
+                                valtype(result.begin(), result.end()));
                             break;
                         }
                         case 6:
                         {
-                                valtype combinedResult;
-                                uint32_t temp32;
-                                unsigned int n = checker.GetnIn();
-                                if (n >= tx->vin.size()) {
-                                    return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
-                                }
-                                result = tx->vin[n].prevout.GetTxId();
-                                valtype txidBytes(32);
-                                memcpy(txidBytes.data(), result.begin(), 32);
-                                //reverse(txidBytes.begin(), txidBytes.end());
-                                combinedResult.insert(combinedResult.end(), txidBytes.begin(), txidBytes.end());
-                                temp32 =tx->vin[n].prevout.GetN();
-                                valtype prevoutNBytes(4);
-                                memcpy(prevoutNBytes.data(), (char *)&temp32, 4);
-                                combinedResult.insert(combinedResult.end(), prevoutNBytes.begin(), prevoutNBytes.end());
-                    
-                                temp32 = tx->vin[n].nSequence;
-                                valtype nSequenceBytes(4);
-                                memcpy(nSequenceBytes.data(), (char *)&temp32, 4);
-                                combinedResult.insert(combinedResult.end(), nSequenceBytes.begin(), nSequenceBytes.end());
-                                stack.push_back(combinedResult);
+                            const size_t n = checker.GetnIn();
+                            if (n >= tx->vin.size()) {
+                                return set_error(
+                                    serror,
+                                    SCRIPT_ERR_INVALID_STACK_OPERATION);
+                            }
+                            const CTxIn& txin = tx->vin[n];
+                            const TxId& txid = txin.prevout.GetTxId();
+                            valtype combinedResult(
+                                txid.begin(), txid.end());
+                            appendUint32LE(
+                                combinedResult, txin.prevout.GetN());
+                            appendUint32LE(
+                                combinedResult, txin.nSequence);
+                            stack.push_back(combinedResult);
                             break;
                         }
                         case 7:
                         {
-                            result = checker.getSha256Outputs();
-                            valtype sha256OutputsBytes(32);
-                            memcpy(sha256OutputsBytes.data(), result.begin(), 32);
-                            stack.push_back(sha256OutputsBytes);
+                            const uint256 result =
+                                checker.getSha256Outputs();
+                            stack.push_back(
+                                valtype(result.begin(), result.end()));
                             break;
                         }
                         default:
@@ -930,6 +939,10 @@ std::optional<bool> EvalScript(
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }
                             uint64_t partHashSize = vchSizeUint64 - remainVchSizeUint64;
+                            // The CSHA256 midstate constructor intentionally
+                            // does not restore buf[64]. A signed midstate must
+                            // represent the result of complete compression
+                            // rounds, so the pending buffer is empty.
                             if (partHashSize % 64 != 0) {
                                 return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
                             }

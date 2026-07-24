@@ -158,6 +158,46 @@ static void CheckAllBitwiseOpErrors(const stacktype &stack, ScriptError expected
     CheckOpError(stack, OP_XOR, expected_error);
 }
 
+static valtype RunPushMetaForAllFlags(
+    const CTransaction& tx,
+    unsigned int inputIndex,
+    int64_t condition)
+{
+    const Config& config = GlobalConfig::GetConfig();
+    TransactionSignatureChecker sigchecker(
+        &tx, inputIndex, Amount(0));
+    auto source = task::CCancellationSource::Make();
+    valtype output;
+
+    for (size_t i = 0; i < flagset.size(); ++i) {
+        ScriptError err = SCRIPT_ERR_OK;
+        LimitedStack stack(UINT32_MAX);
+        const auto result = EvalScript(
+            config,
+            true,
+            source->GetToken(),
+            stack,
+            CScript() << condition << OP_PUSH_META,
+            flagset[i],
+            sigchecker,
+            &err);
+
+        BOOST_REQUIRE(result.has_value());
+        BOOST_REQUIRE(result.value());
+        BOOST_REQUIRE_EQUAL(err, SCRIPT_ERR_OK);
+        BOOST_REQUIRE_EQUAL(stack.size(), 1U);
+
+        const valtype current = stack.stacktop(-1).GetElement();
+        if (i == 0) {
+            output = current;
+        } else {
+            BOOST_CHECK(current == output);
+        }
+    }
+
+    return output;
+}
+
 BOOST_AUTO_TEST_CASE(push_meta_requires_transaction_context)
 {
     for (int64_t condition = 1; condition <= 7; ++condition) {
@@ -190,6 +230,117 @@ BOOST_AUTO_TEST_CASE(push_meta_input_metadata_requires_valid_input_index)
 
     BOOST_CHECK(!r.value());
     BOOST_CHECK_EQUAL(err, SCRIPT_ERR_INVALID_STACK_OPERATION);
+}
+
+BOOST_AUTO_TEST_CASE(push_meta_rejects_invalid_selector_encoding)
+{
+    CheckErrorForAllFlags(
+        {},
+        CScript() << OP_PUSH_META,
+        SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckErrorForAllFlags(
+        {},
+        CScript() << valtype{} << OP_PUSH_META,
+        SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckErrorForAllFlags(
+        {},
+        CScript() << valtype{0x00} << OP_PUSH_META,
+        SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckErrorForAllFlags(
+        {},
+        CScript() << valtype{0x01, 0x00} << OP_PUSH_META,
+        SCRIPT_ERR_INVALID_STACK_OPERATION);
+    CheckErrorForAllFlags(
+        {},
+        CScript() << int64_t{8} << OP_PUSH_META,
+        SCRIPT_ERR_INVALID_STACK_OPERATION);
+}
+
+BOOST_AUTO_TEST_CASE(push_meta_rejects_truncated_input_index)
+{
+    const Config& config = GlobalConfig::GetConfig();
+    CMutableTransaction mutableTx;
+    mutableTx.vin.emplace_back();
+    const CTransaction tx(mutableTx);
+    TransactionSignatureChecker sigchecker(&tx, 256, Amount(0));
+    ScriptError err = SCRIPT_ERR_OK;
+    LimitedStack stack(UINT32_MAX);
+    auto source = task::CCancellationSource::Make();
+
+    const auto result = EvalScript(
+        config,
+        true,
+        source->GetToken(),
+        stack,
+        CScript() << int64_t{6} << OP_PUSH_META,
+        0,
+        sigchecker,
+        &err);
+
+    BOOST_REQUIRE(result.has_value());
+    BOOST_CHECK(!result.value());
+    BOOST_CHECK_EQUAL(err, SCRIPT_ERR_INVALID_STACK_OPERATION);
+}
+
+BOOST_AUTO_TEST_CASE(push_meta_serializes_all_selectors_little_endian)
+{
+    CMutableTransaction mutableTx;
+    mutableTx.nVersion = 0x01020304;
+    mutableTx.nLockTime = 0xa1b2c3d4U;
+    mutableTx.vin.emplace_back(
+        COutPoint(
+            uint256S(
+                "000102030405060708090a0b0c0d0e0f"
+                "101112131415161718191a1b1c1d1e1f"),
+            0x01020304U),
+        CScript(),
+        0x05060708U);
+    mutableTx.vin.emplace_back(
+        COutPoint(
+            uint256S(
+                "f0e0d0c0b0a090807060504030201000"
+                "ffeeddccbbaa99887766554433221100"),
+            0x11223344U),
+        CScript(),
+        0x55667788U);
+    mutableTx.vout.emplace_back(Amount(1), CScript());
+    mutableTx.vout.emplace_back(Amount(2), CScript());
+    mutableTx.vout.emplace_back(Amount(3), CScript());
+    const CTransaction tx(mutableTx);
+
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 1) ==
+        valtype({0x04, 0x03, 0x02, 0x01}));
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 2) ==
+        valtype({0xd4, 0xc3, 0xb2, 0xa1}));
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 3) ==
+        valtype({0x02, 0x00, 0x00, 0x00}));
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 4) ==
+        valtype({0x03, 0x00, 0x00, 0x00}));
+
+    const TransactionSignatureChecker checker(&tx, 1, Amount(0));
+    const uint256 inputsHash = checker.getSha256Inputs();
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 5) ==
+        valtype(inputsHash.begin(), inputsHash.end()));
+
+    const CTxIn& selectedInput = tx.vin[1];
+    const TxId& txid = selectedInput.prevout.GetTxId();
+    valtype expectedInputMetadata(txid.begin(), txid.end());
+    expectedInputMetadata.insert(
+        expectedInputMetadata.end(),
+        {0x44, 0x33, 0x22, 0x11,
+         0x88, 0x77, 0x66, 0x55});
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 6) == expectedInputMetadata);
+
+    const uint256 outputsHash = checker.getSha256Outputs();
+    BOOST_CHECK(
+        RunPushMetaForAllFlags(tx, 1, 7) ==
+        valtype(outputsHash.begin(), outputsHash.end()));
 }
 
 static void CheckBinaryOp(const valtype &a, const valtype &b, opcodetype op, const valtype &expected) {
