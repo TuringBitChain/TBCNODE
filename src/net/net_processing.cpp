@@ -1248,9 +1248,8 @@ static void SendBlock(
 {
     auto stream = StreamBlockFromDisk(index, pfrom->GetSendVersion());
 
-    if (!stream)
-    {
-        assert(!"can not load block from disk");
+    if (!stream) {
+        return;
     }
 
     auto metaData = index.GetDiskBlockMetaData();
