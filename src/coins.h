@@ -233,7 +233,12 @@ public:
     /**
      * Return a reference to a Coin in the cache, or a pruned one if not found.
      * This is more efficient than GetCoin. Modifications to other cache entries
-     * are allowed while accessing the returned pointer.
+     * are allowed while accessing the returned reference.
+     *
+     * The cache mutex only protects the lookup and is released before the
+     * caller uses the returned reference. The caller must ensure that this
+     * cache entry is not erased or modified for the lifetime of the reference.
+     * Use GetCoin() when accessing a cache that can be mutated concurrently.
      */
     const Coin &AccessCoin(const COutPoint &output) const;
 
@@ -304,6 +309,10 @@ public:
     double GetPriority(const CTransaction &tx, int nHeight,
                        Amount &inChainInputValue) const;
 
+    /**
+     * Return a reference to an output in the cache. The returned reference has
+     * the same lifetime and synchronization requirements as AccessCoin().
+     */
     const CTxOut &GetOutputFor(const CTxIn &input) const;
 
 private:

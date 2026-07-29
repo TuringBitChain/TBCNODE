@@ -1262,7 +1262,10 @@ static std::optional<bool> CheckInputsFromMempoolAndCache(
             assert(txFrom->vout.size() > txin.prevout.GetN());
             assert(txFrom->vout[txin.prevout.GetN()] == coin.GetTxOut());
         } else {
-            const Coin &coinFromDisk = pcoinsTip->AccessCoin(txin.prevout);
+            Coin coinFromDisk;
+            const bool coinFromDiskFound =
+                pcoinsTip->GetCoin(txin.prevout, coinFromDisk);
+            assert(coinFromDiskFound);
             assert(!coinFromDisk.IsSpent());
             assert(coinFromDisk.GetTxOut() == coin.GetTxOut());
         }
