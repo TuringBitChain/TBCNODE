@@ -6,6 +6,8 @@
 #include "policy/policy.h"
 #include "config.h"
 
+#include <algorithm>
+
 COrphanTxns::COrphanTxns(
     size_t maxCollectedOutpoints,
     size_t maxExtraTxnsForCompactBlock,
@@ -323,13 +325,16 @@ void COrphanTxns::collectTxnOutpoints(const CTransaction& tx) {
     if (mMaxCollectedOutpoints &&
         (mCollectedOutpoints.size() + nTxOutpointsNum > mMaxCollectedOutpoints)) {
         if (nTxOutpointsNum < mMaxCollectedOutpoints) {
+            const size_t nOutpointsToTrim {
+                std::min(nTxOutpointsNum, mCollectedOutpoints.size())
+            };
             // Discard a set of the oldest elements (estimated by nTxOutpointsNum value)
             std::rotate(
                     mCollectedOutpoints.begin(),
-                    mCollectedOutpoints.begin() + nTxOutpointsNum,
+                    mCollectedOutpoints.begin() + nOutpointsToTrim,
                     mCollectedOutpoints.end());
             // Remove old elements to make a room for new outpoints.
-            mCollectedOutpoints.resize(mCollectedOutpoints.size() - nTxOutpointsNum);
+            mCollectedOutpoints.resize(mCollectedOutpoints.size() - nOutpointsToTrim);
         } else {
             mCollectedOutpoints.clear();
         }

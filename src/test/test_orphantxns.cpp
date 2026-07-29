@@ -345,6 +345,47 @@ BOOST_AUTO_TEST_CASE(test_orphantxns_maxcollectedoutpoints) {
     }
 }
 
+BOOST_AUTO_TEST_CASE(test_orphantxns_maxcollectedoutpoints_trim_more_than_collected) {
+    size_t nMaxCollectedOutpoints = 100;
+    size_t nInitialOutpoints = 40;
+    size_t nNewOutpoints = 75;
+    // Create orphan txn's object.
+    std::shared_ptr<COrphanTxns> orphanTxns {
+        std::make_shared<COrphanTxns>(
+                nMaxCollectedOutpoints,
+                maxExtraTxnsForCompactBlock,
+                maxTxSizePolicy)
+    };
+
+    // Collect fewer outpoints than the next transaction will create.
+    auto txn1 = CreateOrphanTxn(
+                    TxSource::p2p,
+                    CreateTxnInputs(1),
+                    CreateTxnOutputs(nInitialOutpoints));
+    orphanTxns->collectTxnOutpoints(*(txn1->GetTxnPtr()));
+
+    // This used to trim by nNewOutpoints even though only nInitialOutpoints
+    // elements were present, moving the rotate midpoint past end().
+    auto txn2 = CreateOrphanTxn(
+                    TxSource::p2p,
+                    CreateTxnInputs(1),
+                    CreateTxnOutputs(nNewOutpoints));
+    orphanTxns->collectTxnOutpoints(*(txn2->GetTxnPtr()));
+
+    std::vector<COutPoint> vExpectedOutpoints {};
+    auto txn2id = txn2->GetTxnPtr()->GetId();
+    for (size_t i=0; i<nNewOutpoints; ++i) {
+        vExpectedOutpoints.emplace_back(COutPoint{txn2id, (uint32_t)i});
+    }
+
+    auto vReturnedOutpoints = orphanTxns->getCollectedOutpoints();
+    BOOST_REQUIRE(vReturnedOutpoints.size() == nNewOutpoints);
+    BOOST_CHECK(
+        std::equal(vExpectedOutpoints.begin(),
+                   vExpectedOutpoints.end(),
+                   vReturnedOutpoints.begin()));
+}
+
 BOOST_AUTO_TEST_CASE(test_orphantxns_erasecollectedoutpointsfromtxns) {
     size_t nMaxCollectedOutpoints = 100;
     size_t nTxn1NumOfOutpoints = 10;
