@@ -21,7 +21,13 @@
 #include "consensus/consensus.h"
 #include "script_config.h"
 
+#include <openssl/ec.h>
+#include <openssl/ecdsa.h>
+#include <openssl/obj_mac.h>
+
+#include <array>
 #include <limits>
+#include <memory>
 
 namespace {
 
@@ -271,6 +277,7 @@ enum class SignatureMethod : uint8_t {
     NONE = 0x00,
     ECDSA = 0x01,
     SCHNORR = 0x02,
+    ECDSA_P256 = 0x03,
 };
 
 bool IsValidDataConversionMethod(DataConversionMethod dataConversionMethod) {
@@ -281,7 +288,8 @@ bool IsValidDataConversionMethod(DataConversionMethod dataConversionMethod) {
 bool IsValidSignatureMethod(SignatureMethod signatureMethod) {
     return signatureMethod == SignatureMethod::NONE || 
             signatureMethod == SignatureMethod::ECDSA || 
-            signatureMethod == SignatureMethod::SCHNORR;
+            signatureMethod == SignatureMethod::SCHNORR ||
+            signatureMethod == SignatureMethod::ECDSA_P256;
 }
 
 bool CheckDataFlag(const std::vector<uint8_t> &vchFlag, uint32_t flags,
@@ -352,6 +360,8 @@ bool CheckPubKeyEncoding(SignatureMethod signatureMethod, const valtype &vchPubK
             return CheckLegacyPubKeyEncoding(vchPubKey, flags, serror);
         case SignatureMethod::SCHNORR:
             return CheckXOnlyPubKeyEncoding(vchPubKey, flags, serror);
+        case SignatureMethod::ECDSA_P256:
+            return CheckLegacyPubKeyEncoding(vchPubKey, flags, serror);
         // unreachable
         default:
             return false;
@@ -405,6 +415,57 @@ bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t fl
     return true;
 }
 
+bool IsLowP256DERSignature(const valtype &vchSig) {
+    // floor(order(secp256r1) / 2), encoded big-endian.
+    static constexpr std::array<uint8_t, 32> HALF_CURVE_ORDER{{
+        0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00,
+        0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42,
+        0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa8,
+    }};
+
+    const size_t lenR = vchSig[3];
+    size_t lenS = vchSig[5 + lenR];
+    size_t sPos = 6 + lenR;
+    if (lenS > 0 && vchSig[sPos] == 0x00) {
+        ++sPos;
+        --lenS;
+    }
+    if (lenS > HALF_CURVE_ORDER.size()) {
+        return false;
+    }
+
+    const size_t padding = HALF_CURVE_ORDER.size() - lenS;
+    for (size_t i = 0; i < HALF_CURVE_ORDER.size(); ++i) {
+        const uint8_t value = i < padding ? 0 : vchSig[sPos + i - padding];
+        if (value < HALF_CURVE_ORDER[i]) {
+            return true;
+        }
+        if (value > HALF_CURVE_ORDER[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool CheckP256SignatureEncoding(const valtype &vchSig, uint32_t flags,
+                                ScriptError *serror) {
+    if (vchSig.empty()) {
+        return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
+    }
+
+    if ((flags & (SCRIPT_VERIFY_DERSIG | SCRIPT_VERIFY_LOW_S |
+                  SCRIPT_VERIFY_STRICTENC)) != 0 &&
+        !IsValidDERSignatureEncoding(vchSig)) {
+        return set_error(serror, SCRIPT_ERR_SIG_DER);
+    }
+    if ((flags & SCRIPT_VERIFY_LOW_S) != 0 &&
+        !IsLowP256DERSignature(vchSig)) {
+        return set_error(serror, SCRIPT_ERR_SIG_HIGH_S);
+    }
+    return true;
+}
+
 bool CheckTransactionECDSASignatureEncoding(const std::vector<uint8_t> &vchSigWithHashType, uint32_t flags, ScriptError *serror) {
     if (vchSigWithHashType.empty()) {
         return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
@@ -441,6 +502,8 @@ bool CheckDataSignatureEncoding(SignatureMethod signatureMethod, const valtype &
             return CheckECDSASignatureEncoding(vchSig, flags, serror);
         case SignatureMethod::SCHNORR:
             return CheckSchnorrSignatureEncoding(vchSig, flags, serror);
+        case SignatureMethod::ECDSA_P256:
+            return CheckP256SignatureEncoding(vchSig, flags, serror);
         // unreachable
         default:
             return false;
@@ -2206,6 +2269,32 @@ uint256 GetMessageHash(DataConversionMethod type, const std::vector<uint8_t> &vc
     }
     return messageHash;
 }
+
+bool VerifyP256Signature(const std::vector<uint8_t> &vchSig,
+                         const std::vector<uint8_t> &vchPubKey,
+                         const uint256 &sighash) {
+    using ECKeyPtr = std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)>;
+    using ECPointPtr = std::unique_ptr<EC_POINT, decltype(&EC_POINT_free)>;
+
+    ECKeyPtr key{EC_KEY_new_by_curve_name(NID_X9_62_prime256v1), EC_KEY_free};
+    if (!key) {
+        return false;
+    }
+
+    const EC_GROUP *group = EC_KEY_get0_group(key.get());
+    ECPointPtr point{EC_POINT_new(group), EC_POINT_free};
+    if (!point ||
+        EC_POINT_oct2point(group, point.get(), vchPubKey.data(),
+                           vchPubKey.size(), nullptr) != 1 ||
+        EC_KEY_set_public_key(key.get(), point.get()) != 1 ||
+        EC_KEY_check_key(key.get()) != 1) {
+        return false;
+    }
+
+    return ECDSA_verify(0, sighash.begin(), static_cast<int>(sighash.size()),
+                        vchSig.data(), static_cast<int>(vchSig.size()),
+                        key.get()) == 1;
+}
 } // namespace
 
 bool BaseSignatureChecker::VerifyECDSASignature(const std::vector<uint8_t> &vchSig,
@@ -2240,6 +2329,8 @@ bool BaseSignatureChecker::VerifySignatureByMethod(uint8_t signatureMethodFlag,
             return VerifyECDSASignature(vchSig, vchPubKey, sighash);
         case SignatureMethod::SCHNORR:
             return VerifySchnorrSignature(vchSig, vchPubKey, sighash);
+        case SignatureMethod::ECDSA_P256:
+            return VerifyP256Signature(vchSig, vchPubKey, sighash);
         // unreachable
         case SignatureMethod::NONE:
         default:

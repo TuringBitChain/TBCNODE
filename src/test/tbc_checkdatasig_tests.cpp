@@ -41,15 +41,32 @@ struct TestData {
         }
     }
 };
+
+struct P256TestData {
+    std::vector<uint8_t> message{ParseHex(
+        "7032353620636865636b64617461736967207465737420766563746f72")};
+    std::vector<uint8_t> compressedPubkey{ParseHex(
+        "036b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296")};
+    std::vector<uint8_t> uncompressedPubkey{ParseHex(
+        "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"
+        "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")};
+    std::vector<uint8_t> lowSSignature{ParseHex(
+        "304402202ea531d087a58d274e51d5b00db381f3de8214ac6df2a015949f74c01fc57b26"
+        "022003f2bdcb257f52d1f4ee9e1b911434e8495c01c9394691ebbf0816f5a052e1f3")};
+    std::vector<uint8_t> highSSignature{ParseHex(
+        "304502202ea531d087a58d274e51d5b00db381f3de8214ac6df2a015949f74c01fc57b26"
+        "022100fc0d4233da80ad2f0b1161e46eebcb17738af8e46dd10c9934b1b3cd5c10435e")};
+};
 } // namespace
 
 BOOST_AUTO_TEST_CASE(checkdatasig_test) {
     TestData data;
+    P256TestData p256;
     BaseSignatureChecker checker;
 
     // Flag format: [dataConversionMethod, sigFunc] where:
     //   dataConversionMethod: 0x01=SINGLE_SHA256, 0x02=DOUBLE_SHA256
-    //   sigFunc: 0x00=NONE, 0x01=ECDSA, 0x02=SCHNORR
+    //   sigFunc: 0x00=NONE, 0x01=ECDSA, 0x02=SCHNORR, 0x03=ECDSA_P256
     
     // ========================================================================
     // SECTION 1: ECDSA Signature Tests
@@ -171,6 +188,47 @@ BOOST_AUTO_TEST_CASE(checkdatasig_test) {
                STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_COMPRESSED_PUBKEYTYPE, SCRIPT_ERR_LEGACY_PUBKEY, checker);
 
     // ========================================================================
+    // P-256 ECDSA Signature Tests (sigFunc 0x03)
+    // ========================================================================
+
+    CheckPassForAllFlags("P-256: Valid compressed pubkey",
+                         CScript() << p256.lowSSignature << p256.message << p256.compressedPubkey
+                                   << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+                         1, success, checker);
+
+    CheckPassForAllFlags("P-256: Valid uncompressed pubkey",
+                         CScript() << p256.lowSSignature << p256.message << p256.uncompressedPubkey
+                                   << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+                         1, success, checker);
+
+    CheckPass("P-256: Mismatched message",
+              CScript() << p256.lowSSignature << mismatchedMessage << p256.compressedPubkey
+                        << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+              0, 1, failure, checker);
+
+    CheckError("P-256: Mismatched message",
+               CScript() << p256.lowSSignature << mismatchedMessage << p256.compressedPubkey
+                         << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_NULLFAIL, checker);
+
+    CheckPass("P-256: High-S accepted without LOW_S",
+              CScript() << p256.highSSignature << p256.message << p256.compressedPubkey
+                        << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+              0, 1, success, checker);
+
+    CheckError("P-256: High-S rejected with standard flags",
+               CScript() << p256.highSSignature << p256.message << p256.compressedPubkey
+                         << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+               STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_SIG_HIGH_S, checker);
+
+    std::vector<uint8_t> invalidP256Pubkey(33, 0xff);
+    invalidP256Pubkey[0] = 0x02;
+    CheckPass("P-256: Invalid curve point",
+              CScript() << p256.lowSSignature << p256.message << invalidP256Pubkey
+                        << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+              0, 1, failure, checker);
+
+    // ========================================================================
     // SECTION 2: Schnorr Signature Tests
     // ========================================================================
 
@@ -280,9 +338,9 @@ BOOST_AUTO_TEST_CASE(checkdatasig_test) {
                           SCRIPT_ERR_CHECKDATASIG_FLAG, checker);
 
     // Test 27: Invalid sigFunc
-    CheckErrorForAllFlags("Flag: Invalid sigFunc 0x03",
+    CheckErrorForAllFlags("Flag: Invalid sigFunc 0x04",
                           CScript() << data.sigs.schnorrSig << data.message << data.keys.xonlyPubkey
-                                    << std::vector<uint8_t>{0x01, 0x03} << OP_CHECKDATASIG,
+                                    << std::vector<uint8_t>{0x01, 0x04} << OP_CHECKDATASIG,
                           SCRIPT_ERR_CHECKDATASIG_FLAG, checker);
 
     // Test 28: Flag length too short
@@ -409,6 +467,13 @@ BOOST_AUTO_TEST_CASE(checkdatasig_test) {
     CheckPassForAllFlags("CHECKDATASIGVERIFY: Schnorr success",
                          CScript() << data.sigs.schnorrSig << data.message << data.keys.xonlyPubkey
                                    << std::vector<uint8_t>{0x02, 0x02} << OP_CHECKDATASIGVERIFY,
+                         0, {}, checker);
+
+    CheckPassForAllFlags("CHECKDATASIGVERIFY: P-256 success",
+                         CScript() << p256.lowSSignature << p256.message
+                                   << p256.compressedPubkey
+                                   << std::vector<uint8_t>{0x01, 0x03}
+                                   << OP_CHECKDATASIGVERIFY,
                          0, {}, checker);
 
     // Test 44: CHECKDATASIGVERIFY failure - NONE method
