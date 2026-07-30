@@ -58,6 +58,11 @@ std::atomic<int64_t> nTimeBestReceived(0);
 // SHA256("main address relay")[0:8]
 static const uint64_t RANDOMIZER_ID_ADDRESS_RELAY = 0x3cac0035b5866b90ULL;
 
+/** Maximum sustained rate of addresses processed from a peer. */
+static constexpr double MAX_ADDR_RATE_PER_SECOND = 0.1;
+/** Maximum number of address-processing tokens a peer may accumulate. */
+static constexpr double MAX_ADDR_PROCESSING_TOKEN_BUCKET = 1000.0;
+
 // Internal stuff
 namespace {
 /** Number of nodes with fSyncStarted. */
@@ -1790,6 +1795,10 @@ static bool ProcessVersionMessage(const CNodePtr& pfrom, const std::string& strC
         // Get recent addresses
         if(pfrom->fOneShot || pfrom->nVersion >= CADDR_TIME_VERSION || connman.GetAddressCount() < 1000) {
             pfrom->fGetAddr = true;
+            // A GETADDR response may contain up to 1000 addresses. Grant enough
+            // tokens to process one full response. This may temporarily exceed
+            // the normal token bucket maximum.
+            pfrom->mAddrTokenBucket += MAX_ADDR_PROCESSING_TOKEN_BUCKET;
             connman.PushMessage(pfrom, CNetMsgMaker(nSendVersion).Make(NetMsgType::GETADDR));
         }
         connman.MarkAddressGood(peerAddr);
@@ -1909,6 +1918,24 @@ static bool ProcessAddrMessage(const CNodePtr& pfrom, const std::atomic<bool>& i
 
     const CAddress& peerAddr { pfrom->GetAssociation().GetPeerAddr() };
 
+    // Refill this peer's address-processing token bucket. Use system time so
+    // moving mock time cannot be used to manufacture tokens.
+    const int64_t currentTime {GetTimeMicros()};
+    if (pfrom->mAddrTokenTimestamp == 0) {
+        pfrom->mAddrTokenTimestamp = currentTime;
+    }
+    if (pfrom->mAddrTokenBucket < MAX_ADDR_PROCESSING_TOKEN_BUCKET) {
+        const int64_t timeDiff {
+            std::max<int64_t>(currentTime - pfrom->mAddrTokenTimestamp, 0)};
+        const double increment {
+            static_cast<double>(timeDiff) / MICROS_PER_SECOND *
+            MAX_ADDR_RATE_PER_SECOND};
+        pfrom->mAddrTokenBucket =
+            std::min(pfrom->mAddrTokenBucket + increment,
+                     MAX_ADDR_PROCESSING_TOKEN_BUCKET);
+    }
+    pfrom->mAddrTokenTimestamp = currentTime;
+
     // FIXME: For now we make rejecting unsolicited addr messages configurable (on by default).
     // Once we are happy this doesn't have any adverse effects on address propagation we can
     // remove the config option and make it the only behaviour.
@@ -1958,12 +1985,23 @@ static bool ProcessAddrMessage(const CNodePtr& pfrom, const std::atomic<bool>& i
 
     // Store the new addresses
     std::vector<CAddress> vAddrOk;
+    size_t numProcessed {0};
+    size_t numRateLimited {0};
     int64_t nNow = GetAdjustedTime();
     int64_t nSince = nNow - 10 * 60;
     for (CAddress& addr : vAddr) {
         if (interruptMsgProc) {
             return true;
         }
+
+        if (!pfrom->fWhitelisted) {
+            if (pfrom->mAddrTokenBucket < 1.0) {
+                ++numRateLimited;
+                continue;
+            }
+            pfrom->mAddrTokenBucket -= 1.0;
+        }
+        ++numProcessed;
 
         if ((addr.nServices & REQUIRED_SERVICES) != REQUIRED_SERVICES) {
             continue;
@@ -1984,6 +2022,10 @@ static bool ProcessAddrMessage(const CNodePtr& pfrom, const std::atomic<bool>& i
             vAddrOk.push_back(addr);
         }
     }
+    LogPrint(BCLog::NET,
+             "Received addr: %u addresses (%u processed, %u rate-limited) "
+             "from peer=%d\n",
+             vAddr.size(), numProcessed, numRateLimited, pfrom->id);
     connman.AddNewAddresses(vAddrOk, peerAddr, 2 * 60 * 60);
     if (pfrom->fOneShot) {
         pfrom->fDisconnect = true;
