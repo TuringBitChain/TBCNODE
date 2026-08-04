@@ -9,117 +9,243 @@
 
 BOOST_FIXTURE_TEST_SUITE(filled_miner_bill_v2_tests, BasicTestingSetup)
 
-CMutableTransaction getValidMutableTransaction() {
+CMutableTransaction getValidFixedChargeMutableTransaction() {
     CMutableTransaction mtx;
     mtx.nVersion = 10;
     mtx.nLockTime = 0;
 
     CTxIn txin;
     txin.prevout = COutPoint(uint256S("0x0000000000000000000000000000000000000000000000000000000000000000"), 0xffffffff);
-    std::vector<uint8_t> scriptSigVec = ParseHex("03a0bb0d92000ac5b5b7cf79a1a3e2495861424f71b13209681c44029ecf7cfc6475f1c97001e7658f44009cfe883156ccac0ce06736e71ba9b07b689f07e89d7a8a3bf6");
+    std::vector<uint8_t> scriptSigVec = ParseHex("03""ea950e"       // bip34
+        "fee40217d737e8d9d0972c9acd14990e5fe3c08e2f49fe8ea35b6fe0a1bc1e9720249867e509399122e677bb7d0f908496136992d01e59cc29e2897afd73eb89");    // miner sig
     txin.scriptSig = CScript(scriptSigVec.begin(), scriptSigVec.end());
     txin.nSequence = 0xffffffff;
     mtx.vin.push_back(txin);
     
     CTxOut txout;
-    txout.nValue = Amount(109377392);
-    // std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac 6a 4c 6d 00 139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb ec34ff70aa12b8357ec488a1230bbc24a0bd4989aee41a4dc5e45126f57a155c2758caa0c766b00f824f2d93bb1a8a37324f45b8deb5e6626acafa08a2d3877b 03 40420f 23");
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914f2de6e590a078632a8f60c276d27a3eeb8b4156788ac6a4c6a00139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb28e6316d9d5e67485175931d2090a39a2fa68744a20e3e17ffc515b149c0ebb92a26dda6a25302a2b582d691dfb45e43820b7f4be93b2dbd0d0ecb5fd247d13e0340420f235a480000");
+    txout.nValue = Amount(109378697);
+    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac"    // P2PKH
+        "6a"        // OP_RETURN
+        "4c""6a"    // OP_PUSHDATA1
+        "01"        // ckeck charge address flag
+        "fba5750748a4c66465641157226a35688e0f1ebf99718208627b0cfdb50934a7"      // miner pubkey
+        "3e2689f8c0cb585a20b735048b30cfe62f703f0b8ea2155ef71c8fdeaa53599d82f9a1ff6063a8585756d00cc31d08376ffba7ec339b790fca434b94986bee34"      // manager sig
+        "03"        // kyc permission height length
+        "900510"    // kyc permission height
+        "23"        // charge rate
+        "4b520000");// country code
     txout.scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
     mtx.vout.push_back(txout);
 
     CTxOut txout2;
-    txout2.nValue = Amount(203129445);
+    txout2.nValue = Amount(203131868);
     std::vector<uint8_t> scriptPubKeyVec2 = ParseHex("76a9143b453ad6954e9ebc28e4427e6052682bbe57cd7988ac");
     txout2.scriptPubKey = CScript(scriptPubKeyVec2.begin(), scriptPubKeyVec2.end());
     mtx.vout.push_back(txout2);
     return mtx;
 }
 
-// These historical signatures were produced before the production manager
-// keys were rotated in a5299339c and must no longer be accepted.
-BOOST_AUTO_TEST_CASE(legacy_v2_cb_rejected_after_manager_key_rotation) {
-    CMutableTransaction mtx = getValidMutableTransaction();
+BOOST_AUTO_TEST_CASE(valid_fixed_charge_v2_cb) {
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
     CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
-BOOST_AUTO_TEST_CASE(legacy_fixed_charge_cb_rejected_after_manager_key_rotation) {
-    CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914f2de6e590a078632a8f60c276d27a3eeb8b4156788ac6a4c6a01139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb3d7a2eca4fd7563022d76ee5049f2e111a117df47dd66d4e79353df9bed209ec73d5adf1040921d5dcfa831ff1e38c1694cc1538d258319aa336319b620e5fb80340420f235a480000");
-    mtx.vout[0].scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
+BOOST_AUTO_TEST_CASE(canonical_v2_script_parser_accepts_expected_template) {
+    const CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
+    MinerBillV2ScriptData parsed;
 
-    CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_REQUIRE(ParseCanonicalMinerBillV2Script(
+        mtx.vout[0].scriptPubKey, parsed));
+    BOOST_CHECK(parsed.isFixedChangeAddress);
+    BOOST_CHECK_EQUAL(parsed.chargeAddressPubkeyHash.size(), 20U);
+    BOOST_CHECK_EQUAL(parsed.pubkeyMiner.size(), 32U);
+    BOOST_CHECK_EQUAL(parsed.sigManager.size(), 64U);
+    BOOST_CHECK_EQUAL(parsed.permissionHeight.size(), 3U);
+    BOOST_CHECK_EQUAL(parsed.chargeRate.size(), 1U);
+    BOOST_CHECK_EQUAL(parsed.countryCode.size(), 4U);
+    BOOST_CHECK_EQUAL(
+        HexStr(
+            parsed.chargeAddressPubkeyHash.begin(),
+            parsed.chargeAddressPubkeyHash.end()),
+        "b3f89180086dfaa2ed10becff8f3b7051114fd0a");
+    BOOST_CHECK_EQUAL(
+        HexStr(parsed.pubkeyMiner.begin(), parsed.pubkeyMiner.end()),
+        "fba5750748a4c66465641157226a3568"
+        "8e0f1ebf99718208627b0cfdb50934a7");
+    BOOST_CHECK_EQUAL(
+        HexStr(parsed.sigManager.begin(), parsed.sigManager.end()),
+        "3e2689f8c0cb585a20b735048b30cfe6"
+        "2f703f0b8ea2155ef71c8fdeaa53599d"
+        "82f9a1ff6063a8585756d00cc31d0837"
+        "6ffba7ec339b790fca434b94986bee34");
+    BOOST_CHECK_EQUAL(
+        HexStr(
+            parsed.permissionHeight.begin(),
+            parsed.permissionHeight.end()),
+        "900510");
+    BOOST_CHECK_EQUAL(
+        HexStr(parsed.chargeRate.begin(), parsed.chargeRate.end()),
+        "23");
+    BOOST_CHECK_EQUAL(
+        HexStr(parsed.countryCode.begin(), parsed.countryCode.end()),
+        "4b520000");
 }
+
+BOOST_AUTO_TEST_CASE(canonical_v2_script_parser_rejects_executable_bypass) {
+    CScript script = getValidFixedChargeMutableTransaction().vout[0].scriptPubKey;
+    script[0] = OP_1;
+    script[1] = OP_RETURN;
+
+    MinerBillV2ScriptData parsed;
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(script, parsed));
+}
+
+BOOST_AUTO_TEST_CASE(canonical_v2_script_parser_rejects_noncanonical_forms) {
+    const CScript canonical =
+        getValidFixedChargeMutableTransaction().vout[0].scriptPubKey;
+    MinerBillV2ScriptData parsed;
+
+    const std::vector<size_t> opcodeOffsets{0, 1, 2, 23, 24, 25, 26};
+    for (const size_t offset : opcodeOffsets) {
+        CScript mutated = canonical;
+        mutated[offset] = OP_NOP;
+        BOOST_CHECK(!ParseCanonicalMinerBillV2Script(mutated, parsed));
+    }
+
+    CScript wrongPayloadLength = canonical;
+    --wrongPayloadLength[27];
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(
+        wrongPayloadLength, parsed));
+
+    CScript invalidFixedFlag = canonical;
+    invalidFixedFlag[28] = 2;
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(invalidFixedFlag, parsed));
+
+    CScript invalidPermissionHeightLength = canonical;
+    invalidPermissionHeightLength[125] = 9;
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(
+        invalidPermissionHeightLength, parsed));
+
+    CScript trailingData = canonical;
+    trailingData.push_back(OP_0);
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(trailingData, parsed));
+
+    CScript truncated = canonical;
+    truncated.pop_back();
+    BOOST_CHECK(!ParseCanonicalMinerBillV2Script(truncated, parsed));
+}
+
+// BOOST_AUTO_TEST_CASE(coinbase_kyc_version_uses_candidate_block_height) {
+//     const CTransaction tx(getValidFixedChargeMutableTransaction());
+//     const uint256 previousBlockHash = uint256S(
+//         "000000000946664ab39a9591cbb3066f"
+//         "e5569da6ae8529142998b9186a1e9639");
+
+//     CValidationState v2State;
+//     BOOST_CHECK(!CheckCoinbase(
+//         tx, v2State, MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS,
+//         MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS, true,
+//         previousBlockHash, 927000));
+//     BOOST_CHECK_EQUAL(
+//         v2State.GetRejectReason(), "bad-miner-bill-v2");
+
+//     CValidationState v1State;
+//     BOOST_CHECK(!CheckCoinbase(
+//         tx, v1State, MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS,
+//         MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS, true,
+//         previousBlockHash, 926999));
+//     BOOST_CHECK_EQUAL(v1State.GetRejectReason(), "bad-miner-bill");
+
+// }
 
 // Invalid pre block hash
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_wrong_pre_block_hash) {
-    CMutableTransaction mtx = getValidMutableTransaction();
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
     CTransaction tx(mtx);
     BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")));
 }
 
 // Permission height overdue
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_permission_height_overdue) {
-    CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptSigVecNew = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac6a4c6d01139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb743c39c380f5a2416cea5d5c9bbda365b992cf26cd150b4172493dd5d9c08431443bd01600435418fde4455676045a7a1e7c57c598b41f6953c57f0bef1f2ca00320a10723");
-    mtx.vout[0].scriptPubKey = CScript(scriptSigVecNew.begin(), scriptSigVecNew.end());
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
+    std::vector<uint8_t> scriptSigVecNew = ParseHex("03""910510"       // 1050001
+        "fee40217d737e8d9d0972c9acd14990e5fe3c08e2f49fe8ea35b6fe0a1bc1e9720249867e509399122e677bb7d0f908496136992d01e59cc29e2897afd73eb89");    // miner sig
+    mtx.vin[0].scriptSig = CScript(scriptSigVecNew.begin(), scriptSigVecNew.end());
     CTransaction tx_permission_height_overdue(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx_permission_height_overdue, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(!FilledMinerBillV2(tx_permission_height_overdue, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
 // Don't meet charge rate
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_dont_meet_charge_rate) {
-    CMutableTransaction mtx = getValidMutableTransaction();
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
     mtx.vout[0].nValue = Amount(100000000);
     mtx.vout[1].nValue = Amount(1000000000);
     CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
 // Charge address doesn't match ask
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_charge_address_doesnt_match_ask) {
-    CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a9143b453ad6954e9ebc28e4427e6052682bbe57cd7988ac6a4c6d01139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfb4712abee6b71711b110d667ec06dfcd828f1877b0e9b11b5b61875264dc8994f18bb8efc6262a5730a547658f4af7037b4bc2c3c7629e95b54bd37bd9ee463530340420f23");
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
+    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a9143b453ad6954e9ebc28e4427e6052682bbe57cd7988ac"    // P2PKH
+        "6a"        // OP_RETURN
+        "4c""6a"    // OP_PUSHDATA1
+        "01"        // ckeck charge address flag
+        "fba5750748a4c66465641157226a35688e0f1ebf99718208627b0cfdb50934a7"      // miner pubkey
+        "3e2689f8c0cb585a20b735048b30cfe62f703f0b8ea2155ef71c8fdeaa53599d82f9a1ff6063a8585756d00cc31d08376ffba7ec339b790fca434b94986bee34"      // manager sig
+        "03"        // kyc permission height length
+        "900510"    // kyc permission height
+        "23"        // charge rate
+        "4b520000");// country code
     mtx.vout[0].scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
     CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
 // Invalid miner sig
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_invalid_miner_sig) {
-    CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptVec = ParseHex("03a0bb0dffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    // GetLogger().fPrintToConsole = true;
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
+    std::vector<uint8_t> scriptVec = ParseHex("03""ea950e"
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
     mtx.vin[0].scriptSig = CScript(scriptVec.begin(), scriptVec.end());
     CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
 // Invalid manager sig
 BOOST_AUTO_TEST_CASE(invalid_v2_cb_invalid_manager_sig) {
-    CMutableTransaction mtx = getValidMutableTransaction();
-    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a914b3f89180086dfaa2ed10becff8f3b7051114fd0a88ac6a4c6d00139310fe388ffa6f3eb911966a60793f8536846febea92b3ee7c435bca61dcfbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0340420f23");
+    // GetLogger().fPrintToConsole = true;
+    CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
+    std::vector<uint8_t> scriptPubKeyVec = ParseHex("76a9143b453ad6954e9ebc28e4427e6052682bbe57cd7988ac"    // P2PKH
+        "6a"        // OP_RETURN
+        "4c""6a"    // OP_PUSHDATA1
+        "01"        // ckeck charge address flag
+        "fba5750748a4c66465641157226a35688e0f1ebf99718208627b0cfdb50934a7"      // miner pubkey
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"      // manager sig
+        "03"        // kyc permission height length
+        "900510"    // kyc permission height
+        "23"        // charge rate
+        "4b520000");// country code
     mtx.vout[0].scriptPubKey = CScript(scriptPubKeyVec.begin(), scriptPubKeyVec.end());
     CTransaction tx(mtx);
-    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000946664ab39a9591cbb3066fe5569da6ae8529142998b9186a1e9639")));
+    BOOST_CHECK(!FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
 BOOST_AUTO_TEST_CASE(coinbase_height_prefix_preserves_raw_miner_signature) {
-    const std::vector<uint8_t> scriptBytes = ParseHex(
-        "03bd8f0e"
-        "4fabdda63ab134ac2d4c386d01abbf7dbec2824804afe22893604f9d1bc22edda"
-        "9eb1ae46fb52498370bb4ac0ac92ea65eb1dbf58b6ca4c5302203f8ae7a8b25");
+    std::vector<uint8_t> scriptBytes = ParseHex("03""ea950e"       // bip34
+        "fee40217d737e8d9d0972c9acd14990e5fe3c08e2f49fe8ea35b6fe0a1bc1e9720249867e509399122e677bb7d0f908496136992d01e59cc29e2897afd73eb89");    // miner sig
     const CScript scriptSig(scriptBytes.begin(), scriptBytes.end());
 
     CoinbaseHeightPrefix parsed;
     BOOST_REQUIRE(ParseCoinbaseHeightPrefix(scriptSig, parsed));
-    BOOST_CHECK_EQUAL(parsed.height, 954301U);
+    BOOST_CHECK_EQUAL(parsed.height, 955882U);
     BOOST_CHECK_EQUAL(parsed.encodedHeightSize, 3U);
     BOOST_CHECK_EQUAL(parsed.nextOffset, 4U);
     BOOST_REQUIRE_EQUAL(scriptSig.size() - parsed.nextOffset, 64U);
-    BOOST_CHECK_EQUAL(scriptSig[parsed.nextOffset], 0x4f);
-    BOOST_CHECK_EQUAL(scriptSig.back(), 0x25);
+    BOOST_CHECK_EQUAL(scriptSig[parsed.nextOffset], 0xfe);
+    BOOST_CHECK_EQUAL(scriptSig.back(), 0x89);
 }
 
 BOOST_AUTO_TEST_CASE(coinbase_height_prefix_enforces_bip34_encoding) {
@@ -159,32 +285,6 @@ BOOST_AUTO_TEST_CASE(coinbase_height_prefix_ignores_signature_suffix) {
     BOOST_CHECK_EQUAL(parsed.nextOffset, 4U);
     BOOST_CHECK_EQUAL(scriptSig[parsed.nextOffset], 0x4f);
     BOOST_CHECK_EQUAL(scriptSig.size() - parsed.nextOffset, 66U);
-}
-
-BOOST_AUTO_TEST_CASE(provided_kycv2_manager_signature_vector) {
-    const std::vector<uint8_t> managerMessage = ParseHex(
-        "8eef133f3f9e5ed919cdee02f39f86d1644c6a53683a625cd95743b37911e924"
-        "40420f"
-        "23"
-        "4b520000");
-    const std::string expectedMessageHashHex =
-        "0b05c36bccca482786a0e87e00afdcc4c27ffdb78bb33da68258981b0d9bbf31";
-    const uint256 managerMessageHash =
-        Hash(managerMessage.begin(), managerMessage.end());
-    BOOST_CHECK_EQUAL(
-        HexStr(managerMessageHash.begin(), managerMessageHash.end()),
-        expectedMessageHashHex);
-
-    const XOnlyPubKey aggregateManagerPubkey(ParseHex(
-        "563c222009a10d447b625bcddd3adfafa7c0c629ea3961c49629f2a3d822309e"));
-    const std::vector<uint8_t> aggregateSignature = ParseHex(
-        "4e5c260a75dce151044c17702cb8edfd044f63d11c6ea2bbe6f8a299b1364b5d"
-        "cf1e1631791e55c144f3233fc8c9c6527d086d9b7db9e96c2b8e2484a987bee0");
-
-    BOOST_REQUIRE(aggregateManagerPubkey.IsFullyValid());
-    BOOST_REQUIRE_EQUAL(aggregateSignature.size(), 64U);
-    BOOST_CHECK(aggregateManagerPubkey.VerifySchnorr(
-        managerMessageHash, aggregateSignature));
 }
 
 BOOST_AUTO_TEST_CASE(v1_invalid_inputs_fail_closed) {

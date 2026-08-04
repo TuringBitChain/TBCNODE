@@ -84,8 +84,6 @@ using namespace boost::placeholders;
 
 #define TBC_FORK_BLOCK_HEIGHT 824190
 
-// Used for block production testing
-bool gBlockProductionTest = false;
 
 /**
  * Global state
@@ -659,6 +657,11 @@ uint64_t vectorLEtoU64(const vector<uint8_t>& bytes) {
 namespace {
 
 constexpr size_t MAX_COINBASE_HEIGHT_SIZE = 5;
+constexpr size_t MINER_BILL_V2_SCRIPT_PREFIX_SIZE = 28;
+constexpr size_t MINER_BILL_V2_FIXED_PAYLOAD_SIZE = 103;
+constexpr size_t MINER_BILL_V2_MIN_PERMISSION_HEIGHT_SIZE = 1;
+constexpr size_t MINER_BILL_V2_MAX_PERMISSION_HEIGHT_SIZE =
+    sizeof(uint64_t);
 
 struct CoinbaseHeightPrefix {
     uint64_t height{0};
@@ -666,6 +669,84 @@ struct CoinbaseHeightPrefix {
     size_t encodedHeightSize{0};
     size_t nextOffset{0};
 };
+
+struct MinerBillV2ScriptData {
+    bool isFixedChangeAddress{false};
+    std::vector<uint8_t> chargeAddressPubkeyHash;
+    std::vector<uint8_t> pubkeyMiner;
+    std::vector<uint8_t> sigManager;
+    std::vector<uint8_t> permissionHeight;
+    std::vector<uint8_t> chargeRate;
+    std::vector<uint8_t> countryCode;
+};
+
+bool ParseCanonicalMinerBillV2Script(
+    const CScript& script,
+    MinerBillV2ScriptData& result) {
+    result = {};
+
+    const size_t minimumScriptSize =
+        MINER_BILL_V2_SCRIPT_PREFIX_SIZE +
+        MINER_BILL_V2_FIXED_PAYLOAD_SIZE +
+        MINER_BILL_V2_MIN_PERMISSION_HEIGHT_SIZE;
+    if (script.size() < minimumScriptSize ||
+        script[0] != OP_DUP ||
+        script[1] != OP_HASH160 ||
+        script[2] != 20 ||
+        script[23] != OP_EQUALVERIFY ||
+        script[24] != OP_CHECKSIG ||
+        script[25] != OP_RETURN ||
+        script[26] != OP_PUSHDATA1) {
+        return false;
+    }
+
+    const size_t payloadSize = script[27];
+    if (script.size() != MINER_BILL_V2_SCRIPT_PREFIX_SIZE + payloadSize) {
+        return false;
+    }
+
+    size_t index = MINER_BILL_V2_SCRIPT_PREFIX_SIZE;
+    const auto readBytes = [&script, &index](
+                               size_t length,
+                               std::vector<uint8_t>& destination) {
+        if (length > script.size() - index) {
+            return false;
+        }
+        destination.assign(
+            script.begin() + index, script.begin() + index + length);
+        index += length;
+        return true;
+    };
+
+    const uint8_t fixedChangeAddress = script[index++];
+    if (fixedChangeAddress > 1) {
+        return false;
+    }
+    result.isFixedChangeAddress = fixedChangeAddress == 1;
+    result.chargeAddressPubkeyHash.assign(
+        script.begin() + 3, script.begin() + 23);
+
+    if (!readBytes(32, result.pubkeyMiner) ||
+        !readBytes(64, result.sigManager)) {
+        return false;
+    }
+
+    const size_t permissionHeightSize = script[index++];
+    if (permissionHeightSize < MINER_BILL_V2_MIN_PERMISSION_HEIGHT_SIZE ||
+        permissionHeightSize > MINER_BILL_V2_MAX_PERMISSION_HEIGHT_SIZE ||
+        payloadSize !=
+            MINER_BILL_V2_FIXED_PAYLOAD_SIZE + permissionHeightSize) {
+        return false;
+    }
+
+    if (!readBytes(permissionHeightSize, result.permissionHeight) ||
+        !readBytes(1, result.chargeRate) ||
+        !readBytes(4, result.countryCode)) {
+        return false;
+    }
+
+    return index == script.size();
+}
 
 bool ParseCoinbaseHeightPrefix(
     const CScript& coinbaseInputScript,
@@ -734,130 +815,122 @@ bool ParseCoinbaseHeightPrefix(
 } // namespace
 
 bool FilledMinerBillV2(const CTransaction& tx, const uint256 tipBlockHash) {
-    if (tx.vin.empty() || tx.vout.empty()) { return false; }
-    // Script data.
-    const CScript &chargeOutputScript = tx.vout[0].scriptPubKey;
-    const CScript &chargeInputScript = tx.vin[0].scriptSig;
-    if (chargeInputScript.empty() || chargeOutputScript.empty()) { return false; }
+    if (tx.vin.empty() || tx.vout.empty()) {
+        return false;
+    }
+
+    const CScript& chargeOutputScript = tx.vout[0].scriptPubKey;
+    const CScript& chargeInputScript = tx.vin[0].scriptSig;
+    if (chargeInputScript.empty() || chargeOutputScript.empty()) {
+        return false;
+    }
+
+    MinerBillV2ScriptData minerBill;
+    if (!ParseCanonicalMinerBillV2Script(chargeOutputScript, minerBill)) {
+        return false;
+    }
+
     CoinbaseHeightPrefix coinbaseHeight;
     if (!ParseCoinbaseHeightPrefix(chargeInputScript, coinbaseHeight)) {
         return false;
     }
+
     uint64_t inputScriptIndex = coinbaseHeight.nextOffset;
-    uint64_t outputScriptIndex = 0;
-    std::vector<XOnlyPubKey> pubkeyManagerArr;
-    XOnlyPubKey pubkeyMiner;
-    std::vector<uint8_t> pubkeyMinerVec;
-    std::vector<uint8_t> sigManagerVec;
-    std::vector<uint8_t> sigMinerVec;
-    std::vector<uint8_t> isfixedChangeAddressVec;
-    bool isFixedChangeAddress = false;
-    std::vector<uint8_t> chargeAddressPubkeyHashVec;
-    std::vector<uint8_t> kycChargeRateVec;
-    std::vector<uint8_t> actualChargeRateVec;
-    uint64_t kycChargeRate;
-    std::vector<uint8_t> permissionHeightLengthVec;
-    std::vector<uint8_t> kycPermissionHeightVec;
-    std::vector<uint8_t> currentChainHeightVec(
+    std::vector<uint8_t> sigMiner;
+    if (!safeReadScript(
+            chargeInputScript, inputScriptIndex, 64, sigMiner)) {
+        return false;
+    }
+
+    const uint64_t currentChainHeight = coinbaseHeight.height;
+    const uint64_t kycPermissionHeight =
+        vectorLEtoU64(minerBill.permissionHeight);
+    if (kycPermissionHeight < currentChainHeight) {
+        LogPrintf(
+            "KYC permission Height is less than current chain height !!! "
+            "(%d < %d) \n",
+            kycPermissionHeight, currentChainHeight);
+        return false;
+    }
+
+    const uint64_t kycChargeRate = vectorLEtoU64(minerBill.chargeRate);
+    const uint64_t totalOutputValue = tx.GetValueOut().GetSatoshis();
+    if (totalOutputValue == 0) {
+        LogPrintf(
+            "Total output value is zero, cannot calculate charge rate\n");
+        return false;
+    }
+    const uint64_t chargeValueLimit =
+        totalOutputValue * kycChargeRate / 100;
+    const uint64_t chargeValue = tx.vout[0].nValue.GetSatoshis();
+    if (chargeValue < chargeValueLimit) {
+        LogPrintf(
+            "Charge value is less than charge value limit !!! (%d < %d) \n",
+            chargeValue, chargeValueLimit);
+        return false;
+    }
+
+    std::vector<uint8_t> currentChainHeightBytes(
         coinbaseHeight.encodedHeight.begin(),
         coinbaseHeight.encodedHeight.begin() +
             coinbaseHeight.encodedHeightSize);
-    unsigned int permissionHeightLength;
-    unsigned int kycPermissionHeight;
-    uint64_t currentChainHeight = coinbaseHeight.height;
-    std::vector<uint8_t> msgManager;
     std::vector<uint8_t> msgMiner;
-    uint256 msgHashManager;
-    uint256 msgHashMiner;
-    std::vector<uint8_t> countryCodeVec;
+    msgMiner.insert(
+        msgMiner.end(), minerBill.pubkeyMiner.begin(),
+        minerBill.pubkeyMiner.end());
+    msgMiner.insert(
+        msgMiner.end(), currentChainHeightBytes.begin(),
+        currentChainHeightBytes.end());
+    const std::vector<uint8_t> tipBlockHashBytes =
+        ParseHex(tipBlockHash.GetHex());
+    msgMiner.insert(
+        msgMiner.end(), tipBlockHashBytes.begin(), tipBlockHashBytes.end());
+    const uint256 msgHashMiner = Hash(msgMiner.begin(), msgMiner.end());
 
-    // Get pukeyManagerArr from hard code
-    if (!gBlockProductionTest) {
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49")));
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e")));
+    std::vector<uint8_t> msgManager;
+    msgManager.insert(
+        msgManager.end(), minerBill.pubkeyMiner.begin(),
+        minerBill.pubkeyMiner.end());
+    msgManager.insert(
+        msgManager.end(), minerBill.permissionHeight.begin(),
+        minerBill.permissionHeight.end());
+    msgManager.insert(
+        msgManager.end(), minerBill.chargeRate.begin(),
+        minerBill.chargeRate.end());
+    msgManager.insert(
+        msgManager.end(), minerBill.countryCode.begin(),
+        minerBill.countryCode.end());
+    if (minerBill.isFixedChangeAddress) {
+        msgManager.insert(
+            msgManager.end(), minerBill.chargeAddressPubkeyHash.begin(),
+            minerBill.chargeAddressPubkeyHash.end());
     }
-    else{
-        LogPrintf("=============== Block production test mode: using test manager public key ===============\n");
-        pubkeyManagerArr.push_back(XOnlyPubKey(ParseHex("b44895b362dac31d35cf8cda5385db2cc254ac31892e7cd9cac6447c039f0a18")));
-    }
+    const uint256 msgHashManager =
+        Hash(msgManager.begin(), msgManager.end());
 
-    // Get date from Output Scirpt
-    outputScriptIndex += 28;    // Skip P2PKH + op_return + op_pushdata + dataLength(25 + 1 + 1 + 1)
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, isfixedChangeAddressVec)) { return false; }
-    if (isfixedChangeAddressVec[0] == 0x01) {
-        isFixedChangeAddress = true;
-    }
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 32, pubkeyMinerVec)) { return false; }
-    pubkeyMiner = XOnlyPubKey(pubkeyMinerVec);
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 64, sigManagerVec)) { return false; }
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, permissionHeightLengthVec)) { return false; }
-    permissionHeightLength = vectorLEtoU64(permissionHeightLengthVec);
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, permissionHeightLength, kycPermissionHeightVec)) { return false; }
-    kycPermissionHeight = vectorLEtoU64(kycPermissionHeightVec);
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 1, kycChargeRateVec)) { return false; }
-    kycChargeRate = vectorLEtoU64(kycChargeRateVec);
-    if (!safeReadScript(chargeOutputScript, outputScriptIndex, 4, countryCodeVec)) { return false; }
-    
-    // Get data from Input Script
-    if (!safeReadScript(chargeInputScript, inputScriptIndex, 64, sigMinerVec)) { return false; }
-
-    // Check kyc permission height
-    if (kycPermissionHeight < currentChainHeight) {
-        LogPrintf("KYC permission Height is less than current chain height !!! (%d < %d) \n", kycPermissionHeight, currentChainHeight);
-        return false;
-    }
-
-    // check kyc charge rate
-    uint64_t totalOutputValue = tx.GetValueOut().GetSatoshis();
-    if (totalOutputValue == 0) {
-        LogPrintf("Total output value is zero, cannot calculate charge rate\n");
-        return false;
-    }
-    uint64_t chargeValueLimit = totalOutputValue * kycChargeRate / 100;
-    uint64_t chargeValue = tx.vout[0].nValue.GetSatoshis();
-    if (chargeValue < chargeValueLimit) {
-        LogPrintf("Charge value is less than charge value limit !!! (%d < %d) \n", chargeValue, chargeValueLimit);
-        return false;
-    }
-
-    // Compute message hash
-    msgMiner.insert(msgMiner.end(), pubkeyMinerVec.begin(), pubkeyMinerVec.end());
-    msgMiner.insert(msgMiner.end(), currentChainHeightVec.begin(), currentChainHeightVec.end());
-    // Use uint256.GetHex() to get the big-endian block hash
-    std::vector<uint8_t> tipBlockHashVec = ParseHex(tipBlockHash.GetHex());
-    msgMiner.insert(msgMiner.end(), tipBlockHashVec.begin(), tipBlockHashVec.end());
-    msgHashMiner = Hash(msgMiner.begin(), msgMiner.end());
-    
-    msgManager.insert(msgManager.end(), pubkeyMinerVec.begin(), pubkeyMinerVec.end());
-    msgManager.insert(msgManager.end(), kycPermissionHeightVec.begin(), kycPermissionHeightVec.end());
-    msgManager.insert(msgManager.end(), kycChargeRateVec.begin(), kycChargeRateVec.end());
-    msgManager.insert(msgManager.end(), countryCodeVec.begin(), countryCodeVec.end());
-    if (isFixedChangeAddress == true) {
-        uint64_t chargeAddressIndex = 3;
-        if (!safeReadScript(chargeOutputScript, chargeAddressIndex, 20, chargeAddressPubkeyHashVec)) { return false; }
-        msgManager.insert(msgManager.end(), chargeAddressPubkeyHashVec.begin(), chargeAddressPubkeyHashVec.end());
-    }
-    msgHashManager = Hash(msgManager.begin(), msgManager.end());
-    
-    // Verify miner signature
-    if (!pubkeyMiner.VerifySchnorr(msgHashMiner, sigMinerVec)) {
+    const XOnlyPubKey pubkeyMiner(minerBill.pubkeyMiner);
+    if (!pubkeyMiner.VerifySchnorr(msgHashMiner, sigMiner)) {
         LogPrintf("Miner signature verification failed !!! \n");
         return false;
     }
-    // Verify if fit one of the manager public key.
-    bool ret = false;
-    for (auto pubkeyManager : pubkeyManagerArr) {
-        if (pubkeyManager.VerifySchnorr(msgHashManager, sigManagerVec)) {
-            ret = true;
-            break;
+
+    std::vector<XOnlyPubKey> pubkeyManagers;
+    
+    pubkeyManagers.emplace_back(ParseHex(
+        "84ddaab460c3e2d460a5c706746d3894928cfcac87a41840e1e5992ebf047b49"));
+    pubkeyManagers.emplace_back(ParseHex(
+        "f54e6c6619cfd2c2b62ce17fa0366b8a69ee0d97a4d9752e7286b71530dbf02e"));
+
+
+    for (const auto& pubkeyManager : pubkeyManagers) {
+        if (pubkeyManager.VerifySchnorr(
+                msgHashManager, minerBill.sigManager)) {
+            return true;
         }
     }
-    if (!ret) {
-        LogPrintf("Manager signature verification failed !!! \n");
-        return false;
-    }
 
-    return ret;
+    LogPrintf("Manager signature verification failed !!! \n");
+    return false;
 }
 
 bool FilledMinerBill(const CTransaction& tx)
@@ -1043,18 +1116,8 @@ bool FilledMinerBill(const CTransaction& tx)
 
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
-    int kycV1ActivationHeight = 824189;
-    int kycV2ActivationHeight = 927000;
-    if(gBlockProductionTest){
-        kycV2ActivationHeight = 824200;
-    }
-    int kycV1ActivationTipHeight = kycV1ActivationHeight - 1;
-    int kycV2ActivationTipHeight = kycV2ActivationHeight - 1;
-
-    // Use block height being validated when provided (>=0); otherwise fall back to chain tip (e.g. wallet/test).
-    // Using the block's height ensures the same block always gets the same checker (FilledMinerBill vs FilledMinerBillV2),
-    // avoiding non-determinism when chainActive.Height() differs across threads.
-    int checkBlockheight = (blockHeight >= 0) ? blockHeight : chainActive.Height();
+    constexpr int kycV1ActivationHeight = 824189;
+    constexpr int kycV2ActivationHeight = 927000;
 
     if (isGenesisEnabled) {
         CoinbaseHeightPrefix coinbaseHeight;
@@ -1063,35 +1126,56 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
             ParseCoinbaseHeightPrefix(tx.vin[0].scriptSig, coinbaseHeight);
         const uint64_t scriptSigHeight =
             hasValidHeight ? coinbaseHeight.height : UINT64_MAX;
-        if ((checkBlockheight >= kycV1ActivationTipHeight) && (scriptSigHeight >= (uint64_t)kycV1ActivationHeight) && tx.nVersion != 10) {
-            std::stringstream error_message;
-            error_message << "bad-cbtx-nVersion:" << tx.nVersion  \
-                << " checkBlockheight:" << checkBlockheight << " scriptSigHeight:" << scriptSigHeight;
-            return state.Invalid(false, 0, "", error_message.str());
+
+        // Consensus callers provide the candidate block's real height. Calls
+        // without block context retain compatibility by using the encoded
+        // coinbase height.
+        const uint64_t checkBlockHeight =
+            blockHeight >= 0 ? static_cast<uint64_t>(blockHeight)
+                             : scriptSigHeight;
+
+
+        LogPrintf("====blockHeight: %d\n", blockHeight);
+        LogPrintf("====scriptSigHeight: %d\n", scriptSigHeight);
+        LogPrintf("====checkBlockHeight: %d\n", checkBlockHeight);
+
+        if (checkBlockHeight >=
+                static_cast<uint64_t>(kycV1ActivationHeight) &&
+            tx.nVersion != 10) {
+            std::stringstream errorMessage;
+            errorMessage << "bad-cbtx-nVersion:" << tx.nVersion
+                         << " checkBlockheight:" << checkBlockHeight
+                         << " scriptSigHeight:" << scriptSigHeight;
+            return state.Invalid(false, 0, "", errorMessage.str());
         }
 
-        // Miner KYC veriry.
-        if (checkBlockheight >= kycV1ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV1ActivationHeight) {
-            if (checkBlockheight >= kycV2ActivationTipHeight && scriptSigHeight >= (uint64_t)kycV2ActivationHeight) {
-                if (!FilledMinerBillV2(tx, prevBlockHash)) {
-                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
-                        kycV2ActivationHeight,
-                        checkBlockheight,
-                        scriptSigHeight);
-                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill-v2");
-                }
-            } else {
-                if (!FilledMinerBill(tx)) {
-                    LogPrintf("Judgment condition %d checkBlockheight=%d sigHeight=%d\n",
-                        kycV1ActivationHeight,
-                        checkBlockheight,
-                        scriptSigHeight);
-                    return state.DoS(100, false, REJECT_INVALID, "bad-miner-bill");
-                }
+        // Select the KYC version solely from the candidate block's real height
+        // when block context is available.
+        if (checkBlockHeight >=
+            static_cast<uint64_t>(kycV2ActivationHeight)) {
+            if (!FilledMinerBillV2(tx, prevBlockHash)) {
+                LogPrintf(
+                    "Judgment condition %d checkBlockheight=%d "
+                    "sigHeight=%d\n",
+                    kycV2ActivationHeight, checkBlockHeight,
+                    scriptSigHeight);
+                return state.DoS(
+                    100, false, REJECT_INVALID, "bad-miner-bill-v2");
+            }
+        } else if (checkBlockHeight >=
+                   static_cast<uint64_t>(kycV1ActivationHeight)) {
+            if (!FilledMinerBill(tx)) {
+                LogPrintf(
+                    "Judgment condition %d checkBlockheight=%d "
+                    "sigHeight=%d\n",
+                    kycV1ActivationHeight, checkBlockHeight,
+                    scriptSigHeight);
+                return state.DoS(
+                    100, false, REJECT_INVALID, "bad-miner-bill");
             }
         }
     }
-    
+
     if (!tx.IsCoinBase()) {
         return state.DoS(100, false, REJECT_INVALID, "bad-cb-missing", false,
                          "first tx is not coinbase");
