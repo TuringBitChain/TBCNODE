@@ -1116,8 +1116,24 @@ bool FilledMinerBill(const CTransaction& tx)
 
 bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t maxTxSigOpsCountConsensusBeforeGenesis, uint64_t maxTxSizeConsensus, bool isGenesisEnabled, const uint256& prevBlockHash, int blockHeight)
 {
-    constexpr int kycV1ActivationHeight = 824189;
-    constexpr int kycV2ActivationHeight = 927000;
+    // Validate the coinbase before parsing miner-bill data. In particular,
+    // FilledMinerBillV2() calculates the total output value, which throws for
+    // outputs outside the valid money range.
+    if (!tx.IsCoinBase()) {
+        return state.DoS(100, false, REJECT_INVALID, "bad-cb-missing", false,
+                         "first tx is not coinbase");
+    }
+
+    if (!CheckTransactionCommon(tx, state,
+                                maxTxSigOpsCountConsensusBeforeGenesis,
+                                maxTxSizeConsensus, isGenesisEnabled)) {
+        // CheckTransactionCommon fills in the state.
+        return false;
+    }
+
+    if (tx.vin[0].scriptSig.size() < 2 || tx.vin[0].scriptSig.size() > 100) {
+        return state.DoS(100, false, REJECT_INVALID, "bad-cb-length");
+    }
 
     if (isGenesisEnabled) {
         CoinbaseHeightPrefix coinbaseHeight;
@@ -1134,6 +1150,9 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
             blockHeight >= 0 ? static_cast<uint64_t>(blockHeight)
                              : scriptSigHeight;
 
+        constexpr int kycV1ActivationHeight = 824189;
+        constexpr int kycV2ActivationHeight = 927000;
+        
         if (checkBlockHeight >=
                 static_cast<uint64_t>(kycV1ActivationHeight) &&
             tx.nVersion != 10) {
@@ -1170,21 +1189,6 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
             }
         }
     }
-
-    if (!tx.IsCoinBase()) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-cb-missing", false,
-                         "first tx is not coinbase");
-    }
-
-    if (!CheckTransactionCommon(tx, state, maxTxSigOpsCountConsensusBeforeGenesis, maxTxSizeConsensus, isGenesisEnabled)) {
-        // CheckTransactionCommon fill in the state.
-        return false;
-    }
-
-    if (tx.vin[0].scriptSig.size() < 2 || tx.vin[0].scriptSig.size() > 100) {
-        return state.DoS(100, false, REJECT_INVALID, "bad-cb-length");
-    }
-
     return true;
 }
 
