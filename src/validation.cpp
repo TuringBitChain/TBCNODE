@@ -1458,17 +1458,11 @@ static bool CalculateMempoolAncestors(
     const CTxMemPoolEntry& pMempoolEntry,
     CTxMemPool::setEntries& setAncestors,
     std::string& errString) {
-    // Calculate in-mempool ancestors, up to a limit.
-    size_t nLimitAncestors = GlobalConfig::GetConfig().GetLimitAncestorCount();
-    size_t nLimitAncestorSize = GlobalConfig::GetConfig().GetLimitAncestorSize();
-    size_t nLimitDescendants = GlobalConfig::GetConfig().GetLimitDescendantCount();
-    size_t nLimitDescendantSize = GlobalConfig::GetConfig().GetLimitDescendantSize();
+    // Calculate in-mempool ancestors, up to the configured chain height.
+    size_t nLimitAncestorHeight = GlobalConfig::GetConfig().GetLimitAncestorCount();
     if (!pool.CalculateMemPoolAncestors(pMempoolEntry,
                 setAncestors,
-                nLimitAncestors,
-                nLimitAncestorSize,
-                nLimitDescendants,
-                nLimitDescendantSize,
+                nLimitAncestorHeight,
                 errString)) {
         return false;
     }

@@ -236,20 +236,14 @@ void CTxMemPool::reassignInsertionIndicesNL(const setEntries& entries)
 bool CTxMemPool::CalculateMemPoolAncestors(
     const CTxMemPoolEntry &entry,
     setEntries &setAncestors,
-    uint64_t limitAncestorCount,
-    uint64_t limitAncestorSize,
-    uint64_t limitDescendantCount,
-    uint64_t limitDescendantSize,
+    uint64_t limitAncestorHeight,
     std::string &errString,
     bool fSearchForParents /* = true */) const {
 
     std::shared_lock lock(smtx);
     return CalculateMemPoolAncestorsNL(entry,
                                        setAncestors,
-                                       limitAncestorCount,
-                                       limitAncestorSize,
-                                       limitDescendantCount,
-                                       limitDescendantSize,
+                                       limitAncestorHeight,
                                        errString,
                                        fSearchForParents);
 }
@@ -257,10 +251,7 @@ bool CTxMemPool::CalculateMemPoolAncestors(
 bool CTxMemPool::CalculateMemPoolAncestorsNL(
     const CTxMemPoolEntry &entry,
     setEntries &setAncestors,
-    uint64_t limitAncestorCount,
-    uint64_t limitAncestorSize,
-    uint64_t limitDescendantCount,
-    uint64_t limitDescendantSize,
+    uint64_t limitAncestorHeight,
     std::string &errString,
     bool fSearchForParents /* = true */) const {
 
@@ -279,10 +270,10 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
             }
             parentHashes.insert(piter);
             ancestorsHeight = std::max(ancestorsHeight, piter->GetAncestorsHeight() + 1);
-            if (ancestorsHeight >= limitAncestorCount) {
+            if (ancestorsHeight >= limitAncestorHeight) {
                 errString =
                     strprintf("too many unconfirmed parents [limit: %u]",
-                              limitAncestorCount);
+                              limitAncestorHeight);
                 return false;
             }
         }
@@ -293,14 +284,11 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
         parentHashes = GetMemPoolParentsNL(it);
     }
 
-    size_t totalSizeWithAncestors = entry.GetTxSize();
-
     while (!parentHashes.empty()) {
         txiter stageit = *parentHashes.begin();
 
         setAncestors.insert(stageit);
         parentHashes.erase(stageit);
-        totalSizeWithAncestors += stageit->GetTxSize();
 
         const setEntries &setMemPoolParents = GetMemPoolParentsNL(stageit);
         size_t ancestorsHeight = 0;
@@ -311,10 +299,10 @@ bool CTxMemPool::CalculateMemPoolAncestorsNL(
             }
             ancestorsHeight = std::max(ancestorsHeight, phash->GetAncestorsHeight() + 1);
             if (ancestorsHeight >=
-                limitAncestorCount) {
+                limitAncestorHeight) {
                 errString =
                     strprintf("too many unconfirmed ancestors [limit: %u]",
-                              limitAncestorCount);
+                              limitAncestorHeight);
                 return false;
             }
         }
@@ -1853,9 +1841,6 @@ void CTxMemPool::AddUnchecked(
         CalculateMemPoolAncestorsNL(
             entry,
             setAncestors,
-            nNoLimit,
-            nNoLimit,
-            nNoLimit,
             nNoLimit,
             dummy);
 
