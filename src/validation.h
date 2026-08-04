@@ -86,16 +86,8 @@ static const Amount HIGH_TX_FEE_PER_KB(COIN / 100);
 /** -maxtxfee will warn if called with a higher fee than this amount (in
  * satoshis */
 static const Amount HIGH_MAX_TX_FEE(100 * HIGH_TX_FEE_PER_KB);
-/** Default for -limitancestorcount, max number of in-mempool ancestors */
+/** Default for -limitancestorcount, max in-mempool ancestor chain height. */
 static const uint64_t DEFAULT_ANCESTOR_LIMIT = 10000;
-/** Default for -limitdescendantcount, max number of in-mempool descendants */
-static const uint64_t DEFAULT_DESCENDANT_LIMIT = 10000;
-/** Default for -limitancestorsize, maximum kilobytes of tx + all in-mempool
- * ancestors */
-static const uint64_t DEFAULT_ANCESTOR_SIZE_LIMIT = DEFAULT_ANCESTOR_LIMIT * MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS;
-/** Default for -limitdescendantsize, maximum kilobytes of in-mempool
- * descendants */
-static const uint64_t DEFAULT_DESCENDANT_SIZE_LIMIT = DEFAULT_DESCENDANT_LIMIT * MAX_TX_SIZE_CONSENSUS_BEFORE_GENESIS;
 /** Default for -mempoolexpiry, expiration time for mempool transactions in
  * hours */
 static const unsigned int DEFAULT_MEMPOOL_EXPIRY = 336;
