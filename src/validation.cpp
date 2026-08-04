@@ -1134,11 +1134,6 @@ bool CheckCoinbase(const CTransaction& tx, CValidationState& state, uint64_t max
             blockHeight >= 0 ? static_cast<uint64_t>(blockHeight)
                              : scriptSigHeight;
 
-
-        LogPrintf("====blockHeight: %d\n", blockHeight);
-        LogPrintf("====scriptSigHeight: %d\n", scriptSigHeight);
-        LogPrintf("====checkBlockHeight: %d\n", checkBlockHeight);
-
         if (checkBlockHeight >=
                 static_cast<uint64_t>(kycV1ActivationHeight) &&
             tx.nVersion != 10) {
