@@ -51,6 +51,46 @@ BOOST_AUTO_TEST_CASE(valid_fixed_charge_v2_cb) {
     BOOST_CHECK(FilledMinerBillV2(tx, uint256S("000000000e55dfab3a5c742c898242a0c883f0b130c3d06cf232ae257ed75d48")));
 }
 
+BOOST_AUTO_TEST_CASE(malformed_v2_coinbase_outputs_are_rejected) {
+    const auto checkRejected = [this](CMutableTransaction mtx,
+                                      const std::string& rejectReason) {
+        CBlock block;
+        block.hashPrevBlock = uint256S(
+            "000000000e55dfab3a5c742c898242a0"
+            "c883f0b130c3d06cf232ae257ed75d48");
+        block.vtx.push_back(MakeTransactionRef(std::move(mtx)));
+
+        CValidationState state;
+        bool valid = true;
+        const BlockValidationOptions validationOptions(false, false);
+        BOOST_CHECK_NO_THROW(
+            valid = CheckBlock(
+                testConfig, block, state, 927000, validationOptions));
+        BOOST_CHECK(!valid);
+        BOOST_CHECK(state.IsInvalid());
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), rejectReason);
+    };
+
+    CMutableTransaction negativeOutput =
+        getValidFixedChargeMutableTransaction();
+    negativeOutput.vout[1].nValue = Amount(-1);
+    checkRejected(
+        std::move(negativeOutput), "bad-txns-vout-negative");
+
+    CMutableTransaction oversizedOutput =
+        getValidFixedChargeMutableTransaction();
+    oversizedOutput.vout[1].nValue = MAX_MONEY + Amount(1);
+    checkRejected(
+        std::move(oversizedOutput), "bad-txns-vout-toolarge");
+
+    CMutableTransaction oversizedTotal =
+        getValidFixedChargeMutableTransaction();
+    oversizedTotal.vout[0].nValue = MAX_MONEY;
+    oversizedTotal.vout[1].nValue = Amount(1);
+    checkRejected(
+        std::move(oversizedTotal), "bad-txns-txouttotal-toolarge");
+}
+
 BOOST_AUTO_TEST_CASE(canonical_v2_script_parser_accepts_expected_template) {
     const CMutableTransaction mtx = getValidFixedChargeMutableTransaction();
     MinerBillV2ScriptData parsed;
