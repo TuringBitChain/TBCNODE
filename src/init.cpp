@@ -832,9 +832,10 @@ std::string HelpMessage(HelpMessageMode mode) {
             "-mempoolfeerampstart=<n>",
             strprintf("Mempool usage (N1) below which the admission fee equals "
                       "-mempoolminfeerate (default: %uMB). Between N1 and "
-                      "-maxmempool (N2) the required feerate rises hyperbolically "
-                      "with a pole at N2. The value may be given in bytes or with "
-                      "unit (B, kB, MB, GB).",
+                      "-maxmempool (N2) the required feerate follows an alpha=3 "
+                      "reciprocal ramp up to a finite policy ceiling. Once "
+                      "current usage reaches N2, new admission stops. The value "
+                      "may be given in bytes or with unit (B, kB, MB, GB).",
                       DEFAULT_MEMPOOL_FEE_RAMP_START));
         strUsage += HelpMessageOpt(
             "-maxsigcachesize=<n>",

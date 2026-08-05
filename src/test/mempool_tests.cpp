@@ -390,8 +390,8 @@ BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndexForConnectedComponent) {
 BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
     // The mempool is never trimmed; admission is bounded by a size-dependent
     // fee floor (CTxMemPool::GetMinFee). Below the ramp start (N1) the floor is
-    // returned verbatim; between N1 and N2 the required feerate rises
-    // hyperbolically with a pole at N2; at/above N2 it clamps to the ceiling.
+    // returned verbatim; between N1 and N2 the required feerate follows an
+    // alpha=3 reciprocal ramp; at/above N2 it reports the policy ceiling.
     CTxMemPool pool;
     TestMemPoolEntryHelper entry;
 
@@ -426,16 +426,17 @@ BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
     BOOST_CHECK(config.SetMempoolFeeRampStart(usage + 1, &err));
     BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 4).GetFeePerK(), Amount(floorRate));
 
-    // On the ramp (N1 = 0): rate = floor * (N2 - N1) / (N2 - usage).
+    // On the ramp (N1 = 0):
+    //   rate = floor * ((N2 - N1) / (N2 - usage))^3.
     BOOST_CHECK(config.SetMempoolFeeRampStart(0, &err));
-    //   N2 = 2*usage -> floor * 2u / u = 2 * floor.
+    //   N2 = 2*usage -> floor * (2u/u)^3 = 8 * floor.
     BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 2).GetFeePerK(),
-                      Amount(2 * floorRate));
-    //   N2 = 4*usage -> floor * 4u / 3u = 1333 (integer division, exact for any u).
+                      Amount(8 * floorRate));
+    //   N2 = 4*usage -> floor * (4u/3u)^3 = floor * 64/27.
     BOOST_CHECK_EQUAL(pool.GetMinFee(usage * 4).GetFeePerK(),
-                      Amount(4 * floorRate / 3));
+                      Amount(64 * floorRate / 27));
 
-    // At/above the hard cap (N2 <= usage): clamp to the ceiling.
+    // At/above the N2 protection threshold: report the policy ceiling.
     BOOST_CHECK_EQUAL(pool.GetMinFee(usage).GetFeePerK(),
                       MAX_MEMPOOL_RAMP_FEE_RATE);
 
@@ -446,7 +447,7 @@ BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
 
     // The hyperbolic ramp itself clamps when the computed rate would exceed the
     // ceiling. With the floor sitting at the ceiling, any ramp factor > 1
-    // saturates: N1 = 0, N2 = 2*usage -> floor * 2 -> clamped back to the cap.
+    // saturates: N1 = 0, N2 = 2*usage -> floor * 8 -> clamped back to the cap.
     BOOST_CHECK(config.SetMempoolFeeRampStart(0, &err));
     BOOST_CHECK(config.SetMempoolMinFeePerKB(
         MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis(), &err));
@@ -454,12 +455,12 @@ BOOST_AUTO_TEST_CASE(MempoolAdmissionFeeCurveTest) {
                       MAX_MEMPOOL_RAMP_FEE_RATE);
     BOOST_CHECK(config.SetMempoolMinFeePerKB(floorRate, &err)); // restore floor
 
-    // Degenerate config (N2 <= N1) is treated as flat even when usage > N1: the
-    // floor is returned rather than falling through to the ramp/clamp branches.
+    // The N2 guard takes precedence for a degenerate N2 <= N1 configuration.
+    // Current usage is already above N2, so the policy ceiling is returned.
     BOOST_CHECK(config.SetMempoolFeeRampStart(usage / 2, &err));
     BOOST_CHECK(usage / 2 < usage);                          // usage is above N1
     BOOST_CHECK_EQUAL(pool.GetMinFee(usage / 4).GetFeePerK(), // and N2 <= N1
-                      Amount(floorRate));
+                      MAX_MEMPOOL_RAMP_FEE_RATE);
 
     // Restore policy defaults so other tests are unaffected.
     BOOST_CHECK(config.SetMempoolMinFeePerKB(

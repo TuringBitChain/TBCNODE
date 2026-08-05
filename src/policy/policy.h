@@ -87,9 +87,9 @@ static const unsigned int MAX_TX_SIGOPS_COUNT_POLICY_BEFORE_GENESIS = MAX_TX_SIG
 static const unsigned int MAX_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS = UINT32_MAX;
 /** Default policy value for -maxtxsigopscountspolicy, maximum number of sigops we're willing to relay/mine in a single tx after Genesis */
 static const unsigned int DEFAULT_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS = MAX_TX_SIGOPS_COUNT_POLICY_AFTER_GENESIS;
-/** Default for -maxmempool, maximum megabytes of mempool memory usage.
- *  Also acts as the hard size cap (N2): once reached, the mempool is never
- *  trimmed (no eviction) and further transactions are rejected. */
+/** Default for -maxmempool, the mempool admission protection threshold N2 in
+ *  megabytes. N2 may be reached; once current usage reaches it, further
+ *  transactions are rejected without trimming or eviction. */
 static const unsigned int DEFAULT_MAX_MEMPOOL_SIZE = 1000;
 /** Default for -maxnonfinalmempool, maximum megabytes of non-final mempool memory usage */
 static const unsigned int DEFAULT_MAX_NONFINAL_MEMPOOL_SIZE = 50;
@@ -98,10 +98,12 @@ static const unsigned int DEFAULT_MAX_NONFINAL_MEMPOOL_SIZE = 50;
 static constexpr Amount DEFAULT_MEMPOOL_MIN_FEE_RATE(60);
 /** Default for -mempoolfeerampstart in megabytes (N1): mempool usage below which
  *  the admission fee equals the floor. Between N1 and N2 the required feerate
- *  rises hyperbolically with a pole at N2, so N2 is in practice unreachable. */
+ *  follows an alpha=3 reciprocal ramp. The unclamped curve has a pole at N2;
+ *  the applied fee rate has a finite policy ceiling. */
 static const uint64_t DEFAULT_MEMPOOL_FEE_RAMP_START = 500;
-/** Upper clamp (satoshis per kB) for the hyperbolic ramp, to avoid overflow as
- *  the mempool approaches its hard size cap (N2). */
+/** Exponent for the reciprocal mempool admission fee ramp. */
+static constexpr unsigned int MEMPOOL_FEE_RAMP_EXPONENT = 3;
+/** Policy ceiling (satoshis per kB) for the reciprocal ramp. */
 static const Amount MAX_MEMPOOL_RAMP_FEE_RATE(int64_t(1) << 40);
 /** Default for -maxscriptsizepolicy **/
 static const unsigned int DEFAULT_MAX_SCRIPT_SIZE_POLICY_AFTER_GENESIS = 10000;

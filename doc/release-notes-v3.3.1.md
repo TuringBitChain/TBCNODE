@@ -8,12 +8,12 @@ chain accounting, and improves RPC and P2P robustness and performance.
 ### Mempool admission and fee policy
 
 * The mempool is no longer trimmed by evicting transactions when it approaches
-  `-maxmempool`. `-maxmempool` is now a hard memory limit and new transactions
-  are rejected once the limit is reached.
+  `-maxmempool`. This value is the N2 admission protection threshold: N2 may
+  be reached, and new transactions are rejected once current usage reaches it.
 * The rolling minimum fee and eviction-based fee calculation have been replaced
   by a deterministic admission fee curve. The required fee rate remains at the
-  configured floor until the ramp start, then rises hyperbolically as memory
-  usage approaches `-maxmempool`.
+  configured floor until the ramp start, then follows an `alpha=3` reciprocal
+  ramp up to a finite policy ceiling as memory usage approaches `-maxmempool`.
 * The default mempool admission fee floor is 60 satoshis/kB. The default
   `-blockmintxfee` value is also reduced from 500 to 60 satoshis/kB.
 * Free consolidation transactions are accepted only while mempool usage is in

@@ -7,7 +7,23 @@
 
 #include "tinyformat.h"
 
+#include <limits>
+
 const std::string CURRENCY_UNIT = "TBC";
+
+namespace {
+
+int64_t SaturatingInt64(__int128 value) {
+    if (value > std::numeric_limits<int64_t>::max()) {
+        return std::numeric_limits<int64_t>::max();
+    }
+    if (value < std::numeric_limits<int64_t>::min()) {
+        return std::numeric_limits<int64_t>::min();
+    }
+    return static_cast<int64_t>(value);
+}
+
+} // namespace
 
 std::string Amount::ToString() const {
     return strprintf("%d.%06d %s", amount / TBCCOIN.GetSatoshis(),
@@ -19,7 +35,9 @@ CFeeRate::CFeeRate(const Amount nFeePaid, size_t nBytes_) {
     int64_t nSize = int64_t(nBytes_);
 
     if (nSize > 0) {
-        nSatoshisPerK = 1000 * nFeePaid / nSize;
+        const __int128 rate =
+            static_cast<__int128>(nFeePaid.GetSatoshis()) * 1000 / nSize;
+        nSatoshisPerK = Amount(SaturatingInt64(rate));
     } else {
         nSatoshisPerK = Amount(0);
     }
@@ -33,7 +51,9 @@ Amount CFeeRate::GetFee(size_t nBytes_) const {
         nSize = 1000;
     }
 
-    Amount nFee = nSize * nSatoshisPerK / 1000;
+    const __int128 fee = static_cast<__int128>(nSize) *
+                         nSatoshisPerK.GetSatoshis() / 1000;
+    Amount nFee(SaturatingInt64(fee));
 
     if (nFee == Amount(0) && nSize != 0) {
         if (nSatoshisPerK > Amount(0)) {

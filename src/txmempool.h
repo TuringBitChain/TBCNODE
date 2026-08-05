@@ -638,10 +638,11 @@ public:
 
     /**
      * The minimum feerate to get into the mempool, as a deterministic function
-     * of current mempool usage. With sizelimit == N2 (the hard cap): below the
-     * configured ramp start (N1) it returns the configured floor; between N1
-     * and N2 it rises hyperbolically (pole at N2) so that N2 is in practice
-     * unreachable. The mempool is never trimmed (no eviction).
+     * of current mempool usage. With sizelimit == N2 (the admission protection
+     * threshold): below the configured ramp start (N1) it returns the
+     * configured floor; between N1 and N2 it follows a policy-clamped
+     * alpha=3 reciprocal ramp. N2 may be reached, after which admission rejects
+     * new transactions. The mempool is never trimmed (no eviction).
      */
     CFeeRate GetMinFee(size_t sizelimit) const;
 

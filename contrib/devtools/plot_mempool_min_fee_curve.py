@@ -6,12 +6,12 @@ Plot the CTxMemPool::GetMinFee admission curve as an SVG.
 
 The implementation mirrors src/txmempool.cpp:
 
-  if usage <= N1 or N2 <= N1:
-      rate = floor
-  elif usage >= N2:
+  if usage >= N2:
       rate = cap
+  elif usage <= N1 or N2 <= N1:
+      rate = floor
   else:
-      rate = floor * (N2 - N1) / (N2 - usage)
+      rate = floor * ((N2 - N1) / (N2 - usage))^3
 
 All fee rates are in satoshis per kB, matching CFeeRate::GetFeePerK().
 """
@@ -25,6 +25,7 @@ ONE_MEGABYTE = 1_000_000
 DEFAULT_FLOOR_RATE = 60
 DEFAULT_RAMP_START_MB = 500
 DEFAULT_MAX_MEMPOOL_MB = 1000
+RAMP_EXPONENT = 3
 DEFAULT_CAP_RATE = 1 << 40
 DEFAULT_POINTS = 400
 
@@ -34,12 +35,13 @@ def get_min_fee(usage_bytes: int, floor_rate: int, ramp_start_bytes: int,
     n1 = ramp_start_bytes
     n2 = max_mempool_bytes
 
-    if usage_bytes <= n1 or n2 <= n1:
-        return floor_rate
     if usage_bytes >= n2:
         return cap_rate
+    if usage_bytes <= n1 or n2 <= n1:
+        return floor_rate
 
-    rate = (floor_rate * (n2 - n1)) // (n2 - usage_bytes)
+    rate = (floor_rate * (n2 - n1) ** RAMP_EXPONENT
+            // (n2 - usage_bytes) ** RAMP_EXPONENT)
     return min(rate, cap_rate)
 
 
@@ -149,7 +151,7 @@ def render_svg(samples, ramp_start_mb: float, max_mempool_mb: float,
   <rect width="100%" height="100%" fill="#f7faf8"/>
   <text x="{margin_left}" y="38" font-size="28" font-family="monospace" fill="#163126">CTxMemPool::GetMinFee Curve</text>
   <text x="{margin_left}" y="60" font-size="15" font-family="monospace" fill="#48665a">
-    floor={floor_rate} sat/kB, N1={ramp_start_mb:.0f} MB, N2={max_mempool_mb:.0f} MB, cap={cap_rate} sat/kB, y={y_scale}
+    floor={floor_rate} sat/kB, N1={ramp_start_mb:.0f} MB, N2={max_mempool_mb:.0f} MB, alpha={RAMP_EXPONENT}, cap={cap_rate} sat/kB, y={y_scale}
   </text>
   <rect x="{margin_left}" y="{margin_top}" width="{plot_width}" height="{plot_height}" fill="#ffffff" stroke="#b9c9c0" stroke-width="1.5"/>
   {''.join(lines)}
@@ -161,7 +163,7 @@ def render_svg(samples, ramp_start_mb: float, max_mempool_mb: float,
   <polyline fill="none" stroke="#0d7a5f" stroke-width="4" points="{polyline}"/>
   <circle cx="{ramp_x:.2f}" cy="{ramp_y:.2f}" r="5" fill="#b45f06"/>
   <text x="{ramp_x + 10:.2f}" y="{margin_top + 24}" font-size="14" font-family="monospace" fill="#8b4a08">N1 ramp start</text>
-  <text x="{cap_x - 10:.2f}" y="{margin_top + 24}" text-anchor="end" font-size="14" font-family="monospace" fill="#7d1020">N2 hard cap</text>
+  <text x="{cap_x - 10:.2f}" y="{margin_top + 24}" text-anchor="end" font-size="14" font-family="monospace" fill="#7d1020">N2 admission threshold</text>
   <text x="{margin_left + plot_width / 2:.2f}" y="{height - 24}" text-anchor="middle" font-size="18" font-family="monospace" fill="#163126">Mempool usage (MB)</text>
   <text x="28" y="{margin_top + plot_height / 2:.2f}" text-anchor="middle" font-size="18" font-family="monospace" fill="#163126" transform="rotate(-90 28,{margin_top + plot_height / 2:.2f})">Required fee rate (sat/kB)</text>
 </svg>
@@ -176,7 +178,7 @@ def main():
     parser.add_argument("--ramp-start-mb", type=float, default=DEFAULT_RAMP_START_MB,
                         help="Mempool usage N1 in MB below which the floor applies.")
     parser.add_argument("--max-mempool-mb", type=float, default=DEFAULT_MAX_MEMPOOL_MB,
-                        help="Hard mempool cap N2 in MB.")
+                        help="Mempool admission protection threshold N2 in MB.")
     parser.add_argument("--cap-rate", type=int, default=DEFAULT_CAP_RATE,
                         help="Upper fee-rate clamp in sat/kB.")
     parser.add_argument("--y-scale", choices=("linear", "log"), default="linear",
@@ -203,9 +205,9 @@ def main():
 
     print(f"Wrote {args.output}")
     print("Formula:")
-    print("  usage <= N1 or N2 <= N1  => floor")
     print("  usage >= N2              => cap")
-    print("  else                     => floor * (N2 - N1) / (N2 - usage)")
+    print("  usage <= N1 or N2 <= N1  => floor")
+    print("  else                     => floor * ((N2 - N1) / (N2 - usage))^3")
 
 
 if __name__ == "__main__":

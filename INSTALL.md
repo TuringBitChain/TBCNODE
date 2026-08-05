@@ -104,12 +104,13 @@ mempoolminfeerate=60
 
 # Mempool usage (in MB) at which the admission feerate starts to ramp up.
 # Below this size the flat mempoolminfeerate floor applies; between this and
-# maxmempool the required feerate rises steeply, so the mempool asymptotes
-# below the hard cap.
+# maxmempool the alpha=3 reciprocal ramp makes admission increasingly costly
+# as usage approaches N2; the applied fee rate has a finite policy ceiling.
 mempoolfeerampstart=3000
 
-# Hard cap (in MB) on mempool memory usage. The mempool is never trimmed;
-# once usage reaches this cap new transactions are rejected.
+# N2 admission protection threshold (in MB). N2 may be reached. The mempool
+# is never trimmed; once current usage reaches N2, new transactions are
+# rejected.
 maxmempool=4000
  
 # Network-related settings:
