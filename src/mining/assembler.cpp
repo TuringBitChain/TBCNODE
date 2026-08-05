@@ -15,8 +15,9 @@
 
 using mining::BlockAssembler;
 
-// Last assembled block's transaction count and size, reported by getmininginfo.
-// Declared extern in validation.h; previously owned by the legacy assembler.
+// Last assembled block template's non-coinbase transaction count and serialized
+// size, reported by getmininginfo. Declared extern in validation.h; previously
+// owned by the legacy assembler.
 uint64_t nLastBlockTx = 0;
 uint64_t nLastBlockSize = 0;
 
