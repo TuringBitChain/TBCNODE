@@ -283,6 +283,127 @@ BOOST_AUTO_TEST_CASE(MempoolJournalTopoOrderAfterRemoveForBlock) {
                 CJournalTester::TxnOrder::BEFORE);
 }
 
+// A descendant's partial fee surplus must remain part of the unresolved CPFP
+// package so that a later descendant can finish paying the ancestor debt.
+BOOST_AUTO_TEST_CASE(MempoolJournalAccumulatesPartialCpfpSurplus) {
+    const CTransaction parent{MakeRootTx()};
+    const CTransaction child{MakeChildTx(parent)};
+    const CTransaction grandchild{MakeChildTx(child)};
+
+    const CFeeRate miningFeeRate{Amount{1000}};
+    auto requiredFee = [&miningFeeRate](const CTransaction& tx) {
+        return miningFeeRate.GetFee(tx.GetTotalSize());
+    };
+
+    {
+        CTxMemPool pool;
+        TestMemPoolEntryHelper entry;
+        pool.SetBlockMinTxFee(miningFeeRate);
+
+        // parent: -10 sat, child: +6 sat, grandchild: +4 sat. The complete
+        // ancestor package exactly meets blockMinTxfee.
+        pool.AddUnchecked(parent.GetId(),
+                          entry.Fee(requiredFee(parent) - Amount{10}).FromTx(parent),
+                          nullChangeSet);
+        pool.AddUnchecked(child.GetId(),
+                          entry.Fee(requiredFee(child) + Amount{6}).FromTx(child),
+                          nullChangeSet);
+
+        auto journal = pool.getJournalBuilder().getCurrentJournal();
+        BOOST_CHECK(!journal->checkTxnExists(parent.GetId()));
+        BOOST_CHECK(!journal->checkTxnExists(child.GetId()));
+
+        pool.AddUnchecked(grandchild.GetId(),
+                          entry.Fee(requiredFee(grandchild) + Amount{4}).FromTx(grandchild),
+                          nullChangeSet);
+
+        BOOST_CHECK(journal->checkTxnExists(parent.GetId()));
+        BOOST_CHECK(journal->checkTxnExists(child.GetId()));
+        BOOST_CHECK(journal->checkTxnExists(grandchild.GetId()));
+    }
+
+    {
+        CTxMemPool pool;
+        TestMemPoolEntryHelper entry;
+        pool.SetBlockMinTxFee(miningFeeRate);
+
+        // One satoshi short in aggregate must keep the whole package out of
+        // the journal.
+        pool.AddUnchecked(parent.GetId(),
+                          entry.Fee(requiredFee(parent) - Amount{10}).FromTx(parent),
+                          nullChangeSet);
+        pool.AddUnchecked(child.GetId(),
+                          entry.Fee(requiredFee(child) + Amount{6}).FromTx(child),
+                          nullChangeSet);
+        pool.AddUnchecked(grandchild.GetId(),
+                          entry.Fee(requiredFee(grandchild) + Amount{3}).FromTx(grandchild),
+                          nullChangeSet);
+
+        auto journal = pool.getJournalBuilder().getCurrentJournal();
+        BOOST_CHECK(!journal->checkTxnExists(parent.GetId()));
+        BOOST_CHECK(!journal->checkTxnExists(child.GetId()));
+        BOOST_CHECK(!journal->checkTxnExists(grandchild.GetId()));
+    }
+}
+
+// Surplus from multiple branches may combine when a transaction depends on
+// both branches. Their shared ancestor must contribute its debt only once.
+BOOST_AUTO_TEST_CASE(MempoolJournalAccumulatesCpfpSurplusAcrossConvergingDag) {
+    const CTransaction root{MakeRootTx(2)};
+    const CTransaction left{MakeChildTx(root, 0)};
+    const CTransaction right{MakeChildTx(root, 1)};
+    const CTransaction merge{MakeTwoParentTx(left, right)};
+
+    const CFeeRate miningFeeRate{Amount{1000}};
+    auto requiredFee = [&miningFeeRate](const CTransaction& tx) {
+        return miningFeeRate.GetFee(tx.GetTotalSize());
+    };
+
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+    pool.SetBlockMinTxFee(miningFeeRate);
+
+    // root: -10 sat, each branch: +3 sat, merge: +4 sat. Neither branch
+    // independently covers the root, but their converged ancestor package does.
+    pool.AddUnchecked(root.GetId(),
+                      entry.Fee(requiredFee(root) - Amount{10}).FromTx(root),
+                      nullChangeSet);
+    pool.AddUnchecked(left.GetId(),
+                      entry.Fee(requiredFee(left) + Amount{3}).FromTx(left),
+                      nullChangeSet);
+    pool.AddUnchecked(right.GetId(),
+                      entry.Fee(requiredFee(right) + Amount{3}).FromTx(right),
+                      nullChangeSet);
+
+    auto journal = pool.getJournalBuilder().getCurrentJournal();
+    BOOST_CHECK(!journal->checkTxnExists(root.GetId()));
+    BOOST_CHECK(!journal->checkTxnExists(left.GetId()));
+    BOOST_CHECK(!journal->checkTxnExists(right.GetId()));
+
+    pool.AddUnchecked(merge.GetId(),
+                      entry.Fee(requiredFee(merge) + Amount{4}).FromTx(merge),
+                      nullChangeSet);
+
+    mining::CJournalEntry rootEntry{*pool.mapTx.find(root.GetId())};
+    mining::CJournalEntry leftEntry{*pool.mapTx.find(left.GetId())};
+    mining::CJournalEntry rightEntry{*pool.mapTx.find(right.GetId())};
+    mining::CJournalEntry mergeEntry{*pool.mapTx.find(merge.GetId())};
+    mining::CJournalTester tester{journal};
+
+    BOOST_CHECK(tester.checkTxnExists(rootEntry));
+    BOOST_CHECK(tester.checkTxnExists(leftEntry));
+    BOOST_CHECK(tester.checkTxnExists(rightEntry));
+    BOOST_CHECK(tester.checkTxnExists(mergeEntry));
+    BOOST_CHECK(tester.checkTxnOrdering(rootEntry, leftEntry) ==
+                mining::CJournalTester::TxnOrder::BEFORE);
+    BOOST_CHECK(tester.checkTxnOrdering(rootEntry, rightEntry) ==
+                mining::CJournalTester::TxnOrder::BEFORE);
+    BOOST_CHECK(tester.checkTxnOrdering(leftEntry, mergeEntry) ==
+                mining::CJournalTester::TxnOrder::BEFORE);
+    BOOST_CHECK(tester.checkTxnOrdering(rightEntry, mergeEntry) ==
+                mining::CJournalTester::TxnOrder::BEFORE);
+}
+
 // Regression test for the reorg insertionIndex fixup (Phase 4).
 //
 // A reorg re-adds previously-confirmed transactions and can re-add a parent
