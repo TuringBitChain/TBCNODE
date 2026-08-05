@@ -435,6 +435,7 @@ BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndex) {
     // point), then the parent is re-added -- mimicking a block disconnect that
     // re-adds the parent underneath an existing child.
     pool.AddUnchecked(c.GetId(), entry.Fee(Amount(10000LL)).FromTx(c), nullChangeSet);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(c.GetId())->GetAncestorsHeight(), 0UL);
     pool.AddUnchecked(p.GetId(), entry.Fee(Amount(10000LL)).FromTx(p), nullChangeSet);
 
     auto pIdx = [&] { return pool.mapTx.find(p.GetId())->GetInsertionIndex(); };
@@ -448,6 +449,20 @@ BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndex) {
 
     // After fixup the parent precedes the child topologically.
     BOOST_CHECK(pIdx() < cIdx());
+
+    // C was accepted while P was confirmed, so reconnecting P must also make
+    // C an unconfirmed descendant rather than leaving its old height of zero.
+    BOOST_CHECK_EQUAL(pool.mapTx.find(c.GetId())->GetAncestorsHeight(), 1UL);
+    BOOST_CHECK(!pool.TransactionWithinChainLimit(c.GetId(), 1));
+
+    // At a height limit of two, D would have height two (P -> C -> D) and
+    // must therefore be rejected. Before the height fixup, C's stale zero
+    // made this check incorrectly succeed.
+    CMutableTransaction d = MakeChildTx(CTransaction(c));
+    CTxMemPool::setEntries ancestors;
+    std::string errString;
+    BOOST_CHECK(!pool.CalculateMemPoolAncestors(
+        entry.Fee(Amount(10000LL)).FromTx(d), ancestors, 2, errString));
 }
 
 BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndexForConnectedComponent) {
@@ -496,6 +511,21 @@ BOOST_AUTO_TEST_CASE(MempoolReorgReassignsInsertionIndexForConnectedComponent) {
     BOOST_CHECK(InsertionIndex(pool, b.GetId()) < InsertionIndex(pool, d.GetId()));
     BOOST_CHECK(InsertionIndex(pool, c.GetId()) < InsertionIndex(pool, e.GetId()));
     BOOST_CHECK(InsertionIndex(pool, d.GetId()) < InsertionIndex(pool, e.GetId()));
+
+    // All pre-existing descendants must have heights refreshed across the
+    // reconnected component, including the two-parent descendant e.
+    BOOST_CHECK_EQUAL(pool.mapTx.find(r.GetId())->GetAncestorsHeight(), 0UL);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(a.GetId())->GetAncestorsHeight(), 1UL);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(b.GetId())->GetAncestorsHeight(), 1UL);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(c.GetId())->GetAncestorsHeight(), 2UL);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(d.GetId())->GetAncestorsHeight(), 2UL);
+    BOOST_CHECK_EQUAL(pool.mapTx.find(e.GetId())->GetAncestorsHeight(), 3UL);
+
+    CMutableTransaction f = MakeChildTx(CTransaction(e));
+    CTxMemPool::setEntries ancestors;
+    std::string errString;
+    BOOST_CHECK(!pool.CalculateMemPoolAncestors(
+        entry.Fee(Amount(10000LL)).FromTx(f), ancestors, 4, errString));
 
     CTxMemPool::setEntries descendants;
     pool.CalculateDescendants(pool.mapTx.find(r.GetId()), descendants);
