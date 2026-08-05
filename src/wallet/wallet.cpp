@@ -4578,6 +4578,6 @@ bool CMerkleTx::SubmitTxToMempool(const Amount nAbsurdFee,
             true,         // fLimitFree
             nAbsurdFee),  // nAbsurdFee
         changeSet, // an instance of the mempool journal
-        true); // fLimitMempoolSize
+        true); // run mempool expiry cleanup
     return state.IsValid();
 }
