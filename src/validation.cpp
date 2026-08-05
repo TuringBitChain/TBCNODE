@@ -1565,8 +1565,8 @@ void CommitTxToMempool(
             changeSet,
             pnMempoolSize,
             pnDynamicMemoryUsage);
-    // Expire aged transactions. Under the no-trim policy the just-added txn is
-    // never evicted here; the mempool size is bounded at admission time instead.
+    // Expire aged transactions. Under the no-trim policy no size-based eviction
+    // occurs here; TxnValidation performs size-cap rejection before insertion.
     if (fLimitMempoolSize) {
         LimitMempoolSize(
             pool,
@@ -1892,9 +1892,9 @@ CTxnValResult TxnValidation(
     // during reorgs to ensure COINBASE_MATURITY is still met.
     const bool fSpendsCoinbase = CheckTxSpendsCoinbase(tx, view);
 
-    // No-trim policy: the mempool is never evicted, so reject once it reaches
-    // its hard size cap (N2 == -maxmempool). This gate is unconditional and so
-    // also bounds reorg resurrection: disconnected-block txns are re-added via
+    // No-trim policy: transactions are not evicted to enforce size, so reject
+    // once usage reaches the hard cap (N2 == -maxmempool). This gate is
+    // unconditional and also bounds reorg resurrection: disconnected-block txns are re-added via
     // CTxnValidation (UpdateMempoolForReorg -> processValidation), so once usage
     // hits N2 the remaining resurrected txns are rejected here rather than being
     // added and trimmed afterwards. The fee floor below rises hyperbolically
@@ -2599,11 +2599,9 @@ static void PostValidationStepsForP2PTxn(
         pNode->nLastTXTime = GetTime();
     }
     else {
-        // For P2P txns the Validator executes LimitMempoolSize when a batch of txns is
-        // fully processed (validation is finished and all valid txns were commited)
-        // so the else condition can not be interpreted if limit mempool size flag
-        // is set on transaction level. As a consequence AddToCompactExtraTransactions is not
-        // being called for txns added and then removed from the mempool.
+        // Size-cap failures are rejected by TxnValidation before insertion.
+        // LimitMempoolSize performs expiry-only cleanup and cannot turn a
+        // successfully committed transaction into an insufficient-fee failure.
 
         // Create and send a reject message when all the following conditions are met:
         // a) the txn is fully processed
@@ -8017,7 +8015,7 @@ bool LoadMempool(const Config &config, const task::CCancellationToken& shutdownT
                             nTime, // nAcceptTime
                             true),  // fLimitFree
                         changeSet, // an instance of the mempool journal
-                        true) // fLimitMempoolSize
+                        true) // run mempool expiry cleanup
                 };
                 // Check results
                 if (state.IsValid()) {

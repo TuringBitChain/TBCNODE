@@ -189,8 +189,9 @@ CValidationState CTxnValidator::processValidation(
                     mMempool,
                     handlers);
     }
-    // Notify subscribers that a new txn was added to the mempool and not
-    // removed from there due to LimitMempoolSize.
+    // Notify subscribers after successful validation and mempool insertion.
+    // Size-cap failures are rejected by TxnValidation before insertion;
+    // LimitMempoolSize only performs expiry cleanup.
     if (result.mState.IsValid()) {
         GetMainSignals().TransactionAddedToMempool(result.mTxInputData->GetTxnPtr());
     }
@@ -289,10 +290,10 @@ CTxnValidator::RejectedTxns CTxnValidator::processValidation(
                     numOrphanTxns);
         }
     } while (vTxInputDataSize);
-    // Limit mempool size if required
+    // Expire old mempool transactions if requested. Size-cap admission is
+    // enforced by TxnValidation before insertion.
     std::vector<TxId> vRemovedTxIds {};
     if (fLimitMempoolSize) {
-        // Trim mempool if it's size exceeds the limit.
         vRemovedTxIds =
             LimitMempoolSize(
                 mMempool,
@@ -426,7 +427,8 @@ void CTxnValidator::threadNewTxnHandler() noexcept {
                                         handlers,
                                         true,
                                         nMaxTxnValidatorAsyncTasksRunDuration);
-                                // Trim mempool if it's size exceeds the limit.
+                                // Expire old mempool transactions. The no-trim
+                                // size cap is enforced by TxnValidation before insertion.
                                 std::vector<TxId> vRemovedTxIds {
                                     LimitMempoolSize(
                                         mMempool,
@@ -633,12 +635,14 @@ void CTxnValidator::postProcessingStepsNL(
     CTxnHandlers& handlers) {
 
     /**
-     * 1. Send tx reject message if p2p txn was accepted by the mempool
-     * and then removed from there because of insufficient fee.
+     * Under the no-trim policy, size-cap failures are rejected by
+     * TxnValidation before insertion. LimitMempoolSize performs expiry-only
+     * cleanup and returns no removed transaction IDs, so accepted transactions
+     * are normally notified below.
      *
-     * 2. Notify subscribers if a new txn is accepted and not removed.
-     *
-     * 3. Do not keep outpoints from txns which were added to the mempool and then removed from there.
+     * The non-empty removal-list handling is retained for an explicitly
+     * reported post-insertion removal: suppress the notification, notify a P2P
+     * peer of the rejection, and discard collected orphan outpoints.
      */
     for (const auto& pTxInputDataSPtr: vAcceptedTxns) {
         if (!vRemovedTxIds.empty() &&
@@ -646,7 +650,7 @@ void CTxnValidator::postProcessingStepsNL(
                 vRemovedTxIds.begin(),
                 vRemovedTxIds.end(),
                 pTxInputDataSPtr->GetTxnPtr()->GetId()) != vRemovedTxIds.end()) {
-            // Removed p2p txns from the mempool
+            // A p2p txn explicitly reported as removed after insertion.
             if (TxSource::p2p == pTxInputDataSPtr->GetTxSource()) {
                 // Create a reject message for the removed txn
                 CreateTxRejectMsgForP2PTxn(
@@ -656,15 +660,14 @@ void CTxnValidator::postProcessingStepsNL(
             }
         } else {
             // Notify subscribers that a new txn was added to the mempool.
-            // At this stage we do know that the signal won't be triggered for removed txns.
+            // At this stage the txn was not explicitly reported as removed.
             // This needs to be here due to cs_main lock held by wallet's implementation of the signal
             GetMainSignals().TransactionAddedToMempool(pTxInputDataSPtr->GetTxnPtr());
         }
     }
     /**
-     * We don't want to keep outpoints from txns which were
-     * removed from the mempool (because of insufficient fee).
-     * It could schedule false-possitive orphans for re-try.
+     * Do not keep outpoints from transactions explicitly reported as removed;
+     * doing so could schedule false-positive orphan retries.
      */
     if (handlers.mpOrphanTxns && !vRemovedTxIds.empty()) {
         handlers.mpOrphanTxns->eraseCollectedOutpointsFromTxns(vRemovedTxIds);

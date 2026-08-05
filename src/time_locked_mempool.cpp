@@ -300,7 +300,7 @@ bool CTimeLockedMempool::loadMempool(const task::CCancellationToken& shutdownTok
                             nTime, // nAcceptTime
                             true),  // fLimitFree
                         changeSet, // an instance of the mempool journal
-                        true) // fLimitMempoolSize
+                        true) // run mempool expiry cleanup
                 };
 
                 // Check results

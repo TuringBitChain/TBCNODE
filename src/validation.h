@@ -661,13 +661,17 @@ size_t GetNumLowPriorityValidationThrs(size_t nTestingHCValue=SIZE_MAX);
 size_t GetNumHighPriorityValidationThrs(size_t nTestingHCValue=SIZE_MAX);
 
 /**
- * Limit mempool size.
+ * Expire transactions that have aged past the mempool expiry window.
+ *
+ * Under the no-trim policy, this function does not enforce the size cap.
+ * TxnValidation rejects new transactions before insertion once current dynamic
+ * memory usage reaches GetMaxMempool().
  *
  * @param pool A reference to the mempool
- * @param changeSet A reference to the Jorunal ChangeSet
- * @param limit A size limit for txn to remove
- * @param age Time limit for txn to remove
- * @return A vector with all TxIds which were removed from the mempool
+ * @param changeSet A reference to the Journal ChangeSet
+ * @param limit Unused legacy size-limit parameter
+ * @param age Maximum transaction age
+ * @return An empty vector; expiry removals are not reported by TxId
  */
 std::vector<TxId> LimitMempoolSize(
     CTxMemPool &pool,
@@ -685,7 +689,7 @@ std::vector<TxId> LimitMempoolSize(
  * @param pool A reference to the mempool
  * @param state A reference to a state variable
  * @param changeSet A reference to the Jorunal ChangeSet
- * @param fLimitMempoolSize A flag to limit a mempool size
+ * @param fLimitMempoolSize A flag to run mempool expiry cleanup after commit
  * @param pnMempoolSize If not null store mempool size after txn is commited
  * @param pnDynamicMemoryUsage If not null store dynamic memory usage after txn is commited
  */
@@ -760,7 +764,7 @@ std::vector<std::pair<CTxnValResult, CTask::Status>> TxnValidationProcessingTask
  * @param pool A reference to the mempool
  * @param txStatus A result of validation
  * @param handlers Txn handlers
- * @param fLimitMempoolSize A flag to limit a mempool size
+ * @param fLimitMempoolSize A flag to run mempool expiry cleanup after commit
  */
 void ProcessValidatedTxn(
     CTxMemPool& pool,

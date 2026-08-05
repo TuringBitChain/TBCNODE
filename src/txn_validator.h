@@ -163,12 +163,12 @@ class CTxnValidator final
         bool fUseLimits,
         std::chrono::milliseconds maxasynctasksrunduration);
 
-    /** Post validation step for txns before limit mempool size is done*/
+    /** Process per-transaction results before batch expiry cleanup. */
     void postValidationStepsNL(
         const std::pair<CTxnValResult, CTask::Status>& result,
         CIntermediateResult& processedTxns);
 
-    /** Post processing step for txns when limit mempool size is done */
+    /** Notify accepted txns after expiry-only mempool cleanup. */
     void postProcessingStepsNL(
         const std::vector<TxInputDataSPtr>& vAcceptedTxns,
         const std::vector<TxId>& vRemovedTxIds,
