@@ -6,8 +6,8 @@ Sample the live mempool admission-fee curve by repeatedly adding large
 transactions and recording getmempoolinfo()['mempoolminfee'] as usage grows.
 
 This is intentionally an explicit/manual functional test: it is slower than the
- usual suite because it pushes the mempool close to its hard size cap and emits
- CSV/SVG artifacts for visual inspection.
+usual suite because it pushes the mempool close to its N2 admission threshold
+and emits CSV/SVG artifacts for visual inspection.
 """
 
 from decimal import Decimal
@@ -66,11 +66,15 @@ class MempoolFeeRampSampledCurveTest(BitcoinTestFramework):
         return signed["hex"]
 
     def expected_min_fee_sats(self, usage_bytes, floor_rate_sats, ramp_start_bytes, max_mempool_bytes):
-        if usage_bytes <= ramp_start_bytes or max_mempool_bytes <= ramp_start_bytes:
-            return floor_rate_sats
         if usage_bytes >= max_mempool_bytes:
             return 1 << 40
-        return (floor_rate_sats * (max_mempool_bytes - ramp_start_bytes)) // (max_mempool_bytes - usage_bytes)
+        if usage_bytes <= ramp_start_bytes or max_mempool_bytes <= ramp_start_bytes:
+            return floor_rate_sats
+        return min(
+            floor_rate_sats * (max_mempool_bytes - ramp_start_bytes) ** 3
+            // (max_mempool_bytes - usage_bytes) ** 3,
+            1 << 40,
+        )
 
     def load_plotter(self):
         srcdir = get_srcdir(calling_script=__file__)

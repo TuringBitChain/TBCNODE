@@ -109,41 +109,37 @@ BOOST_AUTO_TEST_CASE(GetFeeTest) {
     BOOST_CHECK_EQUAL(feeRate.GetFee(1e5), Amount(0));
 
     feeRate = CFeeRate(Amount(1000));
-    // Must always just return the arg
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(121));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(999));
+    // Fees for sizes below 1 kB are charged as 1 kB.
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(9000));
 
     feeRate = CFeeRate(Amount(-1000));
     // Must always just return -1 * arg
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(-1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(-121));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(-999));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(1), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(-1000));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(-1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(-1000));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(-9000));
 
     feeRate = CFeeRate(Amount(123));
-    // Truncates the result, if not integer
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    // Special case: returns 1 instead of 0
-    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(14));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(122), Amount(15));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(122));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(121), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(122), Amount(123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(999), Amount(123));
     BOOST_CHECK_EQUAL(feeRate.GetFee(1000), Amount(123));
     BOOST_CHECK_EQUAL(feeRate.GetFee(9000), Amount(1107));
 
     feeRate = CFeeRate(Amount(-123));
-    // Truncates the result, if not integer
-    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(0));
-    // Special case: returns -1 instead of 0
-    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(-1));
-    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(-1));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(0), Amount(-123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(8), Amount(-123));
+    BOOST_CHECK_EQUAL(feeRate.GetFee(9), Amount(-123));
 
     // Check full constructor
     // default value
@@ -158,6 +154,33 @@ BOOST_AUTO_TEST_CASE(GetFeeTest) {
     BOOST_CHECK(CFeeRate(Amount(27), 789) == CFeeRate(Amount(34)));
     // Maximum size in bytes, should not crash
     CFeeRate(MAX_MONEY, std::numeric_limits<size_t>::max() >> 1).GetFeePerK();
+}
+
+BOOST_AUTO_TEST_CASE(GetFeeOverflowSafetyTest) {
+    const Amount rampCap(int64_t(1) << 40);
+    const CFeeRate cappedRate(rampCap);
+
+    // The old int64 multiplication overflowed above roughly 8.39 MB even
+    // though these final fees are representable.
+    BOOST_CHECK_EQUAL(cappedRate.GetFee(10'000'000),
+                      Amount(10'995'116'277'760'000LL));
+    BOOST_CHECK_EQUAL(cappedRate.GetFee(1'000'000'000),
+                      Amount(1'099'511'627'776'000'000LL));
+
+    // Results outside Amount's range saturate instead of invoking signed UB.
+    BOOST_CHECK_EQUAL(
+        CFeeRate(Amount(std::numeric_limits<int64_t>::max()))
+            .GetFee(std::numeric_limits<int64_t>::max()),
+        Amount(std::numeric_limits<int64_t>::max()));
+    BOOST_CHECK_EQUAL(
+        CFeeRate(Amount(std::numeric_limits<int64_t>::min()))
+            .GetFee(std::numeric_limits<int64_t>::max()),
+        Amount(std::numeric_limits<int64_t>::min()));
+
+    // The inverse fee-rate constructor uses the same saturation rules.
+    BOOST_CHECK_EQUAL(
+        CFeeRate(Amount(std::numeric_limits<int64_t>::max()), 1).GetFeePerK(),
+        Amount(std::numeric_limits<int64_t>::max()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

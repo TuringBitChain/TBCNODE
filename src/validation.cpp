@@ -1524,9 +1524,9 @@ std::vector<TxId> LimitMempoolSize(
     unsigned long age) {
 
     // No-trim policy: the mempool is never evicted to satisfy a size limit.
-    // Admission is bounded instead by a size-dependent fee floor plus a hard
-    // reject at the cap (see CTxnValidation / CTxMemPool::GetMinFee). Here we
-    // only drop transactions that have aged past the expiry window.
+    // Admission is bounded instead by a size-dependent fee floor plus rejection
+    // once current usage reaches N2 (see CTxnValidation / CTxMemPool::GetMinFee).
+    // Here we only drop transactions that have aged past the expiry window.
     (void)limit;
     int expired = pool.Expire(GetTime() - age, changeSet);
     if (expired != 0) {
@@ -1897,19 +1897,21 @@ CTxnValResult TxnValidation(
     const bool fSpendsCoinbase = CheckTxSpendsCoinbase(tx, view);
 
     // No-trim policy: transactions are not evicted to enforce size, so reject
-    // once usage reaches the hard cap (N2 == -maxmempool). This gate is
-    // unconditional and also bounds reorg resurrection: disconnected-block txns are re-added via
+    // once current usage reaches protection threshold N2 (-maxmempool). This
+    // gate is unconditional. It also bounds reorg resurrection:
+    // disconnected-block txns are re-added via
     // CTxnValidation (UpdateMempoolForReorg -> processValidation), so once usage
     // hits N2 the remaining resurrected txns are rejected here rather than being
-    // added and trimmed afterwards. The fee floor below rises hyperbolically
-    // toward N2, so fee-paying traffic asymptotes below it in normal operation.
+    // added and trimmed afterwards. The cubic fee floor below makes admission
+    // increasingly expensive before N2; the hard gate protects capacity once
+    // N2 is reached.
     if (pool.DynamicMemoryUsage() >= config.GetMaxMempool()) {
         state.DoS(0, false, REJECT_INSUFFICIENTFEE,
                  "mempool full");
         return Result{state, pTxInputData, vCoinsToUncache};
     }
 
-    // Size-based admission fee floor (rises hyperbolically from N1 toward N2).
+    // Size-based admission fee floor (rises cubically from N1 toward N2).
     const Amount& nMempoolRejectFee = GetMempoolRejectFee(config, pool, nTxSize);
 
     if(!CheckMempoolMinFee(nModifiedFees, nMempoolRejectFee)) {

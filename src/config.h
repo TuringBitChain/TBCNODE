@@ -147,8 +147,9 @@ public:
     virtual uint64_t GetMemPoolExpiry() const = 0;
 
     // Mempool admission fee curve (no-trim policy). N1 = ramp start (bytes),
-    // N2 = GetMaxMempool(). Below N1 the floor applies; between N1 and N2 the
-    // required feerate rises hyperbolically with a pole at N2.
+    // N2 = GetMaxMempool(), the admission protection threshold. Below N1 the
+    // floor applies; between N1 and N2 the feerate follows a policy-clamped
+    // alpha=3 reciprocal ramp. Admission stops once current usage reaches N2.
     virtual bool SetMempoolFeeRampStart(int64_t rampStart, std::string* err) = 0;
     virtual uint64_t GetMempoolFeeRampStart() const = 0;
     virtual bool SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) = 0;

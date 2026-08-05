@@ -663,7 +663,7 @@ size_t GetNumHighPriorityValidationThrs(size_t nTestingHCValue=SIZE_MAX);
 /**
  * Expire transactions that have aged past the mempool expiry window.
  *
- * Under the no-trim policy, this function does not enforce the size cap.
+ * Under the no-trim policy, this function does not enforce the N2 threshold.
  * TxnValidation rejects new transactions before insertion once current dynamic
  * memory usage reaches GetMaxMempool().
  *

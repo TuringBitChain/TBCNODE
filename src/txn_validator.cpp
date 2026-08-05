@@ -428,7 +428,8 @@ void CTxnValidator::threadNewTxnHandler() noexcept {
                                         true,
                                         nMaxTxnValidatorAsyncTasksRunDuration);
                                 // Expire old mempool transactions. The no-trim
-                                // size cap is enforced by TxnValidation before insertion.
+                                // N2 admission threshold is enforced by
+                                // TxnValidation before insertion.
                                 std::vector<TxId> vRemovedTxIds {
                                     LimitMempoolSize(
                                         mMempool,
@@ -635,7 +636,7 @@ void CTxnValidator::postProcessingStepsNL(
     CTxnHandlers& handlers) {
 
     /**
-     * Under the no-trim policy, size-cap failures are rejected by
+     * Under the no-trim policy, N2 threshold failures are rejected by
      * TxnValidation before insertion. LimitMempoolSize performs expiry-only
      * cleanup and returns no removed transaction IDs, so accepted transactions
      * are normally notified below.
