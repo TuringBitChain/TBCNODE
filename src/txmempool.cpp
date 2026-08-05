@@ -1603,19 +1603,6 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
         return txs;
     };
 
-    // returns debt of the transaction, regardless of the parents
-    auto calculateDebt = [this](txiter entry){
-        auto fee = entry->GetModifiedFee();
-        auto neededFee = blockMinTxfee.GetFee(entry->GetTxSize());
-        if(fee < neededFee)
-        {
-            return neededFee - fee;
-        }
-        return Amount(0);
-    };
-
-
-    
     auto txsToCheck = topoSortedTxFromSet(affectedTransactions);
     
     // limit ourself to fixed number of recalculation rounds
@@ -1633,7 +1620,8 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
         // so if we accepted transactions through cpfp we will revisit all transactions that did not make it to the journal
         bool cpfpExecuted = false;
 
-        // keys are entries that do not pay enough, values are sets of the their's ancestors which do not pay enough
+        // Keys are entries whose ancestor-closed package does not pay enough;
+        // values are the unresolved ancestors in that package.
         std::map<txiter, setEntries, CompareIteratorByHash> nonPayingTxWithAncestors;
 
         for(txiter ent: txsToCheck)
@@ -1654,17 +1642,19 @@ void CTxMemPool::checkJournalAcceptanceNL(const CTxMemPool::setEntries& affected
                 nonpayingAncestors.insert(parent);
             }
 
-            // now sum up all ancestor's debt (if any)
-            Amount ancestorsDebt(0);
+            // Evaluate the whole unresolved ancestor package. In particular,
+            // retain surplus from an intermediate descendant so it can combine
+            // with a later descendant's fee. The set also ensures shared
+            // ancestors are counted only once.
+            Amount packageFee = ent->GetModifiedFee();
+            Amount packageRequiredFee = blockMinTxfee.GetFee(ent->GetTxSize());
             for(txiter ancestor: nonpayingAncestors)
             {
-                ancestorsDebt += calculateDebt(ancestor);
+                packageFee += ancestor->GetModifiedFee();
+                packageRequiredFee += blockMinTxfee.GetFee(ancestor->GetTxSize());
             }
 
-            Amount fee = ent->GetModifiedFee();
-            Amount excessFee = fee - blockMinTxfee.GetFee(ent->GetTxSize()); 
-
-            if(excessFee >= ancestorsDebt)
+            if(packageFee >= packageRequiredFee)
             {
                 // Great! This transactions pays enough, first remove ancestors from the debt list (if any) 
                 // and add them to the journal (in topo-order)
