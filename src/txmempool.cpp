@@ -185,7 +185,7 @@ void CTxMemPool::UpdateTransactionsFromBlock(
     heightsToUpdate.insert(component.begin(), component.end());
     UpdateAncestorsHeightNL(std::move(heightsToUpdate));
 
-    checkJournalAcceptanceNL(affected, nonNullChangeSet.Get());
+    checkJournalAcceptanceNL(component, nonNullChangeSet.Get());
 }
 
 void CTxMemPool::reassignInsertionIndicesNL(const setEntries& entries)

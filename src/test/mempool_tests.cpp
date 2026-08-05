@@ -404,6 +404,48 @@ BOOST_AUTO_TEST_CASE(MempoolJournalAccumulatesCpfpSurplusAcrossConvergingDag) {
                 mining::CJournalTester::TxnOrder::BEFORE);
 }
 
+BOOST_AUTO_TEST_CASE(MempoolReorgRechecksReaddedParentForJournal) {
+    CTxMemPool pool;
+    TestMemPoolEntryHelper entry;
+
+    const CTransaction parent{MakeRootTx()};
+    const CTransaction child{MakeChildTx(parent)};
+    const CFeeRate miningFeeRate{Amount{1000}};
+    pool.SetBlockMinTxFee(miningFeeRate);
+
+    const Amount parentDebt{miningFeeRate.GetFee(parent.GetTotalSize())};
+    const Amount childRequiredFee{miningFeeRate.GetFee(child.GetTotalSize())};
+
+    // The child enters while its parent is confirmed and independently has
+    // enough surplus to pay the parent's debt if the parent is disconnected.
+    pool.AddUnchecked(child.GetId(),
+                      entry.Fee(childRequiredFee + parentDebt).FromTx(child),
+                      nullChangeSet);
+    BOOST_REQUIRE(pool.getJournalBuilder().getCurrentJournal()->checkTxnExists(
+        child.GetId()));
+
+    auto changeSet = pool.getJournalBuilder().getNewChangeSet(
+        mining::JournalUpdateReason::REORG);
+    pool.AddUnchecked(parent.GetId(),
+                      entry.Fee(Amount{0}).FromTx(parent),
+                      changeSet);
+    BOOST_CHECK(!pool.getJournalBuilder().getCurrentJournal()->checkTxnExists(
+        parent.GetId()));
+
+    pool.UpdateTransactionsFromBlock({parent.GetId()}, changeSet);
+    changeSet->apply();
+
+    auto journal = pool.getJournalBuilder().getCurrentJournal();
+    mining::CJournalEntry parentEntry{*pool.mapTx.find(parent.GetId())};
+    mining::CJournalEntry childEntry{*pool.mapTx.find(child.GetId())};
+    mining::CJournalTester tester{journal};
+    BOOST_CHECK(tester.checkTxnExists(parentEntry));
+    BOOST_CHECK(tester.checkTxnExists(childEntry));
+    BOOST_CHECK(tester.checkTxnOrdering(parentEntry, childEntry) ==
+                mining::CJournalTester::TxnOrder::BEFORE);
+    BOOST_CHECK(pool.CheckJournal().empty());
+}
+
 // Regression test for the reorg insertionIndex fixup (Phase 4).
 //
 // A reorg re-adds previously-confirmed transactions and can re-add a parent
