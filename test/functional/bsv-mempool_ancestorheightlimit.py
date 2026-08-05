@@ -390,6 +390,41 @@ class MempoolAncestorHeightLimits(BitcoinTestFramework):
         assert_equal(len(node.getrawmempool()), 0)
         self.stop_node(0)
 
+    def _test_reorg_refreshes_descendant_height_rpc(self):
+        """Reorg: a re-added parent raises its existing child's chain height."""
+        self.start_node(0, [
+            "-blockmintxfee=0.00001",
+            "-relayfee=0.000005",
+            "-limitancestorcount=2",
+            "-checkmempool=1",
+        ])
+        node = self.nodes[0]
+
+        node.generate(101)
+        utxo = node.listunspent(1)[0]
+
+        funding_txid = utxo["txid"]
+        value = Decimal(str(utxo["amount"]))
+        fee = Decimal("0.0001")
+
+        p, p_value = self._rpc_chain_transaction(
+            node, funding_txid, utxo["vout"], value, fee, 1)
+        block_p = node.generate(1)[0]
+        c, c_value = self._rpc_chain_transaction(node, p, 0, p_value, fee, 1)
+
+        assert_equal(set(node.getrawmempool()), {c})
+
+        node.invalidateblock(block_p)
+        assert_equal(set(node.getrawmempool()), {p, c})
+
+        def send_d():
+            self._rpc_chain_transaction(node, c, 0, c_value, fee, 1)
+
+        assert_raises_rpc_error(
+            -26, "too-long-mempool-chain", send_d)
+        assert_equal(set(node.getrawmempool()), {p, c})
+        self.stop_node(0)
+
     # ====================================================================
     # Main Test Runner
     # ====================================================================
@@ -406,6 +441,7 @@ class MempoolAncestorHeightLimits(BitcoinTestFramework):
         self._test_chain_height_limit_rpc()
         self._test_graph_height_limit_rpc()
         self._test_wide_dag_accepted_rpc()
+        self._test_reorg_refreshes_descendant_height_rpc()
 
 
 if __name__ == '__main__':

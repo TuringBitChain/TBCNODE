@@ -178,6 +178,13 @@ void CTxMemPool::UpdateTransactionsFromBlock(
     component.insert(addedTransactions.begin(), addedTransactions.end());
     reassignInsertionIndicesNL(component);
 
+    // Re-adding a previously-confirmed parent can make an existing child gain
+    // an unconfirmed ancestor. Recompute heights over the now-topologically
+    // ordered component before any chain-limit checks observe stale values.
+    setEntriesTopoSorted heightsToUpdate;
+    heightsToUpdate.insert(component.begin(), component.end());
+    UpdateAncestorsHeightNL(std::move(heightsToUpdate));
+
     checkJournalAcceptanceNL(affected, nonNullChangeSet.Get());
 }
 
