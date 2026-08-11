@@ -232,6 +232,36 @@ BOOST_AUTO_TEST_CASE(max_bignum_length_policy) {
     BOOST_CHECK(config.GetMaxScriptNumLength(true, false) == MAX_SCRIPT_NUM_LENGTH_AFTER_GENESIS);
 }
 
+BOOST_AUTO_TEST_CASE(mempool_min_fee_rate) {
+    GlobalConfig config;
+    std::string reason;
+    const int64_t maxRate = MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis();
+
+    // The fee floor may equal the ramp ceiling.
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(maxRate, &reason));
+    BOOST_CHECK(reason.empty());
+    BOOST_CHECK_EQUAL(config.GetMempoolMinFeePerKB().GetFeePerK(),
+                      MAX_MEMPOOL_RAMP_FEE_RATE);
+
+    // Values above the ceiling are rejected without changing the fee floor.
+    BOOST_CHECK(!config.SetMempoolMinFeePerKB(maxRate + 1, &reason));
+    BOOST_CHECK_EQUAL(
+        reason,
+        "Policy value for mempool minimum feerate must not exceed the maximum "
+        "mempool ramp feerate of " + std::to_string(maxRate) + ".");
+    BOOST_CHECK_EQUAL(config.GetMempoolMinFeePerKB().GetFeePerK(),
+                      MAX_MEMPOOL_RAMP_FEE_RATE);
+
+    // Zero remains valid, while negative values are rejected without changing
+    // the fee floor.
+    reason.clear();
+    BOOST_CHECK(config.SetMempoolMinFeePerKB(0, &reason));
+    BOOST_CHECK(reason.empty());
+    BOOST_CHECK(!config.SetMempoolMinFeePerKB(-1, &reason));
+    BOOST_CHECK(!reason.empty());
+    BOOST_CHECK_EQUAL(config.GetMempoolMinFeePerKB().GetFeePerK(), Amount(0));
+}
+
 
 BOOST_AUTO_TEST_CASE(hex_to_array) {
     const std::string hexstr = "0a0b0C0D";//Lower and Upper char should both work
