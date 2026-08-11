@@ -131,8 +131,7 @@ struct CNodeState {
     bool fCurrentlyConnected {false};
     //! Accumulated misbehaviour score for this peer.
     int nMisbehavior {0};
-    //! Whether this peer should be disconnected and banned (unless
-    //! whitelisted).
+    //! Whether this peer should be disconnected and, unless exempt, banned.
     bool fShouldBan {false};
     //! String name of this peer (debugging/logging purposes).
     const std::string name {};
@@ -3550,14 +3549,16 @@ static bool SendRejectsAndCheckIfBanned(const CNodePtr& pnode, CConnman &connman
     if (state->fShouldBan) {
         state->fShouldBan = false;
         const CAddress& peerAddr { pnode->GetAssociation().GetPeerAddr() };
+        pnode->fDisconnect = true;
         if (pnode->fWhitelisted) {
-            LogPrintf("Warning: not punishing whitelisted peer %s!\n",
-                      peerAddr.ToString());
+            LogPrintf(
+                "Warning: disconnecting but not banning whitelisted peer %s!\n",
+                peerAddr.ToString());
         } else if (pnode->fAddnode) {
-            LogPrintf("Warning: not punishing addnoded peer %s!\n",
-                      peerAddr.ToString());
+            LogPrintf(
+                "Warning: disconnecting but not banning addnoded peer %s!\n",
+                peerAddr.ToString());
         } else {
-            pnode->fDisconnect = true;
             if (peerAddr.IsLocal()) {
                 LogPrintf("Warning: not banning local peer %s!\n",
                           peerAddr.ToString());
