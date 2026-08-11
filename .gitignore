@@ -108,3 +108,7 @@ contrib/devtools/split-debug.sh
 # Clangd
 .clangd
 .cache
+
+AGENT.md
+.venv*
+devfiles

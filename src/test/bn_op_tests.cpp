@@ -7,10 +7,14 @@
 #include "bn_helpers.h"
 #include <boost/test/unit_test.hpp>
 
+#include "key.h"
+#include "primitives/transaction.h"
 #include "script/int_serialization.h"
 #include "script/interpreter.h"
 #include "script/script_flags.h"
+#include "script/sighashtype.h"
 #include "taskcancellation.h"
+#include "test/test_bitcoin.h"
 
 #include "config.h"
 #include <vector>
@@ -967,46 +971,64 @@ namespace
     };
 }
 
-BOOST_AUTO_TEST_CASE(op_checksig)
+BOOST_FIXTURE_TEST_CASE(op_checksig, BasicTestingSetup)
 {
     const Config& config = GlobalConfig::GetConfig();
 
-    using test_args =
-        tuple<opcodetype, opcodetype, bool, ScriptError, vector<uint8_t>>;
+    CKey signingKey;
+    CKey otherKey;
+    signingKey.MakeNewKey(true);
+    otherKey.MakeNewKey(true);
+
+    const vector<uint8_t> publicKey = ToByteVector(signingKey.GetPubKey());
+    const vector<uint8_t> otherPublicKey = ToByteVector(otherKey.GetPubKey());
+    const CScript scriptPubKey = CScript() << publicKey << OP_CHECKSIG;
+
+    CMutableTransaction mutableTransaction;
+    mutableTransaction.vin.resize(1);
+    mutableTransaction.vout.resize(1);
+    const CTransaction transaction{mutableTransaction};
+    const Amount amount{0};
+    const SigHashType sigHashType;
+
+    vector<uint8_t> signature;
+    const uint256 sighash = SignatureHash(
+        scriptPubKey, transaction, 0, sigHashType, amount);
+    BOOST_REQUIRE(signingKey.Sign(sighash, signature));
+    signature.push_back(
+        static_cast<uint8_t>(sigHashType.getRawSigHashType()));
+
+    const TransactionSignatureChecker checker(&transaction, 0, amount);
+
+    using test_args = tuple<vector<uint8_t>, vector<uint8_t>>;
     // clang-format off
     vector<test_args> test_data = 
     {
-        // signature, pub_key, exp_status, exp_error, 
-        {OP_1, OP_1, true, SCRIPT_ERR_OK, success },
-        {OP_1, OP_2, true, SCRIPT_ERR_OK, failure }
+        // public_key, expected_stack_top
+        {publicKey, success},
+        {otherPublicKey, failure}
     };
     // clang-format on
 
-    for(const auto [signature, pub_key, exp_status, exp_error, exp_stack_top] :
-        test_data)
+    for(const auto& [publicKeyToCheck, expectedStackTop] : test_data)
     {
-        vector<uint8_t> args;
-
-        args.push_back(signature);
-        args.push_back(pub_key);
-        args.push_back(OP_CHECKSIG);
-
-        const CScript script(args.begin(), args.end());
+        const CScript script = CScript()
+            << signature << OP_CODESEPARATOR << publicKeyToCheck << OP_CHECKSIG;
 
         uint32_t flags{};
         ScriptError error;
         LimitedStack stack(UINT32_MAX);
-        const equality_checker checker;
         const auto status = EvalScript(
             config, false, task::CCancellationSource::Make()->GetToken(), stack,
             script, flags, checker, &error);
 
-        BOOST_CHECK_EQUAL(exp_status, status.value());
-        BOOST_CHECK_EQUAL(exp_error, error);
+        BOOST_CHECK(status.value());
+        BOOST_CHECK_EQUAL(SCRIPT_ERR_OK, error);
         BOOST_CHECK_EQUAL(1, stack.size());
         const auto stack_0{stack.at(0)};
         BOOST_CHECK_EQUAL_COLLECTIONS(begin(stack_0), end(stack_0),
-                                      begin(exp_stack_top), end(exp_stack_top));
+                                      begin(expectedStackTop),
+                                      end(expectedStackTop));
     }
 }
 
@@ -1087,4 +1109,3 @@ BOOST_AUTO_TEST_CASE(op_checkmultisig)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
-
