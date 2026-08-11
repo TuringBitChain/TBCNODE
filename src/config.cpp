@@ -1017,6 +1017,17 @@ bool GlobalConfig::SetMempoolMinFeePerKB(int64_t feePerKB, std::string* err) {
         return false;
     }
 
+    if (feePerKB > MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis()) {
+        if (err) {
+            *err = "Policy value for mempool minimum feerate must not exceed "
+                   "the maximum mempool ramp feerate of " +
+                   std::to_string(
+                       MAX_MEMPOOL_RAMP_FEE_RATE.GetSatoshis()) +
+                   ".";
+        }
+        return false;
+    }
+
     mMempoolMinFeePerKB = CFeeRate(Amount(feePerKB));
 
     return true;

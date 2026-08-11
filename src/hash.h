@@ -247,12 +247,9 @@ uint256 SerializeSingleHash_OpNoCSize(const T &obj, int nType = SER_GETHASH,
 }
 
 
-template <typename T> //zws
+template <typename T>
 uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
                       int nVersion = PROTOCOL_VERSION) {
-    // cout << "TxSerializeHash::nType:" << nType << ", nVersion:" << nVersion << ", obj.nVersion:" << obj.nVersion << endl;
-    // cout << "obj.vin.size():"  << obj.vin.size() << ", obj.vout.size():" << obj.vout.size()  << " sizeof(.size())" << sizeof(obj.vin.size()) << endl;  //zws
-    
     uint256 result;
     uint256 hash_ss_in;
     uint256 hash_ss_in_unlock;
@@ -262,10 +259,6 @@ uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
         ss_root << obj.nVersion; 
         ss_root << obj.nLockTime;
         
-        // WriteCompactSize(ss_root, obj.vin.size() );
-        // WriteCompactSize(ss_root, obj.vout.size() );
-        //Serialize(ss_root, obj.vin.size() ) ;
-        //Serialize(ss_root, obj.vout.size() );
         ser_writedata32(ss_root, obj.vin.size() );
         ser_writedata32(ss_root, obj.vout.size() );
 
@@ -274,31 +267,21 @@ uint256 TxSerializeHash(const T &obj, int nType = SER_GETHASH,
         for (const CTxIn &iin : obj.vin) {
             ss_in << iin.prevout;
             ss_in << iin.nSequence;
-
-            //CHashWriter ss_in_unlock_one(nType, nVersion);
-            //SerReadWrite_OpNoCSize(ss_in_unlock_one, iin.scriptSig, CSerActionSerialize() );
-            //ss_in_unlock << ss_in_unlock_one.GetSingleHash();
-            //ss_in_unlock << SerializeHash( iin.scriptSig, SER_GETHASH, 0); 
             ss_in_unlock << SerializeSingleHash_OpNoCSize( iin.scriptSig, nType, nVersion);
         }
-        hash_ss_in = ss_in.GetSingleHash();
-        // cout << "TuringTXID TxSerializeHash: ss_in.GetSingleHash().GetHex() :" << hash_ss_in.GetHex() << endl;  //zws        
+        hash_ss_in = ss_in.GetSingleHash();    
         ss_root << hash_ss_in;
 
         hash_ss_in_unlock = ss_in_unlock.GetSingleHash();
-        // cout << "TuringTXID TxSerializeHash: ss_in_unlock.GetSingleHash().GetHex() :" << hash_ss_in_unlock.GetHex() << endl;  //zws        
         ss_root << hash_ss_in_unlock;
 
         CHashWriter ss_out(nType, nVersion);
         for (const CTxOut &iout : obj.vout) {
             ss_out << iout.nValue;
-
-            //ss_out << SerializeHash( iout.scriptPubKey, SER_GETHASH, 0);
-            ss_out << SerializeSingleHash_OpNoCSize( iout.scriptPubKey, SER_GETHASH, 0);
+            ss_out << SerializeSingleHash_OpNoCSize( iout.scriptPubKey, nType, nVersion);
         }
         ss_root << ss_out.GetSingleHash();
         
-        //result = ss_root.GetSingleHash();
         result = ss_root.GetHash();
 
     }
