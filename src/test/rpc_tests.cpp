@@ -486,7 +486,7 @@ BOOST_AUTO_TEST_CASE(json_parse_errors) {
     BOOST_CHECK_THROW(AmountFromValue(ParseNonRFCJSONValue(".19e-6")),
                       std::runtime_error);
     BOOST_CHECK_EQUAL(AmountFromValue(ParseNonRFCJSONValue(
-                          "0.00000000000000000000000000000000000001e+30 ")),
+                          "0.00000000000000000000000000000000000001e+32 ")),
                       Amount(1));
     // Invalid, initial garbage
     BOOST_CHECK_THROW(ParseNonRFCJSONValue("[1.0"), std::runtime_error);
