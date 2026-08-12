@@ -360,44 +360,42 @@ BOOST_AUTO_TEST_CASE(rpc_createraw_op_return) {
 }
 
 BOOST_AUTO_TEST_CASE(rpc_format_monetary_values) {
-    BOOST_CHECK(ValueFromAmount(Amount(0LL)).write() == "0.00000000");
-    BOOST_CHECK(ValueFromAmount(Amount(1LL)).write() == "0.00000001");
-    BOOST_CHECK(ValueFromAmount(Amount(17622195LL)).write() == "0.17622195");
-    BOOST_CHECK(ValueFromAmount(Amount(50000000LL)).write() == "0.50000000");
-    BOOST_CHECK(ValueFromAmount(Amount(89898989LL)).write() == "0.89898989");
-    BOOST_CHECK(ValueFromAmount(Amount(100000000LL)).write() == "1.00000000");
-    BOOST_CHECK(ValueFromAmount(Amount(2099999999999990LL)).write() ==
-                "20999999.99999990");
-    BOOST_CHECK(ValueFromAmount(Amount(2099999999999999LL)).write() ==
-                "20999999.99999999");
+    BOOST_CHECK(ValueFromAmount(Amount(0LL)).write() == "0.000000");
+    BOOST_CHECK(ValueFromAmount(Amount(1LL)).write() == "0.000001");
+    BOOST_CHECK(ValueFromAmount(Amount(176221LL)).write() == "0.176221");
+    BOOST_CHECK(ValueFromAmount(Amount(500000LL)).write() == "0.500000");
+    BOOST_CHECK(ValueFromAmount(Amount(898989LL)).write() == "0.898989");
+    BOOST_CHECK(ValueFromAmount(Amount(1000000LL)).write() == "1.000000");
+    BOOST_CHECK(ValueFromAmount(Amount(20999999999990LL)).write() ==
+                "20999999.999990");
+    BOOST_CHECK(ValueFromAmount(Amount(20999999999999LL)).write() ==
+                "20999999.999999");
 
-    BOOST_CHECK_EQUAL(ValueFromAmount(Amount(0)).write(), "0.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(123456789 * (COIN / 10000)).write(),
-                      "12345.67890000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * COIN).write(), "-1.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * COIN / 10).write(), "-0.10000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(Amount(0)).write(), "0.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(123456789 * (TBCCOIN / 10000)).write(),
+                      "12345.678900");
+    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * TBCCOIN).write(), "-1.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(-1 * TBCCOIN / 10).write(), "-0.100000");
 
-    BOOST_CHECK_EQUAL(ValueFromAmount(100000000 * COIN).write(),
-                      "100000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10000000 * COIN).write(),
-                      "10000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(1000000 * COIN).write(),
-                      "1000000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(100000 * COIN).write(),
-                      "100000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10000 * COIN).write(), "10000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(1000 * COIN).write(), "1000.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(100 * COIN).write(), "100.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(10 * COIN).write(), "10.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN).write(), "1.00000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10).write(), "0.10000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100).write(), "0.01000000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 1000).write(), "0.00100000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10000).write(), "0.00010000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100000).write(), "0.00001000");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 1000000).write(), "0.00000100");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 10000000).write(), "0.00000010");
-    BOOST_CHECK_EQUAL(ValueFromAmount(COIN / 100000000).write(), "0.00000001");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100000000 * TBCCOIN).write(),
+                      "100000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10000000 * TBCCOIN).write(),
+                      "10000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(1000000 * TBCCOIN).write(),
+                      "1000000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100000 * TBCCOIN).write(),
+                      "100000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10000 * TBCCOIN).write(), "10000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(1000 * TBCCOIN).write(), "1000.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(100 * TBCCOIN).write(), "100.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(10 * TBCCOIN).write(), "10.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN).write(), "1.000000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 10).write(), "0.100000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 100).write(), "0.010000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 1000).write(), "0.001000");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 10000).write(), "0.000100");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 100000).write(), "0.000010");
+    BOOST_CHECK_EQUAL(ValueFromAmount(TBCCOIN / 1000000).write(), "0.000001");
 }
 
 static UniValue ValueFromString(const std::string &str) {
