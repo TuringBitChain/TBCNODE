@@ -2689,13 +2689,22 @@ static const CRPCCommand commands[] = {
     { "hidden",             "waitforblockheight",     waitforblockheight,     true,  {"height","timeout"} },
     { "hidden",             "getblockchainactivity",  getblockchainactivity,  true,  {} },
     { "hidden",             "getcurrentlyvalidatingblocks",     getcurrentlyvalidatingblocks,     true,  {} },
-    { "hidden",             "waitaftervalidatingblock",         waitaftervalidatingblock,         true,  {"blockhash","action"} },
     { "hidden",             "getwaitingblocks",                 getwaitingblocks,            true,  {} }
+};
+
+static const CRPCCommand waitAfterValidatingBlockCommand {
+    "hidden", "waitaftervalidatingblock", waitaftervalidatingblock, true,
+    {"blockhash", "action"}
 };
 // clang-format on
 
 void RegisterBlockchainRPCCommands(CRPCTable &t) {
     for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++) {
         t.appendCommand(commands[vcidx].name, &commands[vcidx]);
+    }
+
+    if (Params().NetworkIDString() == CBaseChainParams::REGTEST) {
+        t.appendCommand(waitAfterValidatingBlockCommand.name,
+                        &waitAfterValidatingBlockCommand);
     }
 }
