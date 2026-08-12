@@ -1032,79 +1032,135 @@ BOOST_FIXTURE_TEST_CASE(op_checksig, BasicTestingSetup)
     }
 }
 
-BOOST_AUTO_TEST_CASE(op_checkmultisig)
+BOOST_FIXTURE_TEST_CASE(op_checkmultisig, BasicTestingSetup)
 {
     const Config& config = GlobalConfig::GetConfig();
 
-    using test_args = tuple<int, vector<opcodetype>, int, vector<opcodetype>,
-                            bool, ScriptError, vector<uint8_t>>;
+    vector<CKey> keys(4);
+    for(auto& key : keys)
+    {
+        key.MakeNewKey(true);
+    }
+
+    CMutableTransaction mutableTransaction;
+    mutableTransaction.vin.resize(1);
+    mutableTransaction.vout.resize(1);
+    const CTransaction transaction{mutableTransaction};
+    const Amount amount{0};
+    const SigHashType sigHashType;
+    const TransactionSignatureChecker checker(&transaction, 0, amount);
+
+    using test_args = tuple<vector<size_t>, vector<size_t>, bool>;
     // clang-format off
     vector<test_args> test_data = 
     {
-        // n_signatures, signatures, 
-        // n_public_keys, public_keys, 
-        // exp_status, exp_error, top_stack_value 
+        // signing_key_indices, public_key_indices, expected_result
 
         // Success True
-        {1, {OP_1}, 1, {OP_1}, true, SCRIPT_ERR_OK, success },
-        {1, {OP_1}, 2, {OP_1, OP_16}, true, SCRIPT_ERR_OK, success },
-        {1, {OP_1}, 2, {OP_16, OP_1}, true, SCRIPT_ERR_OK, success },
+        {{0}, {0}, true},
+        {{0}, {0, 1}, true},
+        {{1}, {0, 1}, true},
 
-        {2, {OP_1, OP_2}, 2, {OP_1, OP_2}, true, SCRIPT_ERR_OK, success },
+        {{0, 1}, {0, 1}, true},
 
-        {2, {OP_1, OP_2}, 3, {OP_16, OP_1, OP_2}, true, SCRIPT_ERR_OK, success},
-        {2, {OP_1, OP_2}, 3, {OP_1, OP_16, OP_2}, true, SCRIPT_ERR_OK, success},
-        {2, {OP_1, OP_2}, 3, {OP_1, OP_2, OP_16}, true, SCRIPT_ERR_OK, success},
+        {{0, 1}, {2, 0, 1}, true},
+        {{0, 1}, {0, 2, 1}, true},
+        {{0, 1}, {0, 1, 2}, true},
 
-        {2, {OP_1, OP_2}, 4, {OP_16, OP_1, OP_16, OP_2}, true, SCRIPT_ERR_OK, success},
+        {{0, 1}, {2, 0, 3, 1}, true},
 
         // Success false
-        {1, {OP_1}, 1, {OP_16}, true, SCRIPT_ERR_OK, failure},
+        {{0}, {1}, false},
 
-        {2, {OP_1, OP_2}, 2, {OP_1, OP_16}, true, SCRIPT_ERR_OK, failure},
-        {2, {OP_1, OP_2}, 2, {OP_16, OP_2}, true, SCRIPT_ERR_OK, failure},
-        {2, {OP_1, OP_2}, 2, {OP_2, OP_1}, true, SCRIPT_ERR_OK, failure},
-        
-        // Fails 
-        {2, {OP_1, OP_2}, 1, {OP_1}, false, SCRIPT_ERR_SIG_COUNT, failure},
-        {-1, {OP_1}, 1, {OP_1}, false, SCRIPT_ERR_SIG_COUNT, failure},
-        {1, {OP_1}, -1, {OP_1}, false, SCRIPT_ERR_PUBKEY_COUNT, failure},
+        {{0, 1}, {0, 2}, false},
+        {{0, 1}, {2, 1}, false},
+        {{0, 1}, {1, 0}, false},
     };
     // clang-format on
 
-    for(const auto [n_sigs, signatures, n_pub_keys, public_keys, exp_status,
-                    exp_error, exp_stack_top] : test_data)
+    for(const auto& [signingKeyIndices, publicKeyIndices, expectedResult] :
+        test_data)
     {
-        vector<uint8_t> args{OP_0}; // historic bug start with OP_0
+        CScript scriptPubKey;
+        scriptPubKey << static_cast<int64_t>(signingKeyIndices.size());
+        for(const auto keyIndex : publicKeyIndices)
+        {
+            scriptPubKey << ToByteVector(keys.at(keyIndex).GetPubKey());
+        }
+        scriptPubKey << static_cast<int64_t>(publicKeyIndices.size())
+                     << OP_CHECKMULTISIG;
 
-        reverse_copy(begin(signatures), end(signatures), back_inserter(args));
-        args.push_back(1);
-        args.push_back(n_sigs);
+        const uint256 sighash = SignatureHash(
+            scriptPubKey, transaction, 0, sigHashType, amount);
 
-        reverse_copy(begin(public_keys), end(public_keys), back_inserter(args));
-        args.push_back(1);
-        args.push_back(n_pub_keys);
+        CScript script;
+        script << OP_0; // Historic CHECKMULTISIG dummy value.
+        for(const auto keyIndex : signingKeyIndices)
+        {
+            vector<uint8_t> signature;
+            BOOST_REQUIRE(keys.at(keyIndex).Sign(sighash, signature));
+            signature.push_back(
+                static_cast<uint8_t>(sigHashType.getRawSigHashType()));
+            script << signature;
+        }
+        script << OP_CODESEPARATOR;
+        script.insert(script.end(), scriptPubKey.begin(), scriptPubKey.end());
 
-        args.push_back(OP_CHECKMULTISIG);
-
-        const CScript script(args.begin(), args.end());
-
-        uint32_t flags{};
         ScriptError error;
         LimitedStack stack(UINT32_MAX);
-        const equality_checker checker;
         const auto status = EvalScript(
             config, false, task::CCancellationSource::Make()->GetToken(), stack,
-            script, flags, checker, &error);
+            script, 0, checker, &error);
 
-        BOOST_CHECK_EQUAL(exp_status, status.value());
-        BOOST_CHECK_EQUAL(exp_error, error);
-        BOOST_CHECK_EQUAL(
-            exp_status ? 1 : signatures.size() + public_keys.size() + 3,
-            stack.size());
+        BOOST_CHECK(status.value());
+        BOOST_CHECK_EQUAL(SCRIPT_ERR_OK, error);
+        BOOST_REQUIRE_EQUAL(1, stack.size());
+        const auto stack_0{stack.at(0)};
+        const auto& expectedStackTop = expectedResult ? success : failure;
+        BOOST_CHECK_EQUAL_COLLECTIONS(begin(stack_0), end(stack_0),
+                                      begin(expectedStackTop),
+                                      end(expectedStackTop));
+    }
+
+    using error_test_args = tuple<CScript, ScriptError, size_t>;
+    // clang-format off
+    const vector<error_test_args> error_test_data{
+        {
+            CScript() << OP_0 << OP_1 << OP_2 << OP_2
+                      << OP_1 << OP_1 << OP_CHECKMULTISIG,
+            SCRIPT_ERR_SIG_COUNT,
+            6
+        },
+        {
+            CScript() << OP_0 << OP_1 << OP_1NEGATE
+                      << OP_1 << OP_1 << OP_CHECKMULTISIG,
+            SCRIPT_ERR_SIG_COUNT,
+            5
+        },
+        {
+            CScript() << OP_0 << OP_1 << OP_1
+                      << OP_1 << OP_1NEGATE << OP_CHECKMULTISIG,
+            SCRIPT_ERR_PUBKEY_COUNT,
+            5
+        },
+    };
+    // clang-format on
+
+    for(const auto& [script, expectedError, expectedStackSize] :
+        error_test_data)
+    {
+        ScriptError error;
+        LimitedStack stack(UINT32_MAX);
+        const auto status = EvalScript(
+            config, false, task::CCancellationSource::Make()->GetToken(), stack,
+            script, 0, checker, &error);
+
+        BOOST_CHECK(!status.value());
+        BOOST_CHECK_EQUAL(expectedError, error);
+        BOOST_REQUIRE_EQUAL(expectedStackSize, stack.size());
         const auto stack_0{stack.at(0)};
         BOOST_CHECK_EQUAL_COLLECTIONS(begin(stack_0), end(stack_0),
-                                      begin(exp_stack_top), end(exp_stack_top));
+                                      begin(failure), end(failure));
     }
 }
 
