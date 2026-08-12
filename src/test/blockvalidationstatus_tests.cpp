@@ -1,7 +1,9 @@
 // Copyright (c) 2019 Bitcoin Association
 // Distributed under the Open TBC software license, see the accompanying file LICENSE.
 
+#include "chainparams.h"
 #include "consensus/consensus.h"
+#include "rpc/register.h"
 #include "rpc/server.h"
 #include "validation.h"
 #include "test/test_bitcoin.h"
@@ -14,9 +16,27 @@
 
 extern UniValue CallRPC(std::string strMethod);
 
-BOOST_FIXTURE_TEST_SUITE(blockvalidationstatus_tests, TestingSetup)
+struct RegtestTestingSetup : TestingSetup {
+    RegtestTestingSetup() : TestingSetup(CBaseChainParams::REGTEST) {}
+};
 
-BOOST_AUTO_TEST_CASE(blockvalidationstatus_rpc) {
+BOOST_AUTO_TEST_SUITE(blockvalidationstatus_tests)
+
+BOOST_AUTO_TEST_CASE(waitaftervalidatingblock_registration) {
+    const auto isRegistered = [](const std::string &network) {
+        SelectParams(network);
+        CRPCTable rpcTable;
+        RegisterBlockchainRPCCommands(rpcTable);
+        return rpcTable["waitaftervalidatingblock"] != nullptr;
+    };
+
+    BOOST_CHECK(!isRegistered(CBaseChainParams::MAIN));
+    BOOST_CHECK(!isRegistered(CBaseChainParams::TESTNET));
+    BOOST_CHECK(!isRegistered(CBaseChainParams::STN));
+    BOOST_CHECK(isRegistered(CBaseChainParams::REGTEST));
+}
+
+BOOST_FIXTURE_TEST_CASE(blockvalidationstatus_rpc, RegtestTestingSetup) {
     BOOST_CHECK_NO_THROW(CallRPC("getcurrentlyvalidatingblocks"));
     BOOST_CHECK_NO_THROW(CallRPC("getwaitingblocks"));
 
