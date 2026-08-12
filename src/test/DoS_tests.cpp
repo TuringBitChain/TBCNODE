@@ -89,6 +89,52 @@ BOOST_AUTO_TEST_CASE(DoS_banning) {
     Misbehaving(dummyNode2->GetId(), 50, "");
     SendMessages(config, dummyNode2, *connman, interruptDummy);
     BOOST_CHECK(connman->IsBanned(addr2));
+
+    CAddress addr3(ip(0xa0b0c003), NODE_NONE);
+    CNodePtr dummyNode3 =
+        CNode::Make(
+            id++,
+            NODE_NETWORK,
+            0,
+            INVALID_SOCKET,
+            addr3,
+            2u,
+            2u,
+            asyncTaskPool,
+            "",
+            true);
+    dummyNode3->SetSendVersion(PROTOCOL_VERSION);
+    GetNodeSignals().InitializeNode(dummyNode3, *connman);
+    dummyNode3->nVersion = 1;
+    dummyNode3->fSuccessfullyConnected = true;
+    dummyNode3->fWhitelisted = true;
+    Misbehaving(dummyNode3->GetId(), 100, "");
+    SendMessages(config, dummyNode3, *connman, interruptDummy);
+    BOOST_CHECK(dummyNode3->fDisconnect);
+    BOOST_CHECK(!connman->IsBanned(addr3));
+
+    CAddress addr4(ip(0xa0b0c004), NODE_NONE);
+    CNodePtr dummyNode4 =
+        CNode::Make(
+            id++,
+            NODE_NETWORK,
+            0,
+            INVALID_SOCKET,
+            addr4,
+            3u,
+            3u,
+            asyncTaskPool,
+            "",
+            true);
+    dummyNode4->SetSendVersion(PROTOCOL_VERSION);
+    GetNodeSignals().InitializeNode(dummyNode4, *connman);
+    dummyNode4->nVersion = 1;
+    dummyNode4->fSuccessfullyConnected = true;
+    dummyNode4->fAddnode = true;
+    Misbehaving(dummyNode4->GetId(), 100, "");
+    SendMessages(config, dummyNode4, *connman, interruptDummy);
+    BOOST_CHECK(dummyNode4->fDisconnect);
+    BOOST_CHECK(!connman->IsBanned(addr4));
 }
 
 BOOST_AUTO_TEST_CASE(DoS_banscore) {

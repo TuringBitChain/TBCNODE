@@ -820,6 +820,11 @@ public:
     CRollingBloomFilter addrKnown { 5000, 0.001 };
     // Has an ADDR been requested?
     std::atomic_bool fGetAddr {false};
+    // Token bucket limiting the rate at which addresses from this peer are
+    // processed. New peers start with one token to allow self-announcement.
+    double mAddrTokenBucket {1.0};
+    // Time when mAddrTokenBucket was last updated, in microseconds.
+    int64_t mAddrTokenTimestamp {0};
     int64_t nNextAddrSend {0};
     int64_t nNextLocalAddrSend {0};
 
