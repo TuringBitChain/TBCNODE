@@ -176,10 +176,16 @@ public:
                 *it = 0;
         }
 
-        BOOST_CHECK_MESSAGE(
-            vchDecrypted1 == vchDecrypted2,
-            HexStr(vchDecrypted1.begin(), vchDecrypted1.end()) +
-                " != " + HexStr(vchDecrypted2.begin(), vchDecrypted2.end()));
+        // The output buffer contents are implementation-defined after a
+        // failed decrypt and differ between the in-tree AES implementation
+        // and recent OpenSSL versions.
+        if (result1) {
+            BOOST_CHECK_MESSAGE(
+                vchDecrypted1 == vchDecrypted2,
+                HexStr(vchDecrypted1.begin(), vchDecrypted1.end()) +
+                    " != " +
+                    HexStr(vchDecrypted2.begin(), vchDecrypted2.end()));
+        }
 
         if (vchPlaintext.size())
             BOOST_CHECK(CKeyingMaterial(vchPlaintext.begin(),
