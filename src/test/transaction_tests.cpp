@@ -647,9 +647,11 @@ BOOST_AUTO_TEST_CASE(test_IsStandard) {
     std::string reason;
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
 
-    // Check dust with default relay fee:
-    Amount nDustThreshold = 3 * Amount(182 * dustRelayFee.GetFeePerK() / 1000);
-    BOOST_CHECK_EQUAL(nDustThreshold, Amount(135));
+    // The dust threshold is fixed and does not depend on the relay fee.
+    const bool isGenesisEnabled = IsGenesisEnabled(testConfig, 1);
+    const Amount nDustThreshold =
+        t.vout[0].GetDustThreshold(dustRelayFee, isGenesisEnabled);
+    BOOST_CHECK_EQUAL(nDustThreshold, Amount(10));
     // dust:
     t.vout[0].nValue = nDustThreshold - Amount(1);
     BOOST_CHECK(!IsStandardTx(testConfig, CTransaction(t), 1, reason));
@@ -657,14 +659,16 @@ BOOST_AUTO_TEST_CASE(test_IsStandard) {
     t.vout[0].nValue = nDustThreshold;
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
 
-    // Check dust with odd relay fee to verify rounding:
-    // nDustThreshold = 182 * 1234 / 1000 * 3
+    // Changing the relay fee does not change the fixed dust threshold.
     dustRelayFee = CFeeRate(Amount(1234));
+    BOOST_CHECK_EQUAL(
+        t.vout[0].GetDustThreshold(dustRelayFee, isGenesisEnabled),
+        nDustThreshold);
     // dust:
-    t.vout[0].nValue = Amount(672 - 1);
+    t.vout[0].nValue = nDustThreshold - Amount(1);
     BOOST_CHECK(!IsStandardTx(testConfig, CTransaction(t), 1, reason));
     // not dust:
-    t.vout[0].nValue = Amount(672);
+    t.vout[0].nValue = nDustThreshold;
     BOOST_CHECK(IsStandardTx(testConfig, CTransaction(t), 1, reason));
     dustRelayFee = CFeeRate(DUST_RELAY_TX_FEE);
 
