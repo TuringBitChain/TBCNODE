@@ -2280,18 +2280,32 @@ BOOST_AUTO_TEST_CASE(solver_MultiSig_Decode_Check) {
 }
 
 BOOST_AUTO_TEST_CASE(txout_IsDust) {
-
-    CFeeRate feerate(Amount(1000));
+    const std::vector<CFeeRate> feeRates{
+        CFeeRate(Amount(1)),
+        CFeeRate(Amount(1000)),
+        CFeeRate(Amount(1234)),
+    };
     std::vector<uint8_t> data(100, 3);
-    CScript opFalseOpReturn = CScript() << OP_FALSE << OP_RETURN << data;
+    const std::vector<CScript> scripts{
+        CScript() << OP_FALSE << OP_RETURN << data,
+        CScript() << OP_RETURN << data,
+        CScript() << OP_TRUE,
+    };
 
-    CScript opReturn = CScript() << OP_RETURN << data;
+    for (const auto &feeRate : feeRates) {
+        for (bool genesisEnabled : {false, true}) {
+            for (const auto &script : scripts) {
+                const CTxOut dustOutput{Amount(9), script};
+                const CTxOut nonDustOutput{Amount(10), script};
 
-    BOOST_CHECK(!CTxOut(Amount(10), opFalseOpReturn).IsDust(feerate, false));
-    BOOST_CHECK(!CTxOut(Amount(10), opReturn).IsDust(feerate, false));
-
-    BOOST_CHECK(!CTxOut(Amount(10), opFalseOpReturn).IsDust(feerate, true));
-    BOOST_CHECK(CTxOut(Amount(10), opReturn).IsDust(feerate, true)); // single "OP_RETURN" is not considered data after Genesis upgrade, so it is considered dust
+                BOOST_CHECK_EQUAL(
+                    dustOutput.GetDustThreshold(feeRate, genesisEnabled),
+                    Amount(10));
+                BOOST_CHECK(dustOutput.IsDust(feeRate, genesisEnabled));
+                BOOST_CHECK(!nonDustOutput.IsDust(feeRate, genesisEnabled));
+            }
+        }
+    }
 }
 
 namespace {
