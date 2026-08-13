@@ -1160,7 +1160,7 @@ BOOST_AUTO_TEST_CASE(script_build) {
             .PushSig(keys.key0)
             .PushRedeem());
 
-    static const Amount TEST_AMOUNT(12345000000000);
+    static const Amount TEST_AMOUNT = 123450 * TBCCOIN;
     tests.push_back(
         TestBuilder(CScript() << ToByteVector(keys.pubkey0) << OP_CHECKSIG,
                     "P2PK FORKID", SCRIPT_ENABLE_SIGHASH_FORKID, false,
