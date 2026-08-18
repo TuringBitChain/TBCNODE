@@ -156,7 +156,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.nodes[0].generate(1)
         self.sync_all()
         assert_equal(self.nodes[0].getbalance(), bal + Decimal(
-            '50.00000000') + Decimal('2.19000000'))  # block reward + tx
+            '5000.000000') + Decimal('2.191000'))  # block reward + tx and fee
 
         # getrawtransaction tests
         # 1. valid parameters - only supply txid
@@ -282,7 +282,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         raw_tx2 = self.nodes[3].createrawtransaction(inputs2, outputs2)
         tx_hex2 = self.nodes[3].signrawtransaction(raw_tx2)["hex"]
         assert_raises_rpc_error(
-            -26, "insufficient priority", self.nodes[3].sendrawtransaction, tx_hex2, False, False
+            -26, "mempool min fee not met", self.nodes[3].sendrawtransaction, tx_hex2, False, False
         )
         txid2 = self.nodes[3].sendrawtransaction(tx_hex2, False, True)
         mempool = self.nodes[3].getrawmempool(False)
@@ -319,7 +319,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         signedTxn = self.make_data_transaction(self.nodes[3], utxos.pop())
         # without sufficient fee shouldn't get to mempool
         assert_raises_rpc_error(
-            -26, "insufficient priority", self.nodes[3].sendrawtransaction, signedTxn, False, False
+            -26, "mempool min fee not met", self.nodes[3].sendrawtransaction, signedTxn, False, False
         )
         txid_new = self.nodes[3].sendrawtransaction(signedTxn, False, True)
         mempoolsize_new = self.nodes[3].getmempoolinfo()['size']

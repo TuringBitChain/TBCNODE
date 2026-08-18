@@ -37,14 +37,14 @@ class FeeFilterTest(BitcoinTestFramework):
         self.num_nodes = 2
         #self.setup_clean_chain = True
         self.utxo_test_sats = 10000
-        self.utxo_test_bsvs = satoshi_round(self.utxo_test_sats / COIN)
+        self.utxo_test_bsvs = satoshi_round(self.utxo_test_sats / TBCCOIN)
         self.blockmintxfee_sats = 500
         self.mempoolminfeerate_sats = 250
         self.extra_args = [[
             "-whitelist=127.0.0.1",
             "-whitelistforcerelay=1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",
             "-relaypriority=1",
@@ -53,7 +53,7 @@ class FeeFilterTest(BitcoinTestFramework):
             "-whitelist=127.0.0.1",
             "-whitelistforcerelay=1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",
             "-relaypriority=1",

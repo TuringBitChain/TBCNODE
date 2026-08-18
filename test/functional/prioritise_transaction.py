@@ -9,7 +9,7 @@
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import *
-from test_framework.mininode import COIN
+from test_framework.mininode import COIN, TBCCOIN
 
 
 def tbc_round(amount):
@@ -36,7 +36,7 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         node = self.nodes[0]
         self.txouts = gen_return_txouts()
 
-        utxo = create_confirmed_utxos(Decimal(1000)/Decimal(COIN), node, 1, age=101)[0]
+        utxo = create_confirmed_utxos(Decimal(1000)/Decimal(TBCCOIN), node, 1, age=101)[0]
 
         relayfee = Decimal('0.002')
 

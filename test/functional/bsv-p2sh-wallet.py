@@ -11,6 +11,7 @@ from test_framework.test_framework import ComparisonTestFramework
 from test_framework.comptool import TestManager, TestInstance, RejectResult
 from test_framework.blocktools import *
 from test_framework.key import CECKey
+from test_framework.mininode import TBCCOIN
 from test_framework.script import *
 
 from test_framework.util import assert_raises_message
@@ -109,9 +110,9 @@ class P2SH(ComparisonTestFramework):
         self.chain.set_tip(149)
 
         balance1 = node1.getbalance("*", 1, False)
-        assert balance1 * COIN == new_tx1.vout[0].nValue, "Wallet has registered pre genesis transaction."
+        assert balance1 * TBCCOIN == new_tx1.vout[0].nValue, "Wallet has registered pre genesis transaction."
         balance2 = node2.getbalance("*", 1, False)
-        assert balance2 * COIN == 0, "No funds in wallet as transaction is not accepted."
+        assert balance2 * TBCCOIN == 0, "No funds in wallet as transaction is not accepted."
 
         # Pre genesis P2SH transaction can be spent through wallet
         node1.sendtoaddress(node0.getnewaddress(), balance1 - 1)
