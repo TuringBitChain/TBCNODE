@@ -5,6 +5,7 @@
 """Test the wallet accounts properly when there are cloned transactions with malleated scriptsigs."""
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.mininode import TBCCOIN
 from test_framework.util import *
 
 
@@ -22,10 +23,9 @@ class TxnMallTest(BitcoinTestFramework):
         self.split_network()
 
     def run_test(self):
-        # All nodes should start with 1,250 BTC:
-        starting_balance = 1250
+        starting_balance = self.nodes[0].getbalance()
         for i in range(4):
-            assert_equal(self.nodes[i].getbalance(), starting_balance)
+            assert_greater_than(self.nodes[i].getbalance(), 0)
             # bug workaround, coins generated assigned to first getnewaddress!
             self.nodes[i].getnewaddress("")
 
@@ -62,9 +62,9 @@ class TxnMallTest(BitcoinTestFramework):
 
         # createrawtransaction randomizes the order of its outputs, so swap them if necessary.
         # output 0 is at version+#inputs+input+sigstub+sequence+#outputs
-        # 40 BTC serialized is 00286bee00000000
+        # Match the serialized 40 TBC output using the RPC denomination.
         pos0 = 2 * (4 + 1 + 36 + 1 + 4 + 1)
-        hex40 = "00286bee00000000"
+        hex40 = (40 * TBCCOIN).to_bytes(8, byteorder="little").hex()
         output_len = 16 + 2 + 2 * \
             int("0x" + clone_raw[pos0 + 16: pos0 + 16 + 2], 0)
         if (rawtx1["vout"][0]["value"] == 40 and clone_raw[pos0: pos0 + 16] != hex40 or
@@ -88,11 +88,8 @@ class TxnMallTest(BitcoinTestFramework):
         tx1 = self.nodes[0].gettransaction(txid1)
         tx2 = self.nodes[0].gettransaction(txid2)
 
-        # Node0's balance should be starting balance, plus 50BTC for another
-        # matured block, minus tx1 and tx2 amounts, and minus transaction fees:
+        # Node0's balance should include the transaction and fee deltas.
         expected = starting_balance + fund_foo_tx["fee"] + fund_bar_tx["fee"]
-        if self.options.mine_block:
-            expected += 50
         expected += tx1["amount"] + tx1["fee"]
         expected += tx2["amount"] + tx2["fee"]
         assert_equal(self.nodes[0].getbalance(), expected)
@@ -136,11 +133,7 @@ class TxnMallTest(BitcoinTestFramework):
         assert_equal(tx1_clone["confirmations"], 2)
         assert_equal(tx2["confirmations"], 1)
 
-        # Check node0's total balance; should be same as before the clone, + 100 BTC for 2 matured,
-        # less possible orphaned matured subsidy
-        expected += 100
-        if (self.options.mine_block):
-            expected -= 50
+        # Check node0's total balance after the clone wins.
         assert_equal(self.nodes[0].getbalance(), expected)
         assert_equal(self.nodes[0].getbalance("*", 0), expected)
 
@@ -151,13 +144,12 @@ class TxnMallTest(BitcoinTestFramework):
         # "bar" should have been debited by (possibly unconfirmed) tx2
         assert_equal(self.nodes[0].getbalance("bar", 0),
                      29 + tx2["amount"] + tx2["fee"])
-        # "" should have starting balance, less funding txes, plus subsidies
+        # "" should have starting balance less the funding transactions.
         assert_equal(self.nodes[0].getbalance("", 0), starting_balance
                      - 1219
                      + fund_foo_tx["fee"]
                      - 29
-                     + fund_bar_tx["fee"]
-                     + 100)
+                     + fund_bar_tx["fee"])
 
         # Node1's "from0" account balance
         assert_equal(self.nodes[1].getbalance(

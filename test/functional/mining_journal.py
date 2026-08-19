@@ -58,7 +58,7 @@ def split_utxos(fee, node, count, utxos):
         addrs.append(node.getnewaddress())
 
     # Calculate fee we need (based on assuming each outpoint consumes about 70 bytes)
-    fee = satoshi_round(Decimal(max(fee, 70 * split_into * 0.00000001)))
+    fee = satoshi_round(Decimal(max(fee, 70 * split_into * 0.000001)))
 
     while count > 0 and utxos:
         utxo = utxos.pop()
@@ -117,7 +117,7 @@ def fill_mempool(fee, node, num_reqd, ancestor_depth=1):
             bytes_used = 70 + pad_size
 
             # Estimate fee we need
-            mfee = satoshi_round(Decimal(max(fee, bytes_used * 0.0000001)))
+            mfee = satoshi_round(Decimal(max(fee, bytes_used * 0.00001)))
 
             # Add a standard spendable output
             send_value = input_amount - mfee
@@ -382,4 +382,3 @@ class MiningJournal(BitcoinTestFramework):
 
 if __name__ == '__main__':
     MiningJournal().main()
-

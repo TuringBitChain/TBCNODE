@@ -4,9 +4,9 @@
 
 # Test mempool limiting together/eviction with the wallet
 
-# 1. Send transaction (cca 5MB) with smaller fee rate (0.00000399 BSV/kB).
-# 2. Send 29 big transactions (cca 10MB per one) with higher fee rate (0.00000999 BSV/kB).
-# 3. Send another transaction with the same size as the first one and higher fee rate (0.00001999 BSV/kB).
+# 1. Send transaction (cca 5MB) with a fee of 2,000,000 base units.
+# 2. Send 29 big transactions (cca 10MB per one) with a fee of 10,000,000 base units.
+# 3. Send another transaction with the same size as the first one and the higher fee.
 # 4. Mempool is full when the last transaction arrives to the mempool - the first one should be evicted (replaced with the last one) because of the smaller fee rate.
 
 from test_framework.test_framework import BitcoinTestFramework
@@ -38,8 +38,8 @@ class MempoolLimitTest(BitcoinTestFramework):
         total_number_of_transactions = 30
 
         # create a mempool transaction that will be evicted (smaller fee rate)
-        # size: 5000211B, fee: 2000000 satoshi (0.02 BSV) --> fee rate: 0.399 sat/byte which is 0.00000399 BSV/kB
-        small_fee = decimal.Decimal('0.02')
+        # size: 5000211B, fee: 2,000,000 base units (2 TBC)
+        small_fee = decimal.Decimal('2')
         small_data_size = 5000000
         firstTxId = send_tx_with_data(self.nodes[0], utxos.pop(), small_fee, small_data_size)
 
@@ -47,8 +47,8 @@ class MempoolLimitTest(BitcoinTestFramework):
         self.log.info("First transaction %s successfully accepted to mempool.", firstTxId)
 
         # transactions with higher fee rate
-        # size: 10000211B, fee: 10000000 satoshi (0.1 BSV) --> fee rate: 0.999 sat/byte which is 0.00000999 BSV/kB
-        big_fee = decimal.Decimal('0.1')
+        # size: 10000211B, fee: 10,000,000 base units (10 TBC)
+        big_fee = decimal.Decimal('10')
         big_data_size = 10000000
         for i in range(total_number_of_transactions - 1):
             send_tx_with_data(self.nodes[0], utxos.pop(), big_fee, big_data_size)
@@ -60,7 +60,7 @@ class MempoolLimitTest(BitcoinTestFramework):
         # If we send another transaction with size more than 5 MB and the highest fee rate, it should be replaced with the first one.
 
         # transaction with the highest fee rate, the same size as the first one
-        # size: 5000211B, fee: 10000000 satoshi (0.1 BSV) --> fee rate: 1.999 sat/byte which is 0.00001999 BSV/kB
+        # size: 5000211B, fee: 10,000,000 base units (10 TBC)
         lastTxId = send_tx_with_data(self.nodes[0], utxos.pop(), big_fee, small_data_size)
 
         # by now, the first transaction should be evicted, check confirmation state

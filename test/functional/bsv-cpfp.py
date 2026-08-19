@@ -4,7 +4,7 @@
 
 from test_framework.blocktools import create_block, create_coinbase, create_transaction
 from test_framework.key import CECKey
-from test_framework.mininode import CTransaction, msg_tx, CTxIn, COutPoint, CTxOut, msg_block, COIN
+from test_framework.mininode import CTransaction, msg_tx, CTxIn, COutPoint, CTxOut, msg_block, TBCCOIN
 from test_framework.script import CScript, OP_DROP, OP_TRUE
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import wait_until, check_mempool_equals
@@ -36,7 +36,8 @@ class Cpfp(BitcoinTestFramework):
         tx.rehash()
 
         tx_size = len(tx.serialize())
-        fee_per_output = int(tx_size * feerate // noutput)
+        total_fee = max(int(tx_size * feerate), self.min_relay_fee)
+        fee_per_output = (total_fee + noutput - 1) // noutput
 
         for output in tx.vout:
             output.nValue -= fee_per_output
@@ -48,11 +49,13 @@ class Cpfp(BitcoinTestFramework):
 
 
     def run_test(self):
-        with self.run_node_with_connections("Scenario 1: Low fee, non-whitelisted peer", 0, ["-blockmintxfee=0.00001"],
+        with self.run_node_with_connections("Scenario 1: Low fee, non-whitelisted peer", 0, ["-blockmintxfee=0.001"],
                                             number_of_connections=1) as (conn,):
 
             mining_fee = 1.01 # in satoshi per byte
-            relayfee = float(conn.rpc.getnetworkinfo()["relayfee"] * COIN / 1000) + 0.01  # in satoshi per byte
+            relayfee_per_kb = conn.rpc.getnetworkinfo()["relayfee"] * TBCCOIN
+            self.min_relay_fee = int(relayfee_per_kb)
+            relayfee = float(relayfee_per_kb / 1000) + 0.01  # in base units per byte
 
             # create block with coinbase
             coinbase = create_coinbase(height=1)

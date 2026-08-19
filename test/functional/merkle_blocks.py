@@ -38,11 +38,11 @@ class MerkleBlockTest(BitcoinTestFramework):
 
         node0utxos = self.nodes[0].listunspent(1)
         tx1 = self.nodes[0].createrawtransaction(
-            [node0utxos.pop()], {self.nodes[1].getnewaddress(): 49.99})
+            [node0utxos.pop()], {self.nodes[1].getnewaddress(): 4999.99})
         txid1 = self.nodes[0].sendrawtransaction(
             self.nodes[0].signrawtransaction(tx1)["hex"])
         tx2 = self.nodes[0].createrawtransaction(
-            [node0utxos.pop()], {self.nodes[1].getnewaddress(): 49.99})
+            [node0utxos.pop()], {self.nodes[1].getnewaddress(): 4999.99})
         txid2 = self.nodes[0].sendrawtransaction(
             self.nodes[0].signrawtransaction(tx2)["hex"])
         # This will raise an exception because the transaction is not yet in a block
@@ -67,7 +67,7 @@ class MerkleBlockTest(BitcoinTestFramework):
 
         txin_spent = self.nodes[1].listunspent(1).pop()
         tx3 = self.nodes[1].createrawtransaction(
-            [txin_spent], {self.nodes[0].getnewaddress(): 49.98})
+            [txin_spent], {self.nodes[0].getnewaddress(): 4999.98})
         txid3 = self.nodes[0].sendrawtransaction(
             self.nodes[1].signrawtransaction(tx3)["hex"])
         self.nodes[0].generate(1)

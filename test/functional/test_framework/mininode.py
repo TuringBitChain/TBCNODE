@@ -42,7 +42,7 @@ from test_framework.cdefs import MAX_BLOCK_SIGOPS_PER_MB
 from test_framework.util import hex_str_to_bytes, bytes_to_hex_str, wait_until
 
 BIP0031_VERSION = 60000
-MY_VERSION = 70015 # INVALID_CB_NO_BAN_VERSION
+MY_VERSION = 90015
 MY_SUBVERSION = b"/python-mininode-tester:0.0.3/"
 # from version 70001 onwards, fRelay should be appended to version messages (BIP37)
 MY_RELAY = 1
@@ -51,7 +51,8 @@ MAX_INV_SZ = 50000
 MAX_PROTOCOL_RECV_PAYLOAD_LENGTH = 2 * 1024 * 1024
 LEGACY_MAX_PROTOCOL_PAYLOAD_LENGTH = 1 * 1024 * 1024
 
-COIN = 100000000  # 1 btc in satoshis
+COIN = 100000000  # Consensus/raw transaction unit used by legacy block construction.
+TBCCOIN = 1000000  # RPC amount unit: one TBC in base units.
 
 NODE_NETWORK = (1 << 0)
 NODE_GETUTXO = (1 << 1)

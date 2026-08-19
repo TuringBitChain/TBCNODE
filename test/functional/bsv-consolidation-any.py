@@ -10,7 +10,7 @@ This test creates "spendable by anyone" scripts to easely tweak the script sizes
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.script import CScript, OP_NOP, OP_DROP, OP_2DROP, OP_TRUE, SIGHASH_FORKID, SIGHASH_ANYONECANPAY, SIGHASH_NONE
 from test_framework.util import assert_raises_rpc_error, satoshi_round, assert_equal, bytes_to_hex_str
-from test_framework.mininode import ToHex, FromHex, CTransaction, CTxOut, CTxIn, COutPoint, uint256_from_str, hex_str_to_bytes, COIN
+from test_framework.mininode import ToHex, FromHex, CTransaction, CTxOut, CTxIn, COutPoint, uint256_from_str, hex_str_to_bytes, TBCCOIN
 from decimal import Decimal
 
 class ConsolidationP2PKHTest(BitcoinTestFramework):
@@ -19,13 +19,13 @@ class ConsolidationP2PKHTest(BitcoinTestFramework):
         self.num_nodes = 4
         self.setup_clean_chain = True
         self.utxo_test_sats = 100000
-        self.utxo_test_bsvs = satoshi_round(self.utxo_test_sats / COIN)
+        self.utxo_test_bsvs = satoshi_round(self.utxo_test_sats / TBCCOIN)
         self.blockmintxfee_sats = 500
         self.mempoolminfeerate_sats = 250
         self.extra_args = [[
             "-whitelist=127.0.0.1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=2",
             "-maxconsolidationinputscriptsize=151",
             "-minconsolidationinputmaturity=5",
@@ -34,21 +34,21 @@ class ConsolidationP2PKHTest(BitcoinTestFramework):
             ],[
             "-whitelist=127.0.0.1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",
             "-acceptnonstdconsolidationinput=1"
             ],[
             "-whitelist=127.0.0.1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=0",  #disables consolidation factor
             "-acceptnonstdtxn=1",
             "-acceptnonstdconsolidationinput=1"
             ],[
             "-whitelist=127.0.0.1",
             "-mempoolminfeerate={}".format(self.mempoolminfeerate_sats),
-            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/COIN),
+            "-blockmintxfee={}".format(Decimal(self.blockmintxfee_sats)/TBCCOIN),
             "-minconsolidationfactor=10",
             "-acceptnonstdtxn=1",
             "-acceptnonstdconsolidationinput=0" # default, disable non std inputs

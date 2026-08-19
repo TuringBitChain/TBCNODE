@@ -5,7 +5,7 @@
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import *
-from test_framework.mininode import COIN
+from test_framework.mininode import TBCCOIN
 
 def get_unspent(listunspent, amount):
     for utx in listunspent:
@@ -151,7 +151,7 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         inputs = [{'txid': utx['txid'], 'vout': utx['vout']}]
         outputs = {
-            self.nodes[0].getnewaddress(): round(Decimal(5.0) - fee - feeTolerance, 8)}
+            self.nodes[0].getnewaddress(): round(Decimal(5.0) - fee - feeTolerance, 6)}
         rawtx = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx = self.nodes[2].decoderawtransaction(rawtx)
         assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
@@ -439,6 +439,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.sync_all()
 
         oldBalance = self.nodes[1].getbalance()
+        oldImmatureBalance = self.nodes[1].getwalletinfo()['immature_balance']
         inputs = []
         outputs = {self.nodes[1].getnewaddress(): 1.1}
         rawTx = self.nodes[2].createrawtransaction(inputs, outputs)
@@ -452,7 +453,7 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         # make sure funds are received at node1
         assert_equal(
-            oldBalance + Decimal('1.10000000'), self.nodes[1].getbalance())
+            oldBalance + oldImmatureBalance + Decimal('1.100000'), self.nodes[1].getbalance())
 
         #
         # locked wallet test
@@ -494,6 +495,7 @@ class RawTransactionsTest(BitcoinTestFramework):
             1].sendtoaddress, self.nodes[0].getnewaddress(), 1.2)
 
         oldBalance = self.nodes[0].getbalance()
+        oldImmatureBalance = self.nodes[0].getwalletinfo()['immature_balance']
 
         inputs = []
         outputs = {self.nodes[0].getnewaddress(): 1.1}
@@ -509,7 +511,7 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         # make sure funds are received at node1
         assert_equal(
-            oldBalance + Decimal('51.10000000'), self.nodes[0].getbalance())
+            oldBalance + oldImmatureBalance + Decimal('1.100000'), self.nodes[0].getbalance())
 
         #
         # multiple (~19) inputs tx test | Compare fee #
@@ -560,6 +562,7 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         # fund a tx with ~20 small inputs
         oldBalance = self.nodes[0].getbalance()
+        oldImmatureBalance = self.nodes[0].getwalletinfo()['immature_balance']
 
         inputs = []
         outputs = {
@@ -571,7 +574,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.sync_all()
         self.nodes[0].generate(1)
         self.sync_all()
-        assert_equal(oldBalance + Decimal('50.19000000'),
+        assert_equal(oldBalance + oldImmatureBalance + Decimal('0.190000'),
                      self.nodes[0].getbalance())  # 0.19+block reward
 
         #
@@ -643,7 +646,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         # result
         assert_equal(len(self.nodes[3].listunspent(1)), 1)
 
-        feeScale = min_relay_tx_fee * COIN
+        feeScale = min_relay_tx_fee * TBCCOIN
         inputs = []
         outputs = {self.nodes[3].getnewaddress(): 1}
         rawtx = self.nodes[3].createrawtransaction(inputs, outputs)
