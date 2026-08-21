@@ -37,13 +37,14 @@ template <unsigned int BITS> void base_blob<BITS>::SetHex(const char *psz) {
     const char *pbegin = psz;
     while (::HexDigit(*psz) != -1)
         psz++;
-    psz--;
     uint8_t *p1 = (uint8_t *)data;
     uint8_t *pend = p1 + WIDTH;
-    while (psz >= pbegin && p1 < pend) {
-        *p1 = ::HexDigit(*psz--);
-        if (psz >= pbegin) {
-            *p1 |= uint8_t(::HexDigit(*psz--) << 4);
+    // psz points one past the last hex digit. Only decrement it after
+    // confirming that a digit remains to be decoded.
+    while (psz != pbegin && p1 < pend) {
+        *p1 = ::HexDigit(*--psz);
+        if (psz != pbegin) {
+            *p1 |= uint8_t(::HexDigit(*--psz) << 4);
             p1++;
         }
     }
