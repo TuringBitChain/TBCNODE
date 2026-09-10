@@ -129,6 +129,7 @@ BITCOIN_TESTS =\
   test/time_locked_mempool_tests.cpp \
   test/ttor_tests.cpp \
   test/transaction_tests.cpp \
+  test/transactionflow_tests.cpp \
   test/txvalidationcache_tests.cpp \
   test/uint256_tests.cpp \
   test/undo_tests.cpp \

@@ -19,6 +19,7 @@
 #include "primitives/transaction.h"
 #include "rpc/server.h"
 #include "rpc/tojson.h"
+#include "rpc/transactionflow.h"
 #include "script/script_error.h"
 #include "script/sign.h"
 #include "script/standard.h"
@@ -1586,6 +1587,7 @@ static const CRPCCommand commands[] = {
     //  category            name                      actor (function)        okSafeMode
     //  ------------------- ------------------------  ----------------------  ----------
     { "rawtransactions",    "getrawtransaction",      getrawtransaction,      true,  {"txid","verbose"} },
+    { "rawtransactions",    "gettransactionflow",     gettransactionflow,     true,  {"txid"} },
     { "rawtransactions",    "createrawtransaction",   createrawtransaction,   true,  {"inputs","outputs","locktime"} },
     { "rawtransactions",    "decoderawtransaction",   decoderawtransaction,   true,  {"hexstring"} },
     { "rawtransactions",    "decodescript",           decodescript,           true,  {"hexstring"} },

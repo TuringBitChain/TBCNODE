@@ -170,6 +170,117 @@ BOOST_AUTO_TEST_CASE(rpc_rawparams) {
         std::runtime_error);
 }
 
+BOOST_AUTO_TEST_CASE(rpc_gettransactionflow_registration_help_and_validation) {
+    const CRPCCommand *command = tableRPC["gettransactionflow"];
+    BOOST_REQUIRE(command != nullptr);
+    BOOST_CHECK_EQUAL(command->name, "gettransactionflow");
+    BOOST_CHECK_EQUAL(command->category, "rawtransactions");
+    BOOST_CHECK(command->okSafeMode);
+    BOOST_REQUIRE_EQUAL(command->argNames.size(), 1U);
+    BOOST_CHECK_EQUAL(command->argNames[0], "txid");
+
+    JSONRPCRequest helpRequest;
+    const std::string helpText =
+        tableRPC.help(testConfig, "gettransactionflow", helpRequest);
+    BOOST_CHECK(helpText.find("gettransactionflow \"txid\"") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("confirmed, non-Coinbase transaction") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("active chain") != std::string::npos);
+    BOOST_CHECK(helpText.find("-txindex=1") != std::string::npos);
+    BOOST_CHECK(helpText.find("six decimal places") != std::string::npos);
+    BOOST_CHECK(helpText.find("64 hexadecimal characters") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("no 0x prefix or whitespace") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("does not require a wallet") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("Limits: 100 inputs, 1000 outputs") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("2000 ms cooperative deadline") !=
+                std::string::npos);
+    BOOST_CHECK(helpText.find("\"prev_txid\"") != std::string::npos);
+    BOOST_CHECK(helpText.find("\"prev_vout\"") != std::string::npos);
+
+    const std::string txid(64, '0');
+    const UniValue converted = RPCConvertValues("gettransactionflow", {txid});
+    BOOST_REQUIRE_EQUAL(converted.size(), 1U);
+    BOOST_CHECK(converted[0].isStr());
+    BOOST_CHECK_EQUAL(converted[0].get_str(), txid);
+
+    auto checkRPCError = [&](const UniValue &params, int expectedCode,
+                             const std::string &messagePrefix) {
+        JSONRPCRequest request;
+        request.strMethod = "gettransactionflow";
+        request.params = params;
+        bool caught{false};
+        try {
+            command->call(testConfig, request);
+        } catch (const UniValue &error) {
+            caught = true;
+            BOOST_REQUIRE(error.isObject());
+            BOOST_CHECK_EQUAL(find_value(error, "code").get_int(),
+                              expectedCode);
+            const std::string message = find_value(error, "message").get_str();
+            BOOST_CHECK_MESSAGE(
+                message.compare(0, messagePrefix.size(), messagePrefix) == 0,
+                "Expected error prefix '" << messagePrefix << "', got '"
+                                          << message << "'");
+        }
+        BOOST_CHECK_MESSAGE(caught, "Expected an RPC error");
+    };
+    auto oneParameter = [](const UniValue &value) {
+        UniValue params{UniValue::VARR};
+        params.push_back(value);
+        return params;
+    };
+
+    JSONRPCRequest noParameters;
+    noParameters.strMethod = "gettransactionflow";
+    noParameters.params = UniValue{UniValue::VARR};
+    BOOST_CHECK_THROW(command->call(testConfig, noParameters),
+                      std::runtime_error);
+
+    JSONRPCRequest twoParameters;
+    twoParameters.strMethod = "gettransactionflow";
+    twoParameters.params = UniValue{UniValue::VARR};
+    twoParameters.params.push_back(txid);
+    twoParameters.params.push_back(txid);
+    BOOST_CHECK_THROW(command->call(testConfig, twoParameters),
+                      std::runtime_error);
+
+    for (const UniValue &value :
+         {UniValue{}, UniValue{true}, UniValue{1}, UniValue{UniValue::VARR},
+          UniValue{UniValue::VOBJ}}) {
+        checkRPCError(oneParameter(value), RPC_TYPE_ERROR,
+                      "Expected type string");
+    }
+    for (const std::string &value :
+         {std::string{}, std::string(63, '0'), std::string(65, '0')}) {
+        checkRPCError(oneParameter(UniValue{value}), RPC_INVALID_PARAMETER,
+                      "txid must be of length 64");
+    }
+    for (const std::string &value :
+         {std::string(64, 'g'), std::string{"0x"} + std::string(62, '0'),
+          std::string{" "} + std::string(63, '0'),
+          std::string(63, '0') + std::string{" "}}) {
+        checkRPCError(oneParameter(UniValue{value}), RPC_INVALID_PARAMETER,
+                      "txid must be hexadecimal string");
+    }
+
+    struct TxIndexRestore {
+        const bool original{fTxIndex};
+        ~TxIndexRestore() { fTxIndex = original; }
+    } restoreTxIndex;
+    fTxIndex = false;
+    checkRPCError(oneParameter(UniValue{std::string(64, 'a')}),
+                  RPC_INVALID_PARAMETER,
+                  "gettransactionflow requires -txindex=1");
+    checkRPCError(oneParameter(UniValue{std::string(64, 'A')}),
+                  RPC_INVALID_PARAMETER,
+                  "gettransactionflow requires -txindex=1");
+}
+
 BOOST_AUTO_TEST_CASE(rpc_getrawtransaction_mempool_does_not_wait_for_cs_main)
 {
     CMutableTransaction mutableTx;

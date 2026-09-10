@@ -268,6 +268,7 @@ add_library(server
 	rpc/net.cpp
 	rpc/rawtransaction.cpp
 	rpc/server.cpp
+	rpc/transactionflow.cpp
 	script/scriptcache.cpp
 	script/sigcache.cpp
 	script/ismine.cpp

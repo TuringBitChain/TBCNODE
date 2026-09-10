@@ -165,6 +165,7 @@ BITCOIN_CORE_H = \
   rpc/tojson.h \
   rpc/register.h \
   rpc/text_writer.h \
+  rpc/transactionflow.h \
   scheduler.h \
   script_config.h \
   script/scriptcache.h \
@@ -277,6 +278,7 @@ libbitcoin_server_a_SOURCES = \
   rpc/net.cpp \
   rpc/rawtransaction.cpp \
   rpc/server.cpp \
+  rpc/transactionflow.cpp \
   script/scriptcache.cpp \
   script/sigcache.cpp \
   script/ismine.cpp \
