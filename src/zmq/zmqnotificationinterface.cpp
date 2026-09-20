@@ -10,6 +10,9 @@
 #include "validation.h"
 #include "version.h"
 
+#include <memory>
+#include <stdexcept>
+
 void zmqError(const char *str) {
     LogPrint(BCLog::ZMQ, "zmq: Error: %s, errno=%s\n", str,
              zmq_strerror(errno));
@@ -27,7 +30,13 @@ CZMQNotificationInterface::~CZMQNotificationInterface() {
 }
 
 CZMQNotificationInterface *CZMQNotificationInterface::Create() {
-    CZMQNotificationInterface *notificationInterface = nullptr;
+    if (gArgs.IsArgSet("-zmqpubtxinmempool") && gArgs.IsArgSet("-zmqpubrawblock") &&
+        gArgs.GetArg("-zmqpubtxinmempool", "") == gArgs.GetArg("-zmqpubrawblock", ""))
+    {
+        throw std::invalid_argument(
+            "-zmqpubtxinmempool cannot share an address with -zmqpubrawblock");
+    }
+    std::unique_ptr<CZMQNotificationInterface> notificationInterface;
     std::map<std::string, CZMQNotifierFactory> factories;
     std::list<CZMQAbstractNotifier *> notifiers;
 
@@ -39,6 +48,8 @@ CZMQNotificationInterface *CZMQNotificationInterface::Create() {
         CZMQAbstractNotifier::Create<CZMQPublishRawBlockNotifier>;
     factories["pubrawtx"] =
         CZMQAbstractNotifier::Create<CZMQPublishRawTransactionNotifier>;
+    factories["pubtxinmempool"] =
+        CZMQAbstractNotifier::Create<CZMQPublishTxInMempoolNotifier>;
     factories["pubdiscardedfrommempool"] =
         CZMQAbstractNotifier::Create<CZMQPublishRemovedFromMempoolNotifier>;
     factories["pubremovedfrommempoolblock"] =
@@ -67,16 +78,15 @@ CZMQNotificationInterface *CZMQNotificationInterface::Create() {
     }
 
     if (!notifiers.empty()) {
-        notificationInterface = new CZMQNotificationInterface();
-        notificationInterface->notifiers = notifiers;
+        notificationInterface.reset(new CZMQNotificationInterface());
+        notificationInterface->notifiers.swap(notifiers);
 
         if (!notificationInterface->Initialize()) {
-            delete notificationInterface;
-            notificationInterface = nullptr;
+            notificationInterface.reset();
         }
     }
 
-    return notificationInterface;
+    return notificationInterface.release();
 }
 
 // Called at startup to conditionally set up ZMQ socket(s)
@@ -99,6 +109,10 @@ bool CZMQNotificationInterface::Initialize() {
     for (; i != notifiers.end(); ++i) {
         CZMQAbstractNotifier *notifier = *i;
         if (notifier->Initialize(pcontext)) {
+            if (notifier->GetType() == "pubtxinmempool")
+            {
+                mMempoolNotifier = static_cast<CZMQPublishTxInMempoolNotifier*>(notifier);
+            }
             LogPrint(BCLog::ZMQ, "  Notifier %s ready (address = %s)\n",
                      notifier->GetType(), notifier->GetAddress());
         } else {
@@ -117,6 +131,7 @@ bool CZMQNotificationInterface::Initialize() {
 
 // Called during shutdown sequence
 void CZMQNotificationInterface::Shutdown() {
+    mMempoolState.Stop();
     LogPrint(BCLog::ZMQ, "zmq: Shutdown notification interface\n");
     if (pcontext) {
         for (std::list<CZMQAbstractNotifier *>::iterator i = notifiers.begin();
@@ -130,6 +145,16 @@ void CZMQNotificationInterface::Shutdown() {
 
         pcontext = 0;
     }
+}
+
+bool CZMQNotificationInterface::PublishMempoolTransaction(
+    const uint256& txid, MempoolNotifierState::Position position,
+    std::optional<MemPoolRemovalReason> reason)
+{
+    if (!mMempoolNotifier) return false;
+    return mMempoolState.Publish(position, [&] {
+        return mMempoolNotifier->SendMempoolMessage(txid, position, reason);
+    });
 }
 
 void CZMQNotificationInterface::UpdatedBlockTip(const CBlockIndex *pindexNew,

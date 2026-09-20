@@ -192,6 +192,12 @@ if(BOOST_TEST_DYN_LINK)
 	target_compile_definitions(test_bitcoin PRIVATE BOOST_TEST_DYN_LINK)
 endif(BOOST_TEST_DYN_LINK)
 
+if(BUILD_BITCOIN_ZMQ)
+	find_package(ZeroMQ REQUIRED)
+	target_sources(test_bitcoin PRIVATE zmq_mempool_publisher_tests.cpp)
+	target_include_directories(test_bitcoin PRIVATE ${ZMQ_INCLUDE_DIR})
+endif()
+
 if(BUILD_BITCOIN_WALLET)
 	target_sources(test_bitcoin
 		PRIVATE

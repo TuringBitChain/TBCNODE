@@ -7,18 +7,29 @@
 
 #include "validationinterface.h"
 #include "txmempool.h"
+#include "mempool_notifier_state.h"
 
 #include <list>
 #include <map>
 
 class CBlockIndex;
 class CZMQAbstractNotifier;
+class CZMQPublishTxInMempoolNotifier;
 
 class CZMQNotificationInterface final : public CValidationInterface {
 public:
     virtual ~CZMQNotificationInterface();
 
     static CZMQNotificationInterface *Create();
+
+    // Startup enables this state after binding the configured publishers.
+    MempoolNotifierState& GetMempoolState() { return mMempoolState; }
+
+    // The event producer must allocate/enqueue positions under the mempool
+    // lock, then call this from an ordered publisher without that lock.
+    bool PublishMempoolTransaction(const uint256& txid,
+                                  MempoolNotifierState::Position position,
+                                  std::optional<MemPoolRemovalReason> reason = std::nullopt);
 
 protected:
     bool Initialize();
@@ -49,6 +60,8 @@ private:
 
     void *pcontext;
     std::list<CZMQAbstractNotifier *> notifiers;
+    MempoolNotifierState mMempoolState;
+    CZMQPublishTxInMempoolNotifier* mMempoolNotifier{nullptr};
 };
 
 #endif // BITCOIN_ZMQ_ZMQNOTIFICATIONINTERFACE_H

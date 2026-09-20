@@ -699,6 +699,8 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage += HelpMessageGroup(_("ZeroMQ notification options:"));
     strUsage += HelpMessageOpt("-zmqpubhashblock=<address>",
                                _("Enable publish hash block in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubtxinmempool=<address>",
+                               _("Enable mempool entry/exit notifications at <address> (tcp:// or ipc://); cannot share an address with -zmqpubrawblock"));
     strUsage +=
         HelpMessageOpt("-zmqpubhashtx=<address>",
                        _("Enable publish hash transaction in <address>"));
@@ -2540,7 +2542,22 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     }
 
 #if ENABLE_ZMQ
-    pzmqNotificationInterface = CZMQNotificationInterface::Create();
+    try
+    {
+        pzmqNotificationInterface = CZMQNotificationInterface::Create();
+        if (gArgs.IsArgSet("-zmqpubtxinmempool"))
+        {
+            if (!pzmqNotificationInterface)
+            {
+                return InitError("Unable to initialize -zmqpubtxinmempool; see debug log");
+            }
+            pzmqNotificationInterface->GetMempoolState().Start(GetDataDir() / "txinmempool.epoch");
+        }
+    }
+    catch (const std::exception& e)
+    {
+        return InitError(e.what());
+    }
 
     if (pzmqNotificationInterface) {
         RegisterValidationInterface(pzmqNotificationInterface);

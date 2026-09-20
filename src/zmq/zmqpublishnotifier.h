@@ -6,13 +6,21 @@
 #define BITCOIN_ZMQ_ZMQPUBLISHNOTIFIER_H
 
 #include "zmqabstractnotifier.h"
+#include "mempool_notifier_state.h"
+
+#include <memory>
+#include <mutex>
 
 class CBlockIndex;
 
 class CZMQAbstractPublishNotifier : public CZMQAbstractNotifier {
 private:
     //!< upcounting per message sequence number
-    uint32_t nSequence;
+    uint32_t nSequence{0};
+
+protected:
+    // All notifiers sharing a socket serialize complete multipart sends.
+    std::shared_ptr<std::mutex> mSocketMutex;
 
 public:
     /* send zmq multipart message
@@ -29,6 +37,15 @@ public:
 
     bool Initialize(void *pcontext) override;
     void Shutdown() override;
+};
+
+class CZMQPublishTxInMempoolNotifier : public CZMQAbstractPublishNotifier {
+public:
+    // No reason means ACCEPTED. A reason means DISCARDED. Unlike legacy
+    // messages, the third frame is JSON and there is no uint32 sequence frame.
+    bool SendMempoolMessage(const uint256& txid,
+                           MempoolNotifierState::Position position,
+                           std::optional<MemPoolRemovalReason> reason = std::nullopt);
 };
 
 class CZMQPublishHashBlockNotifier : public CZMQAbstractPublishNotifier {

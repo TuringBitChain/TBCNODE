@@ -13,6 +13,7 @@
 #include "validation.h"
 
 #include <cstdarg>
+#include <stdexcept>
 
 static std::multimap<std::string, CZMQAbstractPublishNotifier *>
     mapPublishNotifiers;
@@ -21,6 +22,7 @@ static const char *MSG_HASHBLOCK = "hashblock";
 static const char *MSG_HASHTX = "hashtx";
 static const char *MSG_RAWBLOCK = "rawblock";
 static const char *MSG_RAWTX = "rawtx";
+static const char *MSG_TXINMEMPOOL = "txinmempool";
 
 static const char* const MSG_HASHBLOCKNEW = "hashblockincr";
 static const char* const MSG_RAWBLOCKNEW = "rawblockincr";
@@ -74,6 +76,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext) {
         mapPublishNotifiers.find(address);
 
     if (i == mapPublishNotifiers.end()) {
+        mSocketMutex = std::make_shared<std::mutex>();
         psocket = zmq_socket(pcontext, ZMQ_PUB);
         if (!psocket) {
             zmqError("Failed to create socket");
@@ -84,6 +87,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext) {
         if (rc != 0) {
             zmqError("Failed to bind address");
             zmq_close(psocket);
+            psocket = nullptr;
             return false;
         }
 
@@ -95,6 +99,7 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext) {
         LogPrint(BCLog::ZMQ, "zmq: Reusing socket for address %s\n", address);
 
         psocket = i->second->psocket;
+        mSocketMutex = i->second->mSocketMutex;
         mapPublishNotifiers.insert(std::make_pair(address, this));
 
         return true;
@@ -102,7 +107,9 @@ bool CZMQAbstractPublishNotifier::Initialize(void *pcontext) {
 }
 
 void CZMQAbstractPublishNotifier::Shutdown() {
-    assert(psocket);
+    // Initialization can fail before this notifier acquires a socket.
+    if (!psocket) return;
+    std::lock_guard lock{*mSocketMutex};
 
     int count = mapPublishNotifiers.count(address);
 
@@ -132,6 +139,7 @@ void CZMQAbstractPublishNotifier::Shutdown() {
 bool CZMQAbstractPublishNotifier::SendZMQMessage(const char *command,
                                               const void *data, size_t size) {
     assert(psocket);
+    std::lock_guard lock{*mSocketMutex};
 
     /* send three parts, command & data & a LE 4byte sequence number */
     uint8_t msgseq[sizeof(uint32_t)];
@@ -144,6 +152,52 @@ bool CZMQAbstractPublishNotifier::SendZMQMessage(const char *command,
     nSequence++;
 
     return true;
+}
+
+bool CZMQPublishTxInMempoolNotifier::SendMempoolMessage(
+    const uint256& txid, MempoolNotifierState::Position position,
+    std::optional<MemPoolRemovalReason> reason)
+{
+    if (position.epoch < 0 || position.seq < 1)
+    {
+        throw std::invalid_argument("Invalid txinmempool event position");
+    }
+
+    const char* reasonText{nullptr};
+    if (reason)
+    {
+        switch (*reason)
+        {
+            case MemPoolRemovalReason::EXPIRY: reasonText = "expired"; break;
+            case MemPoolRemovalReason::SIZELIMIT: reasonText = "sizelimit"; break;
+            case MemPoolRemovalReason::BLOCK: reasonText = "included-in-block"; break;
+            case MemPoolRemovalReason::CONFLICT: reasonText = "collision-in-block-tx"; break;
+            case MemPoolRemovalReason::REORG: reasonText = "reorg"; break;
+            default:
+                throw std::invalid_argument("Unsupported txinmempool removal reason");
+        }
+    }
+
+    CStringWriter text;
+    CJSONWriter json(text, false);
+    json.writeBeginObject();
+    json.pushKV("epoch", position.epoch);
+    json.pushKV("seq", position.seq);
+    json.pushKV("status", reason ? "DISCARDED" : "ACCEPTED", reason.has_value());
+    if (reason) json.pushKV("reason", reasonText, false);
+    json.writeEndObject(false);
+    const std::string metadata{text.MoveOutString()};
+
+    uint8_t hash[32];
+    for (size_t i = 0; i < sizeof(hash); ++i)
+    {
+        hash[31 - i] = txid.begin()[i];
+    }
+    if (!psocket) return false;
+    std::lock_guard lock{*mSocketMutex};
+    return zmq_send_multipart(psocket, MSG_TXINMEMPOOL, strlen(MSG_TXINMEMPOOL),
+                              hash, sizeof(hash), metadata.data(), metadata.size(),
+                              (void*)nullptr) == 0;
 }
 
 bool CZMQAbstractPublishNotifier::SendZMQMessage(const char* command, const uint256& hash) 
