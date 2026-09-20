@@ -77,6 +77,7 @@ BITCOIN_TESTS =\
   test/m_candidates_tests.cpp \
   test/main_tests.cpp \
   test/mempool_tests.cpp \
+  test/mempool_notifier_state_tests.cpp \
   test/merkle_tests.cpp \
   test/miner_tests.cpp \
   test/net_association_tests.cpp \

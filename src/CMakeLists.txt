@@ -285,6 +285,7 @@ add_library(server
 	ui_interface.cpp
 	validation.cpp
 	validationinterface.cpp
+    zmq/mempool_notifier_state.cpp
     vmtouch.cpp
 )
 
