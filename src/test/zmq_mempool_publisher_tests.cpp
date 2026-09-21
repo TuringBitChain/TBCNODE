@@ -152,7 +152,6 @@ struct PublisherSetup : BasicTestingSetup
         CheckEvent(txid, epoch, sequence++);
         const std::vector<std::pair<MemPoolRemovalReason, std::string>> reasons{
             {MemPoolRemovalReason::EXPIRY, "expired"},
-            {MemPoolRemovalReason::SIZELIMIT, "sizelimit"},
             {MemPoolRemovalReason::BLOCK, "included-in-block"},
             {MemPoolRemovalReason::CONFLICT, "collision-in-block-tx"},
             {MemPoolRemovalReason::REORG, "reorg"}};
@@ -300,6 +299,7 @@ BOOST_AUTO_TEST_CASE(invalid_metadata_does_not_send_or_consume_legacy_sequence)
     BOOST_CHECK_THROW(publisher.SendMempoolMessage(txid, {1, 0}), std::invalid_argument);
     BOOST_CHECK_THROW(publisher.SendMempoolMessage(txid, {1, 1}, MemPoolRemovalReason::UNKNOWN), std::invalid_argument);
     BOOST_CHECK_THROW(publisher.SendMempoolMessage(txid, {1, 1}, MemPoolRemovalReason::REPLACED), std::invalid_argument);
+    BOOST_CHECK_THROW(publisher.SendMempoolMessage(txid, {1, 1}, MemPoolRemovalReason::SIZELIMIT), std::invalid_argument);
     BOOST_REQUIRE(publisher.SendMempoolMessage(txid, {1, 1}));
     CheckEvent(txid, 1, 1);
 }
@@ -361,7 +361,6 @@ BOOST_AUTO_TEST_CASE(pool_events_are_ordered_and_restoration_is_silent)
     TestMemPoolEntryHelper entry;
     const std::vector<std::pair<MemPoolRemovalReason, std::string>> reasons{
         {MemPoolRemovalReason::EXPIRY, "expired"},
-        {MemPoolRemovalReason::SIZELIMIT, "sizelimit"},
         {MemPoolRemovalReason::BLOCK, "included-in-block"},
         {MemPoolRemovalReason::CONFLICT, "collision-in-block-tx"},
         {MemPoolRemovalReason::REORG, "reorg"}};

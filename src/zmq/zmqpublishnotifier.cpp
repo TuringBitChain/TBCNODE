@@ -169,7 +169,6 @@ bool CZMQPublishTxInMempoolNotifier::SendMempoolMessage(
         switch (*reason)
         {
             case MemPoolRemovalReason::EXPIRY: reasonText = "expired"; break;
-            case MemPoolRemovalReason::SIZELIMIT: reasonText = "sizelimit"; break;
             case MemPoolRemovalReason::BLOCK: reasonText = "included-in-block"; break;
             case MemPoolRemovalReason::CONFLICT: reasonText = "collision-in-block-tx"; break;
             case MemPoolRemovalReason::REORG: reasonText = "reorg"; break;

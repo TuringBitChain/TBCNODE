@@ -5,6 +5,7 @@
 import copy
 import json
 import os
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -54,8 +55,10 @@ class TxInMempoolLifecycleTest(BitcoinTestFramework):
 
     def empty_block(self, previous):
         tip = self.node.getblock(previous)
+        # Cached chains can be older than the IBD tip-age limit. Use a fresh
+        # timestamp so hashblock can acknowledge subscription readiness.
         block = create_block(int(previous, 16), create_coinbase(tip["height"] + 1),
-                             tip["time"] + 1)
+                             max(tip["time"] + 1, int(time.time())))
         block.solve()
         # An equal-work side block is stored before it becomes the active tip.
         result = self.node.submitblock(ToHex(block))

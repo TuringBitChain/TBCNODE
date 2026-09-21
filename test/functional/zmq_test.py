@@ -11,6 +11,7 @@ from test_framework.test_framework import BitcoinTestFramework, SkipTest
 from test_framework.util import (assert_equal,
                                  bytes_to_hex_str,
                                  hash256,
+                                 zmq_port,
                                  )
 
 
@@ -43,7 +44,7 @@ class ZMQTest (BitcoinTestFramework):
         self.zmqSubSocket.setsockopt(zmq.SUBSCRIBE, b"hashtx")
         self.zmqSubSocket.setsockopt(zmq.SUBSCRIBE, b"rawblock")
         self.zmqSubSocket.setsockopt(zmq.SUBSCRIBE, b"rawtx")
-        ip_address = "tcp://127.0.0.1:28332"
+        ip_address = "tcp://127.0.0.1:%d" % zmq_port(0)
         self.zmqSubSocket.connect(ip_address)
         self.extra_args = [['-zmqpubhashblock=%s' % ip_address, '-zmqpubhashtx=%s' % ip_address,
                             '-zmqpubrawblock=%s' % ip_address, '-zmqpubrawtx=%s' % ip_address], []]
@@ -78,8 +79,8 @@ class ZMQTest (BitcoinTestFramework):
         msgSequence = struct.unpack('<I', msg[-1])[-1]
         assert_equal(msgSequence, 0)  # must be sequence 0 on rawtx
 
-        # Check that the rawtx hashes to the hashtx
-        assert_equal(hash256(body), txhash)
+        # Decode using the transaction ID rules for its version.
+        assert_equal(self.nodes[0].decoderawtransaction(body.hex())["txid"], txhash.hex())
 
         self.log.info("Wait for block")
         msg = self.zmqSubSocket.recv_multipart()
@@ -153,7 +154,7 @@ class ZMQTest (BitcoinTestFramework):
         topic = msg[0]
         assert_equal(topic, b"rawtx")
         body = msg[1]
-        hashedZMQ = bytes_to_hex_str(hash256(body))
+        hashedZMQ = self.nodes[0].decoderawtransaction(body.hex())["txid"]
         msgSequence = struct.unpack('<I', msg[-1])[-1]
         assert_equal(msgSequence, blockcount + 1)
         # txid from sendtoaddress must be equal to the hash received over zmq
