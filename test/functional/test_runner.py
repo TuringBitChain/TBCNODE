@@ -91,6 +91,7 @@ TEST_PARAMS = {
     "txn_doublespend.py": [["--mineblock"]],
     "txn_clone.py": [["--mineblock"]],
     "zmq_txinmempool.py": [["--ipc"]],
+    "zmq_txinmempool_lifecycle.py": [["--ipc"]],
     # Test with blocks larger than preferredBlockfileSize.
     "bsv-128Mb-blocks.py": [["--excessiveblocksize=130000000"]],
 
