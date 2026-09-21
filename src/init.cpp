@@ -91,6 +91,14 @@ std::unique_ptr<PeerLogicValidation> peerLogic;
 static CZMQNotificationInterface *pzmqNotificationInterface = nullptr;
 #endif
 
+const MempoolNotifierState* GetMempoolNotifierState()
+{
+#if ENABLE_ZMQ
+    if (pzmqNotificationInterface) return &pzmqNotificationInterface->GetMempoolState();
+#endif
+    return nullptr;
+}
+
 #ifdef WIN32
 // Win32 LevelDB doesn't use filedescriptors, and the ones used for accessing
 // block files don't count towards the fd_set size limit anyway.
@@ -2840,7 +2848,7 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         }
     }
 
-    threadGroup.create_thread(
+    [[maybe_unused]] auto* importThread = threadGroup.create_thread(
         [&config, vImportFiles, shutdownToken]
         {
             TraceThread(
@@ -2913,6 +2921,15 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     uiInterface.InitMessage(_("Done loading"));
 
 #ifdef ENABLE_WALLET
+#if ENABLE_ZMQ
+    if (!vpwallets.empty() && gArgs.IsArgSet("-zmqpubtxinmempool") &&
+        gArgs.GetArg("-persistmempool", DEFAULT_PERSIST_MEMPOOL)) {
+        // File restoration must win over startup wallet re-submission, or the
+        // same persisted entry can nondeterministically receive an ACCEPTED
+        // position with TxSource::wallet before TxSource::file encounters it.
+        importThread->join();
+    }
+#endif
     for (CWalletRef pwallet : vpwallets) {
         pwallet->postInitProcess(scheduler);
     }

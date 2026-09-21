@@ -30,6 +30,7 @@
 #include "utilstrencodings.h"
 #include "validation.h"
 #include "init.h"
+#include "zmq/mempool_notifier_state.h"
 
 #include <boost/algorithm/string/case_conv.hpp> // for boost::to_upper
 #include <boost/thread/thread.hpp>              // boost::thread::interrupt
@@ -527,7 +528,7 @@ UniValue getmempooldescendants(const Config &config,
     }
 }
 
-UniValue getmempoolentry(const Config &config, const JSONRPCRequest &request) {
+UniValue GetMempoolEntry(const JSONRPCRequest& request, const MempoolNotifierState* state) {
     if (request.fHelp || request.params.size() != 1) {
         throw std::runtime_error(
             "getmempoolentry txid\n"
@@ -536,9 +537,13 @@ UniValue getmempoolentry(const Config &config, const JSONRPCRequest &request) {
             "1. \"txid\"                   (string, required) "
             "The transaction id (must be in mempool)\n"
             "\nResult:\n"
-            "{                           (json object)\n" +
+            "{                           (json object)\n"
+            "    \"epoch\" : n,            (numeric, optional) txinmempool ACCEPTED epoch\n"
+            "    \"seq\" : n,              (numeric, optional) this entry's ACCEPTED sequence\n" +
             EntryDescriptionString() +
             "}\n"
+            "Both notification fields are omitted when notifications are disabled or the entry was restored from disk.\n"
+            "They identify admission, not the latest published event. A failed notification stream returns an error.\n"
             "\nExamples:\n" +
             HelpExampleCli("getmempoolentry", "\"mytxid\"") +
             HelpExampleRpc("getmempoolentry", "\"mytxid\""));
@@ -556,7 +561,59 @@ UniValue getmempoolentry(const Config &config, const JSONRPCRequest &request) {
     const CTxMemPoolEntry &e = *txIter;
     UniValue info(UniValue::VOBJ);
     entryToJSONNL(info, e);
+    if (state) {
+        // Keep the pool read lock through the lookup so a concurrent removal
+        // or re-admission cannot attach another admission's position.
+        try {
+            if (const auto position = state->GetAcceptance(hash)) {
+                info.push_back(Pair("epoch", position->epoch));
+                info.push_back(Pair("seq", position->seq));
+            }
+        } catch (const std::runtime_error& e) {
+            throw JSONRPCError(RPC_MISC_ERROR, e.what());
+        }
+    }
     return info;
+}
+
+UniValue getmempoolentry(const Config& config, const JSONRPCRequest& request) {
+    return GetMempoolEntry(request, GetMempoolNotifierState());
+}
+
+UniValue GetZMQTipSnapshot(const JSONRPCRequest& request, const MempoolNotifierState* state) {
+    if (request.fHelp || request.params.size() != 0) {
+        throw std::runtime_error(
+            "getzmqtipsnapshot\n"
+            "\nReturns the last txinmempool event successfully submitted to ZMQ.\n"
+            "Successful submission does not mean a client received the event.\n"
+            "The initial sequence is 0; the first event has sequence 1.\n"
+            "Both fields are -1 when notifications are disabled, including builds without ZMQ.\n"
+            "A failed notification stream returns an error instead of a stale position.\n"
+            "This is not an atomic snapshot with subsequent mempool queries and provides no historical replay.\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"epoch\" : n,  (numeric) notification epoch, or -1 when disabled\n"
+            "  \"seq\" : n     (numeric) last successfully submitted event sequence, or -1 when disabled\n"
+            "}\n"
+            "\nExamples:\n" + HelpExampleCli("getzmqtipsnapshot", "") +
+            HelpExampleRpc("getzmqtipsnapshot", ""));
+    }
+    MempoolNotifierState::Position position{-1, -1};
+    if (state) {
+        try {
+            position = state->GetSnapshot();
+        } catch (const std::runtime_error& e) {
+            throw JSONRPCError(RPC_MISC_ERROR, e.what());
+        }
+    }
+    UniValue result(UniValue::VOBJ);
+    result.push_back(Pair("epoch", position.epoch));
+    result.push_back(Pair("seq", position.seq));
+    return result;
+}
+
+UniValue getzmqtipsnapshot(const Config& config, const JSONRPCRequest& request) {
+    return GetZMQTipSnapshot(request, GetMempoolNotifierState());
 }
 
 UniValue getblockhash(const Config &config, const JSONRPCRequest &request) {
@@ -2671,6 +2728,7 @@ static const CRPCCommand commands[] = {
     { "blockchain",         "getmempoolancestors",    getmempoolancestors,    true,  {"txid","verbose"} },
     { "blockchain",         "getmempooldescendants",  getmempooldescendants,  true,  {"txid","verbose"} },
     { "blockchain",         "getmempoolentry",        getmempoolentry,        true,  {"txid"} },
+    { "blockchain",         "getzmqtipsnapshot",      getzmqtipsnapshot,      true,  {} },
     { "blockchain",         "getmempoolinfo",         getmempoolinfo,         true,  {} },
     { "blockchain",         "getrawmempool",          getrawmempool,          true,  {"verbose"} },
     { "blockchain",         "getrawnonfinalmempool",  getrawnonfinalmempool,  true,  {} },

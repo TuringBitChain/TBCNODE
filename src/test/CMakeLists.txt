@@ -99,6 +99,7 @@ add_test_to_suite(bitcoin test_bitcoin
 	main_tests.cpp
 	mempool_tests.cpp
 	mempool_notifier_state_tests.cpp
+	zmq_mempool_rpc_tests.cpp
 	merkle_tests.cpp
 	miner_tests.cpp
     net_association_tests.cpp

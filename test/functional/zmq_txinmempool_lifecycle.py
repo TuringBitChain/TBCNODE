@@ -14,7 +14,7 @@ from test_framework.mininode import (CTransaction, CTxIn, CTxOut, COutPoint,
                                      NetworkThread, msg_tx)
 from test_framework.script import CScript, OP_TRUE
 from test_framework.test_framework import BitcoinTestFramework, SkipTest
-from test_framework.util import (assert_equal, check_zmq_test_requirements,
+from test_framework.util import (assert_equal, assert_raises_rpc_error, check_zmq_test_requirements,
                                  p2p_port, wait_until, zmq_port)
 
 
@@ -50,6 +50,7 @@ class TxInMempoolLifecycleTest(BitcoinTestFramework):
     def reset_epoch(self):
         self.epoch = int(self.epoch_file.read_text())
         self.sequence = 0
+        assert_equal(self.node.getzmqtipsnapshot(), {"epoch": self.epoch, "seq": 0})
 
     def empty_block(self, previous):
         tip = self.node.getblock(previous)
@@ -92,6 +93,13 @@ class TxInMempoolLifecycleTest(BitcoinTestFramework):
         if reason is not None:
             expected["reason"] = reason
         assert_equal(json.loads(frames[2]), expected)
+        wait_until(lambda: self.node.getzmqtipsnapshot()["seq"] >= self.sequence)
+        assert_equal(self.node.getzmqtipsnapshot()["epoch"], self.epoch)
+        if reason is None:
+            entry = self.node.getmempoolentry(txid)
+            assert_equal((entry["epoch"], entry["seq"]), (self.epoch, self.sequence))
+        else:
+            assert_raises_rpc_error(-5, "Transaction not in mempool", self.node.getmempoolentry, txid)
         return txid
 
     def accepted(self, *transactions):
@@ -243,12 +251,17 @@ class TxInMempoolLifecycleTest(BitcoinTestFramework):
         self.start_node(0, self.enabled_args if enabled else self.base_args)
         wait_until(lambda: set(self.node.getrawmempool()) == {tx.hash for tx in ordinary})
         wait_until(lambda: set(self.node.getrawnonfinalmempool()) == {tx.hash for tx in nonfinal})
+        for tx in ordinary:
+            entry = self.node.getmempoolentry(tx.hash)
+            assert "epoch" not in entry
+            assert "seq" not in entry
         if enabled:
             self.reset_epoch()
             assert self.epoch > previous_epoch
             self.warm_up()
         else:
             assert_equal(int(self.epoch_file.read_text()), previous_epoch)
+            assert_equal(self.node.getzmqtipsnapshot(), {"epoch": -1, "seq": -1})
         self.no_event()
 
     def check_persistence(self, funding):
