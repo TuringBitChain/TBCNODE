@@ -131,7 +131,7 @@ bool CZMQNotificationInterface::Initialize() {
 
 // Called during shutdown sequence
 void CZMQNotificationInterface::Shutdown() {
-    mMempoolState.Stop();
+    StopMempoolNotifications();
     LogPrint(BCLog::ZMQ, "zmq: Shutdown notification interface\n");
     if (pcontext) {
         for (std::list<CZMQAbstractNotifier *>::iterator i = notifiers.begin();
@@ -144,6 +144,101 @@ void CZMQNotificationInterface::Shutdown() {
         zmq_ctx_term(pcontext);
 
         pcontext = 0;
+    }
+}
+
+void CZMQNotificationInterface::StartMempoolNotifications(CTxMemPool& pool)
+{
+    if (!mMempoolNotifier) throw std::logic_error("txinmempool publisher is not configured");
+    if (mMempoolState.GetStatus() != MempoolNotifierState::Status::RUNNING ||
+        mPublisherThread.joinable()) {
+        throw std::logic_error("txinmempool state must be started before attaching the pool");
+    }
+    mPublisherThread = std::thread{&CZMQNotificationInterface::RunMempoolPublisher, this};
+    pool.SetChangeObserver([this](const uint256& txid, std::optional<MemPoolRemovalReason> reason) {
+        QueueMempoolEvent(txid, reason);
+    });
+    mObservedPool = &pool;
+}
+
+void CZMQNotificationInterface::StopMempoolNotifications()
+{
+    // Detach under the pool lock before taking the queue lock. This also waits
+    // for producers that may still be using this interface.
+    if (mObservedPool) {
+        mObservedPool->SetChangeObserver({});
+        mObservedPool = nullptr;
+    }
+    {
+        std::lock_guard lock{mQueueMutex};
+        mStopping = true;
+        mQueue.clear();
+    }
+    mQueueReady.notify_one();
+    if (mPublisherThread.joinable()) mPublisherThread.join();
+    mMempoolState.Stop();
+}
+
+void CZMQNotificationInterface::FailMempoolNotifications(const char* message) noexcept
+{
+    mMempoolState.Fail();
+    {
+        std::lock_guard lock{mQueueMutex};
+        mFailed = true;
+        mQueue.clear();
+    }
+    mQueueReady.notify_one();
+    try {
+        LogPrintf("txinmempool notification stream failed: %s\n", message);
+    } catch (...) {
+        // An allocation failure while reporting must not escape into admission.
+    }
+}
+
+void CZMQNotificationInterface::QueueMempoolEvent(
+    const uint256& txid, std::optional<MemPoolRemovalReason> reason) noexcept
+{
+    try {
+        std::lock_guard lock{mQueueMutex};
+        if (mStopping || mFailed) return;
+        // Bound transient storage without blocking a producer holding the pool
+        // lock. A lost event makes the whole stream unusable until restart.
+        constexpr size_t MAX_PENDING_EVENTS{65536};
+        if (mQueue.size() >= MAX_PENDING_EVENTS) {
+            throw std::runtime_error("pending event queue is full");
+        }
+        const auto position{reason ? mMempoolState.Removed(txid) : mMempoolState.Accepted(txid)};
+        if (!position) return;
+        mQueue.push_back({txid, *position, reason});
+        mQueueReady.notify_one();
+    } catch (const std::exception& e) {
+        FailMempoolNotifications(e.what());
+    } catch (...) {
+        FailMempoolNotifications("cannot enqueue event");
+    }
+}
+
+void CZMQNotificationInterface::RunMempoolPublisher() noexcept
+{
+    try {
+        while (true) {
+            MempoolEvent event;
+            {
+                std::unique_lock lock{mQueueMutex};
+                mQueueReady.wait(lock, [this] { return mStopping || mFailed || !mQueue.empty(); });
+                if (mStopping || mFailed) return;
+                event = mQueue.front();
+                mQueue.pop_front();
+            }
+            if (!PublishMempoolTransaction(event.txid, event.position, event.reason)) {
+                FailMempoolNotifications("ZMQ send failed");
+                return;
+            }
+        }
+    } catch (const std::exception& e) {
+        FailMempoolNotifications(e.what());
+    } catch (...) {
+        FailMempoolNotifications("cannot publish event");
     }
 }
 

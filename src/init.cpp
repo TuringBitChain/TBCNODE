@@ -2552,6 +2552,7 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
                 return InitError("Unable to initialize -zmqpubtxinmempool; see debug log");
             }
             pzmqNotificationInterface->GetMempoolState().Start(GetDataDir() / "txinmempool.epoch");
+            pzmqNotificationInterface->StartMempoolNotifications(mempool);
         }
     }
     catch (const std::exception& e)

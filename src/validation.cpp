@@ -1571,7 +1571,8 @@ void CommitTxToMempool(
             setAncestors,
             changeSet,
             pnMempoolSize,
-            pnDynamicMemoryUsage);
+            pnDynamicMemoryUsage,
+            pTxInputData->GetTxSource() != TxSource::file);
     // Expire aged transactions. Under the no-trim policy no size-based eviction
     // occurs here; TxnValidation performs size-cap rejection before insertion.
     if (fLimitMempoolSize) {

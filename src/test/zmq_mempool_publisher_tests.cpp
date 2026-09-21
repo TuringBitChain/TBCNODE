@@ -3,6 +3,7 @@
 #include "zmq/zmqnotificationinterface.h"
 #include "zmq/zmqpublishnotifier.h"
 #include "chain.h"
+#include "mining/journal_change_set.h"
 #include "rpc/server.h"
 #include "streams.h"
 #include "test/test_bitcoin.h"
@@ -336,6 +337,154 @@ BOOST_AUTO_TEST_CASE(interface_publishes_allocated_positions_without_subscribers
     const auto removed{state.Removed(txid).value()};
     BOOST_CHECK(interface->PublishMempoolTransaction(txid, removed, MemPoolRemovalReason::EXPIRY));
     BOOST_CHECK_EQUAL(state.GetSnapshot().seq, 2);
+}
+
+BOOST_AUTO_TEST_CASE(pool_events_are_ordered_and_restoration_is_silent)
+{
+    MempoolArgGuard restore;
+    const std::string address{"tcp://127.0.0.1:*"};
+    auto& probe{MakePublisher<CZMQPublishHashTransactionNotifier>(address)};
+    Connect(probe);
+    CTxMemPool pool;
+    gArgs.ForceSetArg(restore.key, address);
+    std::unique_ptr<CZMQNotificationInterface> interface{CZMQNotificationInterface::Create()};
+    BOOST_REQUIRE(interface);
+    interface->GetMempoolState().Start(directory / "epoch");
+    interface->StartMempoolNotifications(pool);
+    auto& state{interface->GetMempoolState()};
+    const auto epoch{state.GetSnapshot().epoch};
+    BOOST_CHECK_EQUAL(state.GetSnapshot().seq, 0);
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+    tx.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    TestMemPoolEntryHelper entry;
+    const std::vector<std::pair<MemPoolRemovalReason, std::string>> reasons{
+        {MemPoolRemovalReason::EXPIRY, "expired"},
+        {MemPoolRemovalReason::SIZELIMIT, "sizelimit"},
+        {MemPoolRemovalReason::BLOCK, "included-in-block"},
+        {MemPoolRemovalReason::CONFLICT, "collision-in-block-tx"},
+        {MemPoolRemovalReason::REORG, "reorg"}};
+    int64_t sequence{0};
+    for (const auto& reason : reasons) {
+        pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr);
+        BOOST_REQUIRE(state.GetAcceptance(tx.GetId()));
+        BOOST_CHECK_EQUAL(state.GetAcceptance(tx.GetId())->seq, ++sequence);
+        CheckEvent(tx.GetId(), epoch, sequence);
+        if (reason.first == MemPoolRemovalReason::EXPIRY) {
+            BOOST_CHECK_EQUAL(pool.Expire(1, nullptr), 1);
+        } else {
+            pool.RemoveRecursive(CTransaction{tx}, nullptr, reason.first);
+        }
+        BOOST_CHECK(!state.GetAcceptance(tx.GetId()));
+        CheckEvent(tx.GetId(), epoch, ++sequence, reason.second);
+        // Removing a transaction that is already absent must not emit again.
+        pool.RemoveRecursive(CTransaction{tx}, nullptr, reason.first);
+    }
+    pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr, nullptr, nullptr, false);
+    BOOST_CHECK(!state.GetAcceptance(tx.GetId()));
+    pool.RemoveRecursive(CTransaction{tx}, nullptr, MemPoolRemovalReason::BLOCK);
+    CheckEvent(tx.GetId(), epoch, ++sequence, "included-in-block");
+    pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr);
+    CheckEvent(tx.GetId(), epoch, ++sequence);
+    pool.Clear();
+    BOOST_CHECK(!state.GetAcceptance(tx.GetId()));
+    CheckEvent(tx.GetId(), epoch, ++sequence, "reorg");
+    interface->StopMempoolNotifications();
+    BOOST_CHECK_EQUAL(state.GetSnapshot().seq, -1);
+    // The observer is detached before shutdown returns.
+    pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr);
+    pool.Clear();
+}
+
+BOOST_AUTO_TEST_CASE(concurrent_pool_changes_keep_contiguous_event_order)
+{
+    MempoolArgGuard restore;
+    const std::string address{"tcp://127.0.0.1:*"};
+    auto& probe{MakePublisher<CZMQPublishHashTransactionNotifier>(address)};
+    Connect(probe);
+    CTxMemPool pool;
+    gArgs.ForceSetArg(restore.key, address);
+    std::unique_ptr<CZMQNotificationInterface> interface{CZMQNotificationInterface::Create()};
+    BOOST_REQUIRE(interface);
+    interface->GetMempoolState().Start(directory / "epoch");
+    interface->StartMempoolNotifications(pool);
+    const auto epoch{interface->GetMempoolState().GetSnapshot().epoch};
+    constexpr int cycles{32};
+    std::atomic<bool> succeeded{true};
+    const auto mutate = [&](uint32_t output) {
+        try {
+            CMutableTransaction tx;
+            tx.vin.resize(1);
+            tx.vin[0].prevout = COutPoint(uint256S("1234"), output);
+            tx.vout.emplace_back(COIN, CScript() << OP_TRUE);
+            TestMemPoolEntryHelper entry;
+            for (int i = 0; i < cycles; ++i) {
+                pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr);
+                pool.RemoveRecursive(CTransaction{tx}, nullptr, MemPoolRemovalReason::BLOCK);
+            }
+        } catch (...) {
+            succeeded = false;
+        }
+    };
+    std::thread first{mutate, 0}, second{mutate, 1};
+    first.join();
+    second.join();
+    BOOST_REQUIRE(succeeded);
+    BOOST_CHECK_EQUAL(pool.Size(), 0);
+    std::set<std::string> accepted;
+    for (int64_t seq = 1; seq <= cycles * 4; ++seq) {
+        const auto frames{Event()};
+        BOOST_CHECK_EQUAL(frames[0], "txinmempool");
+        UniValue metadata;
+        BOOST_REQUIRE(metadata.read(frames[2]));
+        BOOST_CHECK_EQUAL(metadata["epoch"].get_int64(), epoch);
+        BOOST_CHECK_EQUAL(metadata["seq"].get_int64(), seq);
+        if (metadata["status"].get_str() == "ACCEPTED") {
+            BOOST_CHECK(accepted.insert(frames[1]).second);
+        } else {
+            BOOST_CHECK_EQUAL(metadata["status"].get_str(), "DISCARDED");
+            BOOST_CHECK_EQUAL(metadata["reason"].get_str(), "included-in-block");
+            BOOST_CHECK_EQUAL(accepted.erase(frames[1]), 1);
+        }
+    }
+    BOOST_CHECK(accepted.empty());
+}
+
+BOOST_AUTO_TEST_CASE(pool_without_subscriber_publishes_and_failure_does_not_abort_mutations)
+{
+    MempoolArgGuard restore;
+    CTxMemPool pool;
+    gArgs.ForceSetArg(restore.key, "tcp://127.0.0.1:*");
+    std::unique_ptr<CZMQNotificationInterface> interface{CZMQNotificationInterface::Create()};
+    BOOST_REQUIRE(interface);
+    interface->GetMempoolState().Start(directory / "epoch");
+    interface->StartMempoolNotifications(pool);
+    auto& state{interface->GetMempoolState()};
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vin[0].prevout = COutPoint(InsecureRand256(), 0);
+    tx.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    TestMemPoolEntryHelper entry;
+    pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr);
+    const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+    while (state.GetSnapshot().seq != 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    BOOST_CHECK_EQUAL(state.GetSnapshot().seq, 1);
+    // Unsupported reasons fail the stream instead of publishing false metadata.
+    BOOST_CHECK_NO_THROW(pool.RemoveRecursive(CTransaction{tx}, nullptr, MemPoolRemovalReason::UNKNOWN));
+    while (state.GetStatus() != MempoolNotifierState::Status::FAILED &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    BOOST_CHECK(state.GetStatus() == MempoolNotifierState::Status::FAILED);
+    BOOST_CHECK_EQUAL(pool.Size(), 0);
+    BOOST_CHECK_NO_THROW(pool.AddUnchecked(tx.GetId(), entry.FromTx(tx), nullptr));
+    BOOST_CHECK_EQUAL(pool.Size(), 1);
+    BOOST_CHECK_THROW(state.GetSnapshot(), std::runtime_error);
+    interface.reset();
+    pool.Clear();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

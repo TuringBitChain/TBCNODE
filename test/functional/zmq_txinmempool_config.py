@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 # Distributed under the Open TBC software license, see the accompanying file LICENSE.
-"""Test txinmempool startup, transport configuration and legacy topic coexistence.
-
-Event frames are exercised by BOOST.TEST until the mempool producer is wired.
-"""
+"""Test txinmempool startup, transport configuration and legacy topic coexistence."""
 
 import os
 from pathlib import Path
