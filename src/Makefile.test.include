@@ -77,6 +77,8 @@ BITCOIN_TESTS =\
   test/m_candidates_tests.cpp \
   test/main_tests.cpp \
   test/mempool_tests.cpp \
+  test/mempool_notifier_state_tests.cpp \
+  test/zmq_mempool_rpc_tests.cpp \
   test/merkle_tests.cpp \
   test/miner_tests.cpp \
   test/net_association_tests.cpp \
@@ -139,6 +141,10 @@ BITCOIN_TESTS =\
   test/filled_miner_bill_v2_tests.cpp \
   test/x_only_pubkey_tests.cpp
 
+if ENABLE_ZMQ
+BITCOIN_TESTS += test/zmq_mempool_publisher_tests.cpp
+endif
+
 if ENABLE_WALLET
 BITCOIN_TESTS += \
   wallet/test/wallet_test_fixture.cpp \
@@ -155,7 +161,7 @@ test_test_bitcoin_LDADD =
 if ENABLE_WALLET
 test_test_bitcoin_LDADD += $(LIBBITCOIN_WALLET)
 endif
-test_test_bitcoin_LDADD += $(LIBBITCOIN_SERVER) $(LIBBITCOIN_CLI) $(LIBBITCOIN_COMMON) $(LIBBITCOIN_UTIL) $(LIBBITCOIN_CONSENSUS) $(LIBBITCOIN_CRYPTO) $(LIBUNIVALUE) \
+test_test_bitcoin_LDADD += $(LIBBITCOIN_SERVER) $(LIBBITCOIN_ZMQ) $(LIBBITCOIN_CLI) $(LIBBITCOIN_COMMON) $(LIBBITCOIN_UTIL) $(LIBBITCOIN_CONSENSUS) $(LIBBITCOIN_CRYPTO) $(LIBUNIVALUE) \
   $(LIBLEVELDB) $(LIBLEVELDB_SSE42) $(LIBMEMENV) $(BOOST_LIBS) $(BOOST_UNIT_TEST_FRAMEWORK_LIB) $(LIBSECP256K1) $(EVENT_LIBS) $(EVENT_PTHREADS_LIBS) $(AIO_LIBS)
 test_test_bitcoin_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 
@@ -163,6 +169,7 @@ test_test_bitcoin_LDADD += $(LIBBITCOIN_CONSENSUS) $(BDB_LIBS) $(OPENSSL_LIBS) $
 test_test_bitcoin_LDFLAGS = $(RELDFLAGS) $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS) -static
 
 if ENABLE_ZMQ
+test_test_bitcoin_CPPFLAGS += $(ZMQ_CFLAGS)
 test_test_bitcoin_LDADD += $(ZMQ_LIBS)
 endif
 #

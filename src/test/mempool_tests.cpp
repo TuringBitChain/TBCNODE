@@ -75,6 +75,34 @@ namespace
 
 BOOST_FIXTURE_TEST_SUITE(mempool_tests, TestingSetup)
 
+BOOST_AUTO_TEST_CASE(MempoolChangeObserverSeesCommittedMutations)
+{
+    CTxMemPool pool;
+    const auto parent{MakeRootTx()};
+    const auto child{MakeChildTx(CTransaction{parent})};
+    TestMemPoolEntryHelper entry;
+    std::vector<uint256> accepted, removed;
+    pool.SetChangeObserver([&](const uint256& txid, std::optional<MemPoolRemovalReason> reason) {
+        // Inspect directly: the callback already holds the pool's write lock.
+        BOOST_CHECK_EQUAL(pool.mapTx.count(txid), reason ? 0 : 1);
+        (reason ? removed : accepted).push_back(txid);
+    });
+    pool.AddUnchecked(parent.GetId(), entry.FromTx(parent), nullptr);
+    pool.AddUnchecked(child.GetId(), entry.FromTx(child), nullptr);
+    BOOST_REQUIRE_EQUAL(accepted.size(), 2);
+    BOOST_CHECK(accepted[0] == parent.GetId());
+    BOOST_CHECK(accepted[1] == child.GetId());
+    pool.RemoveRecursive(CTransaction{parent}, nullptr, MemPoolRemovalReason::SIZELIMIT);
+    BOOST_CHECK_EQUAL(removed.size(), 2);
+    pool.RemoveRecursive(CTransaction{parent}, nullptr, MemPoolRemovalReason::SIZELIMIT);
+    BOOST_CHECK_EQUAL(removed.size(), 2);
+    pool.SetChangeObserver({});
+    pool.AddUnchecked(parent.GetId(), entry.FromTx(parent), nullptr);
+    pool.Clear();
+    BOOST_CHECK_EQUAL(accepted.size(), 2);
+    BOOST_CHECK_EQUAL(removed.size(), 2);
+}
+
 BOOST_AUTO_TEST_CASE(MempoolRemoveTest) {
     // Test CTxMemPool::remove functionality
 
