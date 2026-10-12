@@ -213,6 +213,53 @@ static void DoTest(const CScript &scriptPubKey, const CScript &scriptSig,
 #endif
 }
 
+// Require the spender to supply the SHA256 preimage "hello" on the stack.
+// This deliberately checks knowledge of a secret, not ownership of a key.
+static CScript BuildLearningHashlockScript() {
+    return CScript()
+           << OP_SHA256
+           << ParseHex("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+           << OP_EQUAL;
+}
+
+BOOST_AUTO_TEST_CASE(learning_hashlock_valid_preimage) {
+    const CScript unlock = CScript() << ParseHex("68656c6c6f");
+    const unsigned int contexts[] = {
+        flags,
+        flags | SCRIPT_GENESIS | SCRIPT_UTXO_AFTER_GENESIS,
+    };
+    for (const unsigned int context : contexts) {
+        DoTest(BuildLearningHashlockScript(), unlock, context,
+               "The hello preimage must unlock the SHA256 hashlock",
+               SCRIPT_ERR_OK, Amount(1000000));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(learning_hashlock_wrong_preimage) {
+    const CScript unlock = CScript() << ParseHex("776f726c64");
+    const unsigned int contexts[] = {
+        flags,
+        flags | SCRIPT_GENESIS | SCRIPT_UTXO_AFTER_GENESIS,
+    };
+    for (const unsigned int context : contexts) {
+        DoTest(BuildLearningHashlockScript(), unlock, context,
+               "The world preimage must not unlock the hello hashlock",
+               SCRIPT_ERR_EVAL_FALSE, Amount(1000000));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(learning_hashlock_missing_preimage) {
+    const unsigned int contexts[] = {
+        flags,
+        flags | SCRIPT_GENESIS | SCRIPT_UTXO_AFTER_GENESIS,
+    };
+    for (const unsigned int context : contexts) {
+        DoTest(BuildLearningHashlockScript(), CScript(), context,
+               "SHA256 must reject an empty stack",
+               SCRIPT_ERR_INVALID_STACK_OPERATION, Amount(1000000));
+    }
+}
+
 namespace {
 const uint8_t vchKey0[32] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                              0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
