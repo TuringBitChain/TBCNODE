@@ -114,3 +114,15 @@ AGENTS.md
 
 devfiles
 
+# Local CMake/Ninja build artifacts
+/build-*/
+/cmake-build-*/
+/CMakeCache.txt
+/CMakeFiles/
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/cmake_install.cmake
+/CTestTestfile.cmake
+/compile_commands.json
+

@@ -1318,10 +1318,7 @@ void CConnman::ThreadSocketHandler() {
         //
         // Find which sockets have data to receive
         //
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        // Frequency to poll pnode->vSend
-        timeout.tv_usec = 50000;
+        constexpr std::chrono::milliseconds socketPollInterval{50};
 
         fd_set fdsetRecv;
         fd_set fdsetSend;
@@ -1346,26 +1343,27 @@ void CConnman::ThreadSocketHandler() {
             }
         }
 
-        int nSelect = select(have_fds ? hSocketMax + 1 : 0, &fdsetRecv,
-                             &fdsetSend, &fdsetError, &timeout);
+        const fd_set recvRequested = fdsetRecv;
+        int nSelect = 0;
+        if (have_fds) {
+            auto timeout = MillisToTimeval(socketPollInterval.count());
+            nSelect = select(hSocketMax + 1, &fdsetRecv, &fdsetSend, &fdsetError, &timeout);
+        }
         if (interruptNet) {
             return;
         }
 
         if (nSelect == SOCKET_ERROR) {
-            if (have_fds) {
-                int nErr = WSAGetLastError();
-                LogPrintf("socket select error %s\n", NetworkErrorString(nErr));
-                for (int i = 0; i <= hSocketMax; i++) {
-                    FD_SET(i, &fdsetRecv);
-                }
-            }
+            const int nErr = WSAGetLastError();
+            LogPrintf("socket select error %s\n", NetworkErrorString(nErr));
+            // Probe only sockets that requested reads in this iteration.
+            fdsetRecv = recvRequested;
             FD_ZERO(&fdsetSend);
             FD_ZERO(&fdsetError);
-            if (!interruptNet.sleep_for(
-                    std::chrono::milliseconds(timeout.tv_usec / 1000))) {
-                return;
-            }
+        }
+        if ((!have_fds || nSelect == SOCKET_ERROR) &&
+            !interruptNet.sleep_for(socketPollInterval)) {
+            return;
         }
 
         //
