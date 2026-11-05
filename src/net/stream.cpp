@@ -69,11 +69,12 @@ bool Stream::SetSocketForSelect(fd_set& setRecv, fd_set& setSend, fd_set& setErr
     }
 
     LOCK(cs_mSocket);
-    if(mSocket == INVALID_SOCKET || (!select_recv && !select_send))
+    if(mSocket == INVALID_SOCKET)
     {   
         return false;
     }
 
+    FD_SET(mSocket, &setError);
     socketMax = std::max(socketMax, mSocket);
 
     if(select_send)
@@ -83,7 +84,6 @@ bool Stream::SetSocketForSelect(fd_set& setRecv, fd_set& setSend, fd_set& setErr
     if(select_recv)
     {   
         FD_SET(mSocket, &setRecv);
-        FD_SET(mSocket, &setError);
     }
 
     return true;
