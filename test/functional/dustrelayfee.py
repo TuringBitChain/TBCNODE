@@ -8,7 +8,7 @@ when the dustrelayfee setting changes between releases or is configured manually
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_raises_rpc_error
-from test_framework.mininode import COIN
+from test_framework.mininode import TBCCOIN
 from decimal import Decimal
 
 class DustRelayFeeTest(BitcoinTestFramework):
@@ -23,19 +23,13 @@ class DustRelayFeeTest(BitcoinTestFramework):
     # - node does not accept tx output with dust
     # - node accepts tx output which meets dust threshold
     def test_node_with_fees(self, dustrelayfee_sats, mempoolminfee_sats):
-        dustrelayfee = Decimal(dustrelayfee_sats)/COIN
+        dustrelayfee = Decimal(dustrelayfee_sats)/TBCCOIN
         self.restart_node(0, extra_args=["-dustrelayfee="+str(dustrelayfee), "-mempoolminfeerate="+str(mempoolminfee_sats), "-acceptnonstdtxn=0"])
 
-        # Calculate dust threshold as defined in transaction.h, GetDustThreshold()
-        # dustrelayfee 1000 --> threshold 546
-        # dustrelayfee  250 --> threshold 135
-        dust_threshold_sats = 3 * int(182 * dustrelayfee_sats / 1000)
-        amount_is_not_dust = Decimal(dust_threshold_sats)/COIN
-        amount_is_dust = Decimal(dust_threshold_sats - 1)/COIN
-        if dustrelayfee_sats==1000:
-            assert(dust_threshold_sats==546)
-        elif dustrelayfee_sats==250:
-            assert(dust_threshold_sats==135)
+        # GetDustThreshold() currently returns a fixed 10 base units.
+        dust_threshold_sats = 10
+        amount_is_not_dust = Decimal(dust_threshold_sats)/TBCCOIN
+        amount_is_dust = Decimal(dust_threshold_sats - 1)/TBCCOIN
 
         # Test: Wallet will not allow sending dust amount
         addr = self.nodes[0].getnewaddress()
@@ -48,7 +42,7 @@ class DustRelayFeeTest(BitcoinTestFramework):
         # Get confirmed utxo to spend
         utxo_list = self.nodes[0].listunspent(1)
         utxo = utxo_list[0]
-        fee_amount = Decimal('0.00010000')
+        fee_amount = Decimal('0.010000')
 
         # Test: create tx with dust output that will be rejected
         inputs = []

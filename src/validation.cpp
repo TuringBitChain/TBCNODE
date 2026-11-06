@@ -1345,7 +1345,10 @@ static std::optional<bool> CheckInputsFromMempoolAndCache(
             assert(txFrom->vout.size() > txin.prevout.GetN());
             assert(txFrom->vout[txin.prevout.GetN()] == coin.GetTxOut());
         } else {
-            const Coin &coinFromDisk = pcoinsTip->AccessCoin(txin.prevout);
+            Coin coinFromDisk;
+            const bool coinFromDiskFound =
+                pcoinsTip->GetCoin(txin.prevout, coinFromDisk);
+            assert(coinFromDiskFound);
             assert(!coinFromDisk.IsSpent());
             assert(coinFromDisk.GetTxOut() == coin.GetTxOut());
         }
@@ -1568,7 +1571,8 @@ void CommitTxToMempool(
             setAncestors,
             changeSet,
             pnMempoolSize,
-            pnDynamicMemoryUsage);
+            pnDynamicMemoryUsage,
+            pTxInputData->GetTxSource() != TxSource::file);
     // Expire aged transactions. Under the no-trim policy no size-based eviction
     // occurs here; TxnValidation performs size-cap rejection before insertion.
     if (fLimitMempoolSize) {

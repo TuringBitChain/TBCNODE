@@ -375,6 +375,14 @@ CTxMemPool::CTxMemPool() : nTransactionsUpdated(0) {
 CTxMemPool::~CTxMemPool() {
 }
 
+void CTxMemPool::SetChangeObserver(ChangeObserver observer) {
+    std::unique_lock lock(smtx);
+    if (mChangeObserver && observer) {
+        throw std::logic_error("Mempool change observer already installed");
+    }
+    mChangeObserver = std::move(observer);
+}
+
 bool CTxMemPool::IsSpent(const COutPoint &outpoint) {
     std::shared_lock lock(smtx);
     return IsSpentNL(outpoint);
@@ -398,7 +406,8 @@ void CTxMemPool::AddUnchecked(
     setEntries &setAncestors,
     const CJournalChangeSetPtr& changeSet,
     size_t* pnMempoolSize,
-    size_t* pnDynamicMemoryUsage) {
+    size_t* pnDynamicMemoryUsage,
+    bool notifyAcceptance) {
 
     {
         std::unique_lock lock(smtx);
@@ -409,7 +418,8 @@ void CTxMemPool::AddUnchecked(
              setAncestors,
              changeSet,
              pnMempoolSize,
-             pnDynamicMemoryUsage);
+             pnDynamicMemoryUsage,
+             notifyAcceptance);
     }
     // Notify entry added without holding the mempool's lock
     NotifyEntryAdded(entry.GetSharedTx());
@@ -421,7 +431,8 @@ void CTxMemPool::AddUncheckedNL(
     setEntries &setAncestors,
     const CJournalChangeSetPtr& changeSet,
     size_t* pnMempoolSize,
-    size_t* pnDynamicMemoryUsage) {
+    size_t* pnDynamicMemoryUsage,
+    bool notifyAcceptance) {
 
     indexed_transaction_set::iterator newit = mapTx.insert(entry).first;
     mapLinks.insert(make_pair(newit, TxLinks()));
@@ -525,6 +536,9 @@ void CTxMemPool::AddUncheckedNL(
         
         checkJournalAcceptanceNL(affected, nonNullChangeSet.Get());
     }
+    if (notifyAcceptance && mChangeObserver) {
+        mChangeObserver(hash, std::nullopt);
+    }
 }
 
 void CTxMemPool::removeUncheckedNL(
@@ -571,6 +585,9 @@ void CTxMemPool::removeUncheckedNL(
     }
 
     nTransactionsUpdated++;
+    if (mChangeObserver) {
+        mChangeObserver(txn->GetId(), reason);
+    }
 }
 
 // Calculates descendants of entry that are not already in setDescendants, and
@@ -922,13 +939,23 @@ void CTxMemPool::RemoveForBlock(
 
 void CTxMemPool::clearNL() {
     mapLinks.clear();
-    mapTx.clear();
     mapNextTx.clear();
     vTxHashes.clear();
     totalTxSize = 0;
     cachedInnerUsage = 0;
     ++nTransactionsUpdated;
     mJournalBuilder.clearJournal();
+    if (mChangeObserver) {
+        // Rules transitions can clear the pool without individual removals.
+        // Erase before observing; readers cannot see this intermediate state.
+        while (!mapTx.empty()) {
+            const auto txid{mapTx.begin()->GetTx().GetId()};
+            mapTx.erase(mapTx.begin());
+            mChangeObserver(txid, MemPoolRemovalReason::REORG);
+        }
+    } else {
+        mapTx.clear();
+    }
 }
 
 void CTxMemPool::Clear() {
@@ -1829,7 +1856,8 @@ void CTxMemPool::AddUnchecked(
     const CTxMemPoolEntry &entry,
     const CJournalChangeSetPtr& changeSet,
     size_t* pnMempoolSize,
-    size_t* pnDynamicMemoryUsage) {
+    size_t* pnDynamicMemoryUsage,
+    bool notifyAcceptance) {
 
     {
         std::unique_lock lock(smtx);
@@ -1848,7 +1876,8 @@ void CTxMemPool::AddUnchecked(
              setAncestors,
              changeSet,
              pnMempoolSize,
-             pnDynamicMemoryUsage);
+             pnDynamicMemoryUsage,
+             notifyAcceptance);
     }
     // Notify entry added without holding the mempool's lock
     NotifyEntryAdded(entry.GetSharedTx());

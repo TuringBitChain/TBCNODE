@@ -98,6 +98,8 @@ add_test_to_suite(bitcoin test_bitcoin
 	m_candidates_tests.cpp
 	main_tests.cpp
 	mempool_tests.cpp
+	mempool_notifier_state_tests.cpp
+	zmq_mempool_rpc_tests.cpp
 	merkle_tests.cpp
 	miner_tests.cpp
     net_association_tests.cpp
@@ -190,6 +192,12 @@ check_cxx_source_compiles("
 if(BOOST_TEST_DYN_LINK)
 	target_compile_definitions(test_bitcoin PRIVATE BOOST_TEST_DYN_LINK)
 endif(BOOST_TEST_DYN_LINK)
+
+if(BUILD_BITCOIN_ZMQ)
+	find_package(ZeroMQ REQUIRED)
+	target_sources(test_bitcoin PRIVATE zmq_mempool_publisher_tests.cpp)
+	target_include_directories(test_bitcoin PRIVATE ${ZMQ_INCLUDE_DIR})
+endif()
 
 if(BUILD_BITCOIN_WALLET)
 	target_sources(test_bitcoin

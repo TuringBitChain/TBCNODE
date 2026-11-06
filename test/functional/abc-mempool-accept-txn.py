@@ -56,6 +56,11 @@ class FullBlockTest(ComparisonTestFramework):
         get_spendable_output = self.chain.get_spendable_output
         accepted = self.accepted
 
+        # Raw transaction values stay in consensus base units. Keep a
+        # non-dust output and pay the node's minimum absolute relay fee.
+        p2sh_output_value = 10
+        minimum_relay_fee = 1000
+
         # shorthand for variables
         node = self.nodes[0]
         self.chain.set_genesis_hash(int(node.getbestblockhash(), 16))
@@ -80,7 +85,7 @@ class FullBlockTest(ComparisonTestFramework):
             spent_p2sh_tx = CTransaction()
             spent_p2sh_tx.vin.append(
                 CTxIn(COutPoint(p2sh_tx_to_spend.sha256, 0), b''))
-            spent_p2sh_tx.vout.append(CTxOut(1, output_script))
+            spent_p2sh_tx.vout.append(CTxOut(p2sh_output_value, output_script))
             # Sign the transaction using the redeem script
             sighash = SignatureHashForkId(
                 redeem_script, spent_p2sh_tx, 0, SIGHASH_ALL | SIGHASH_FORKID, p2sh_tx_to_spend.vout[0].nValue)
@@ -93,7 +98,8 @@ class FullBlockTest(ComparisonTestFramework):
         # P2SH tests
         # Create a p2sh transaction
         p2sh_tx = create_and_sign_transaction(
-            out[0].tx, out[0].n, 1, p2sh_script, self.coinbase_key)
+            out[0].tx, out[0].n, p2sh_output_value + minimum_relay_fee,
+            p2sh_script, self.coinbase_key)
 
         # Add the transaction to the block
         block(1)

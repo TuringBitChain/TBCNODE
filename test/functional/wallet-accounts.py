@@ -30,32 +30,35 @@ class WalletAccountsTest(BitcoinTestFramework):
         # Check that there's no UTXO on any of the nodes
         assert_equal(len(node.listunspent()), 0)
 
-        # Note each time we call generate, all generated coins go into
-        # the same address, so we call twice to get two addresses w/50 each
+        # Each generate call uses one address. With one-block coinbase maturity,
+        # the two batches have mature balances of 5,000 and 500,000 TBC.
         node.generate(1)
         node.generate(101)
-        assert_equal(node.getbalance(), 100)
+        initial_balance = node.getbalance()
+        assert_equal(initial_balance, 505000)
 
         # there should be 2 address groups
-        # each with 1 address with a balance of 50 Bitcoins
+        # each with one generating address
         address_groups = node.listaddressgroupings()
         assert_equal(len(address_groups), 2)
         # the addresses aren't linked now, but will be after we send to the
         # common address
         linked_addresses = set()
+        group_balances = []
         for address_group in address_groups:
             assert_equal(len(address_group), 1)
             assert_equal(len(address_group[0]), 2)
-            assert_equal(address_group[0][1], 50)
+            group_balances.append(address_group[0][1])
             linked_addresses.add(address_group[0][0])
+        assert_equal(sorted(group_balances), [5000, 500000])
 
-        # send 50 from each address to a third address not in this wallet
+        # Spend all mature outputs to link the two generating addresses.
         # There's some fee that will come back to us when the miner reward
         # matures.
         common_address = "msf4WtN1YQKXvNtvdFYt9JBnUD2FB41kjr"
         txid = node.sendmany(
             fromaccount="",
-            amounts={common_address: 100},
+            amounts={common_address: initial_balance},
             subtractfeefrom=[common_address],
             minconf=1,
         )
@@ -106,13 +109,13 @@ class WalletAccountsTest(BitcoinTestFramework):
 
         node.generate(101)
 
-        expected_account_balances = {"": 5200}
+        expected_account_balances = {"": 380000}
         for account in accounts:
             expected_account_balances[account] = 0
 
         assert_equal(node.listaccounts(), expected_account_balances)
 
-        assert_equal(node.getbalance(""), 5200)
+        assert_equal(node.getbalance(""), 380000)
 
         for account in accounts:
             address = node.getaccountaddress("")

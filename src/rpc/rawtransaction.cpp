@@ -1329,6 +1329,7 @@ static UniValue sendrawtransactions(const Config &config,
             "and network.\n"
             "\nTo maximise performance, transaction chains should be provided in inheritance order\n"
             "(parent-child).\n"
+            "Repeated txids in a request are validated once, using the first occurrence's options.\n"
             "\nAlso see sendrawtransaction, createrawtransaction and signrawtransaction calls.\n"
             "\nArguments:\n"
             "1. \"inputs\"      (array, required) "
@@ -1348,7 +1349,7 @@ static UniValue sendrawtransactions(const Config &config,
             "\nResult:\n"
             "{\n"
             "  \"known\" : [                  (json array) "
-            "Already known transactions detected during processing (if there are any)\n"
+            "Transactions already in the mempool or non-final mempool (if there are any)\n"
             "      \"txid\",           (string) "
             "The transaction id\n"
             "      ,...\n"
@@ -1401,7 +1402,9 @@ static UniValue sendrawtransactions(const Config &config,
     vTxInputData.reserve(inputs.size());
     // A vector to store transactions that need to be prioritised.
     std::vector<TxId> vTxToPrioritise {};
-    // A vector to sotre already known transactions.
+    // Validate each transaction once per request, using its first occurrence's options.
+    std::unordered_set<TxId, std::hash<TxId>> submittedTxIds {};
+    // A vector to store transactions already in the mempools.
     std::vector<TxId> vKnownTxns {};
 
     /**
@@ -1458,7 +1461,11 @@ static UniValue sendrawtransactions(const Config &config,
             vKnownTxns.emplace_back(txid);
             continue;
         }
-        // Create an object with transaction's input data.
+        if (!submittedTxIds.insert(txid).second) {
+            continue;
+        }
+        // A tracker entry may only represent queued or orphaned P2P work.
+        // Like sendrawtransaction, validate synchronously even if insertion fails.
         TxInputDataSPtr pTxInputData =
             std::make_shared<CTxInputData>(
                 g_connman->GetTxIdTracker(),    // a pointer to the TxIdTracker
@@ -1468,17 +1475,10 @@ static UniValue sendrawtransactions(const Config &config,
                 GetTime(),                      // nAcceptTime
                 false,                          // fLimitFree
                 nMaxRawTxFee);                 // nAbsurdFee
-        // Check if transaction is already known
-        // - received through p2p interface or present in the mempools
-        if (!pTxInputData->IsTxIdStored() || fTxInMempools) {
-            vKnownTxns.emplace_back(txid);
-        // Move it to the vector of transactions awaiting to be processed
-        } else {
-            vTxInputData.emplace_back(std::move(pTxInputData));
-            // Check if txn needs to be prioritised
-            if (fTxToPrioritise) {
-                vTxToPrioritise.emplace_back(txid);
-            }
+        vTxInputData.emplace_back(std::move(pTxInputData));
+        // Check if txn needs to be prioritised
+        if (fTxToPrioritise) {
+            vTxToPrioritise.emplace_back(txid);
         }
     }
 
@@ -1538,9 +1538,7 @@ static UniValue sendrawtransactions(const Config &config,
      * Construct and return a result set, as a json object with rejected txids, which contains:
      *
      * 1. txid of a transaction which was detected as already known:
-     *   - exists in the mempool
-     *   - stored in ptv queues
-     *   - stored as an orphan txn received through p2p interface
+     *   - exists in the mempool or non-final mempool
      * 2. txid of an invalid transaction, including validation state information:
      *   - reject code
      *   - reject reason

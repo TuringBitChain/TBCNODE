@@ -466,7 +466,8 @@ BOOST_FIXTURE_TEST_CASE(rescan, TestChain100Setup) {
         LOCK(wallet.cs_wallet);
         wallet.AddKeyPubKey(coinbaseKey, coinbaseKey.GetPubKey());
         BOOST_CHECK_EQUAL(oldTip, wallet.ScanForWalletTransactions(oldTip));
-        BOOST_CHECK_EQUAL(wallet.GetImmatureBalance(), 100 * COIN);
+        BOOST_CHECK_EQUAL(wallet.GetBalance(), 50 * COIN);
+        BOOST_CHECK_EQUAL(wallet.GetImmatureBalance(), 50 * COIN);
     }
 
     // Prune the older block file.
@@ -479,6 +480,7 @@ BOOST_FIXTURE_TEST_CASE(rescan, TestChain100Setup) {
         LOCK(wallet.cs_wallet);
         wallet.AddKeyPubKey(coinbaseKey, coinbaseKey.GetPubKey());
         BOOST_CHECK_EQUAL(newTip, wallet.ScanForWalletTransactions(oldTip));
+        BOOST_CHECK_EQUAL(wallet.GetBalance(), Amount(0));
         BOOST_CHECK_EQUAL(wallet.GetImmatureBalance(), 50 * COIN);
     }
 
@@ -539,6 +541,8 @@ BOOST_FIXTURE_TEST_CASE(rescan, TestChain100Setup) {
 BOOST_FIXTURE_TEST_CASE(importwallet_rescan, TestChain100Setup) {
     LOCK(cs_main);
 
+    const size_t initialCoinbaseCount = coinbaseTxns.size();
+
     // Create two blocks with same timestamp to verify that importwallet rescan
     // will pick up both blocks, not just the first.
     const int64_t BLOCK_TIME = chainActive.Tip()->GetBlockTimeMax() + 5;
@@ -588,10 +592,10 @@ BOOST_FIXTURE_TEST_CASE(importwallet_rescan, TestChain100Setup) {
         ::importwallet(GlobalConfig::GetConfig(), request);
 
         BOOST_CHECK_EQUAL(wallet.mapWallet.size(), 3);
-        BOOST_CHECK_EQUAL(coinbaseTxns.size(), 103);
+        BOOST_CHECK_EQUAL(coinbaseTxns.size(), initialCoinbaseCount + 3);
         for (size_t i = 0; i < coinbaseTxns.size(); ++i) {
             bool found = wallet.GetWalletTx(coinbaseTxns[i].GetHash());
-            bool expected = i >= 100;
+            bool expected = i >= initialCoinbaseCount;
             BOOST_CHECK_EQUAL(found, expected);
         }
     }

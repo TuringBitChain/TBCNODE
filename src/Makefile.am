@@ -221,6 +221,7 @@ BITCOIN_CORE_H = \
   wallet/wallet.h \
   wallet/walletdb.h \
   warnings.h \
+  zmq/mempool_notifier_state.h \
   zmq/zmqabstractnotifier.h \
   zmq/zmqconfig.h\
   zmq/zmqnotificationinterface.h \
@@ -286,6 +287,7 @@ libbitcoin_server_a_SOURCES = \
   txdb.cpp \
   txmempool.cpp \
   tx_mempool_info.cpp \
+  zmq/mempool_notifier_state.cpp \
   txn_double_spend_detector.cpp \
   txn_propagator.cpp \
   txn_validation_data.cpp \

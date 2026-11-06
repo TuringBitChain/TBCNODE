@@ -41,7 +41,7 @@ def split_utxos(fee, node, count, utxos):
         addrs.append(node.getnewaddress())
 
     # Calculate fee we need (based on assuming each outpoint consumes about 70 bytes)
-    fee = satoshi_round(Decimal(max(fee, 70 * split_into * 0.00000001)))
+    fee = satoshi_round(Decimal(max(fee, 70 * split_into * 0.000001)))
 
     while count > 0:
         utxo = utxos.pop()

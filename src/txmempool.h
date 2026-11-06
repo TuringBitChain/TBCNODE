@@ -23,6 +23,8 @@
 
 #include <boost/signals2/signal.hpp>
 
+#include <functional>
+#include <optional>
 #include <map>
 #include <memory>
 #include <set>
@@ -353,6 +355,8 @@ private:
     //! themselves)
     uint64_t cachedInnerUsage;
 
+    std::function<void(const uint256&, std::optional<MemPoolRemovalReason>)> mChangeObserver;
+
     // Our journal builder
     mutable mining::CJournalBuilder mJournalBuilder;
 
@@ -468,6 +472,12 @@ public:
 
     void SetSanityCheck(double dFrequency = 1.0);
 
+    // Called after each ordinary-pool mutation, while holding the write lock.
+    // The observer must not throw, acquire the pool lock, or perform I/O.
+    // Clearing the observer waits for any callback already in progress.
+    using ChangeObserver = std::function<void(const uint256&, std::optional<MemPoolRemovalReason>)>;
+    void SetChangeObserver(ChangeObserver observer);
+
     void SetBlockMinTxFee(CFeeRate feerate) { blockMinTxfee = feerate; };
     CFeeRate GetBlockMinTxFee() const { return blockMinTxfee; };
 
@@ -483,7 +493,8 @@ public:
             const CTxMemPoolEntry &entry,
             const mining::CJournalChangeSetPtr& changeSet,
             size_t* pnMempoolSize = nullptr,
-            size_t* pnDynamicMemoryUsage = nullptr);
+            size_t* pnDynamicMemoryUsage = nullptr,
+            bool notifyAcceptance = true);
 
     void AddUnchecked(
             const uint256 &hash,
@@ -491,7 +502,8 @@ public:
             setEntries &setAncestors,
             const mining::CJournalChangeSetPtr& changeSet,
             size_t* pnMempoolSize = nullptr,
-            size_t* pnDynamicMemoryUsage = nullptr);
+            size_t* pnDynamicMemoryUsage = nullptr,
+            bool notifyAcceptance = true);
 
     void RemoveRecursive(
         const CTransaction &tx,
@@ -710,7 +722,8 @@ private:
             setEntries &setAncestors,
             const mining::CJournalChangeSetPtr& changeSet,
             size_t* pnMempoolSize = nullptr,
-            size_t* pnDynamicMemoryUsage = nullptr);
+            size_t* pnDynamicMemoryUsage = nullptr,
+            bool notifyAcceptance = true);
 
     /**
      * Add/remove hash as a child of each of its mempool parents.

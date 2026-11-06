@@ -91,6 +91,14 @@ std::unique_ptr<PeerLogicValidation> peerLogic;
 static CZMQNotificationInterface *pzmqNotificationInterface = nullptr;
 #endif
 
+const MempoolNotifierState* GetMempoolNotifierState()
+{
+#if ENABLE_ZMQ
+    if (pzmqNotificationInterface) return &pzmqNotificationInterface->GetMempoolState();
+#endif
+    return nullptr;
+}
+
 #ifdef WIN32
 // Win32 LevelDB doesn't use filedescriptors, and the ones used for accessing
 // block files don't count towards the fd_set size limit anyway.
@@ -699,6 +707,8 @@ std::string HelpMessage(HelpMessageMode mode) {
     strUsage += HelpMessageGroup(_("ZeroMQ notification options:"));
     strUsage += HelpMessageOpt("-zmqpubhashblock=<address>",
                                _("Enable publish hash block in <address>"));
+    strUsage += HelpMessageOpt("-zmqpubtxinmempool=<address>",
+                               _("Enable mempool entry/exit notifications at <address> (tcp:// or ipc://); cannot share an address with -zmqpubrawblock"));
     strUsage +=
         HelpMessageOpt("-zmqpubhashtx=<address>",
                        _("Enable publish hash transaction in <address>"));
@@ -2540,7 +2550,23 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     }
 
 #if ENABLE_ZMQ
-    pzmqNotificationInterface = CZMQNotificationInterface::Create();
+    try
+    {
+        pzmqNotificationInterface = CZMQNotificationInterface::Create();
+        if (gArgs.IsArgSet("-zmqpubtxinmempool"))
+        {
+            if (!pzmqNotificationInterface)
+            {
+                return InitError("Unable to initialize -zmqpubtxinmempool; see debug log");
+            }
+            pzmqNotificationInterface->GetMempoolState().Start(GetDataDir() / "txinmempool.epoch");
+            pzmqNotificationInterface->StartMempoolNotifications(mempool);
+        }
+    }
+    catch (const std::exception& e)
+    {
+        return InitError(e.what());
+    }
 
     if (pzmqNotificationInterface) {
         RegisterValidationInterface(pzmqNotificationInterface);
@@ -2822,7 +2848,7 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
         }
     }
 
-    threadGroup.create_thread(
+    [[maybe_unused]] auto* importThread = threadGroup.create_thread(
         [&config, vImportFiles, shutdownToken]
         {
             TraceThread(
@@ -2895,6 +2921,15 @@ bool AppInitMain(Config &config, boost::thread_group &threadGroup,
     uiInterface.InitMessage(_("Done loading"));
 
 #ifdef ENABLE_WALLET
+#if ENABLE_ZMQ
+    if (!vpwallets.empty() && gArgs.IsArgSet("-zmqpubtxinmempool") &&
+        gArgs.GetArg("-persistmempool", DEFAULT_PERSIST_MEMPOOL)) {
+        // File restoration must win over startup wallet re-submission, or the
+        // same persisted entry can nondeterministically receive an ACCEPTED
+        // position with TxSource::wallet before TxSource::file encounters it.
+        importThread->join();
+    }
+#endif
     for (CWalletRef pwallet : vpwallets) {
         pwallet->postInitProcess(scheduler);
     }

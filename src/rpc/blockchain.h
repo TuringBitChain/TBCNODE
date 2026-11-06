@@ -14,6 +14,12 @@
 class CBlockIndex;
 class Config;
 class JSONRPCRequest;
+class MempoolNotifierState;
+
+// RPC implementations with an explicit read-only notification state. A null
+// state represents a node without the notification feature enabled.
+UniValue GetMempoolEntry(const JSONRPCRequest& request, const MempoolNotifierState* state);
+UniValue GetZMQTipSnapshot(const JSONRPCRequest& request, const MempoolNotifierState* state);
 
 UniValue getblockchaininfo(const Config &config, const JSONRPCRequest &request);
 void getblock(const Config &config, const JSONRPCRequest &request, HTTPRequest &req, bool processedInBatch);

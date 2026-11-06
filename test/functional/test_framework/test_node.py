@@ -14,7 +14,7 @@ import subprocess
 import time
 import atexit
 
-from .mininode import COIN, ToHex
+from .mininode import TBCCOIN, ToHex
 from .util import (
     assert_equal,
     get_rpc_proxy,
@@ -216,7 +216,9 @@ class TestNode():
         return self.relay_fee_cache
 
     def calculate_fee(self, tx):
-        return int(self.relay_fee() * len(ToHex(tx)) * COIN)
+        tx_size = max(1000, len(ToHex(tx)) // 2)
+        fee = self.relay_fee() * tx_size * TBCCOIN / 1000
+        return int(fee.to_integral_value(rounding=decimal.ROUND_UP))
 
 
 class TestNodeCLI():

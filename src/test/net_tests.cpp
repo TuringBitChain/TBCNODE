@@ -209,7 +209,7 @@ BOOST_AUTO_TEST_CASE(test_userAgentLength) {
                       "very very very very very very very very very very very "
                       "very very very very very very very very very very very "
                       "very very very very very very very very very very very "
-                      "very very very very very very very v)/") != std::string::npos);
+                      "very very very very very very very very)/") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

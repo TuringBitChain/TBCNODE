@@ -230,7 +230,7 @@ def str_to_b64str(string):
 
 
 def satoshi_round(amount):
-    return Decimal(amount).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+    return Decimal(amount).quantize(Decimal('0.000001'), rounding=ROUND_DOWN)
 
 
 def wait_until(predicate, *, attempts=float('inf'), timeout=float('inf'), lock=None, check_interval=0.05, label="wait_until"):
@@ -526,7 +526,7 @@ def gather_inputs(from_node, amount_needed, confirmations_required=1):
     utxo = from_node.listunspent(confirmations_required)
     random.shuffle(utxo)
     inputs = []
-    total_in = Decimal("0.00000000")
+    total_in = Decimal("0.000000")
     while total_in < amount_needed and len(utxo) > 0:
         t = utxo.pop()
         total_in += t["amount"]
@@ -550,7 +550,7 @@ def make_change(from_node, amount_in, amount_out, fee):
         change_address = from_node.getnewaddress()
         # Split change in two, being careful of rounding:
         outputs[change_address] = Decimal(
-            change / 2).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+            change / 2).quantize(Decimal('0.000001'), rounding=ROUND_DOWN)
         change = amount_in - amount - outputs[change_address]
     if change > 0:
         outputs[from_node.getnewaddress()] = change

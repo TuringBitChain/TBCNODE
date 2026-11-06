@@ -389,7 +389,7 @@ bool IsSchnorrSignature(const valtype &vchSig) {
 }
 
 bool CheckECDSASignatureEncoding(const std::vector<uint8_t> &vchSig, uint32_t flags, ScriptError *serror) {
-    if (vchSig.empty() || IsSchnorrSignature(vchSig)) {
+    if (IsSchnorrSignature(vchSig)) {
         return set_error(serror, SCRIPT_ERR_ECDSA_SIG_SIZE);
     }
 
@@ -1902,82 +1902,61 @@ std::optional<bool> EvalScript(
                                 CleanupScriptCode(scriptCode, vchSig.GetElement(), flags);
                             }
 
-                            // For empty signature, its pubkey can be xonly or legacy
-                            // For non-empty signature, its pubkey must be legacy
-                            // Check empty signature first
-                            bool hasEmptySignature = false;
-                            bool areAllSignaturesEmpty = true;
+                            bool hasNonEmptySignature = false;
                             for (uint64_t k = 0; k < nSigsCount; k++) {
                                 LimitedVector &vchSig = stack.stacktop(-(isig + k));
-                                if (vchSig.empty()) {
-                                    hasEmptySignature = true;
-                                } else {
-                                    areAllSignaturesEmpty = false;
+                                if (!vchSig.empty()) {
+                                    hasNonEmptySignature = true;
                                 }
                             }
 
-                            if (hasEmptySignature) {
-                                // check pubkey encoding
-                                if (areAllSignaturesEmpty) {
-                                    // all signatures are empty, check pubkey encoding
-                                    for (uint64_t k = 0; k < nKeysCount; k++) {
-                                        LimitedVector &vchPubKey = stack.stacktop(-ikey - k);
-                                        if (!CheckPubKeyEncoding(SignatureMethod::NONE, vchPubKey.GetElement(), flags, serror)) {
-                                            // serror is set
-                                            return false;
-                                        }
-                                    }
-                                    fSuccess = false;
-                                } else {
-                                    if (flags & SCRIPT_VERIFY_NULLFAIL) {
-                                        return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
-                                    } else {
-                                        fSuccess = false;
-                                    }
-                                }
-                            } else {
-                                while (fSuccess && nSigsCount > 0) {
-                                    if (token.IsCanceled())
-                                    {
-                                        return {};
-                                    }
-        
-                                    LimitedVector &vchSig = stack.stacktop(-isig);
-                                    LimitedVector &vchPubKey = stack.stacktop(-ikey);
-        
-                                    // Note how this makes the exact order of
-                                    // pubkey/signature evaluation distinguishable by
-                                    // CHECKMULTISIG NOT if the STRICTENC flag is set.
-                                    // See the script_(in)valid tests for details.
-        
-                                    if (!CheckTransactionECDSASignatureEncoding(vchSig.GetElement(), flags, serror) ||
-                                        !CheckPubKeyEncoding(SignatureMethod::ECDSA, vchPubKey.GetElement(), flags, serror)) {
-                                        // serror is set
-                                        return false;
-                                    }
-        
-                                    // Check signature
-                                    bool fOk = checker.CheckSig(vchSig.GetElement(), vchPubKey.GetElement(),
-                                                                scriptCode, flags & SCRIPT_ENABLE_SIGHASH_FORKID);
-        
-                                    if (fOk) {
-                                        isig++;
-                                        nSigsCount--;
-                                    }
-                                    ikey++;
-                                    nKeysCount--;
-        
-                                    // If there are more signatures left than keys left,
-                                    // then too many signatures have failed. Exit early,
-                                    // without checking any further signatures.
-                                    if (nSigsCount > nKeysCount) {
-                                        fSuccess = false;
-                                    }
+                            while (fSuccess && nSigsCount > 0) {
+                                if (token.IsCanceled())
+                                {
+                                    return {};
                                 }
 
-                                if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL)) {
-                                    return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
+                                LimitedVector &vchSig = stack.stacktop(-isig);
+                                LimitedVector &vchPubKey = stack.stacktop(-ikey);
+
+                                // Note how this makes the exact order of
+                                // pubkey/signature evaluation distinguishable by
+                                // CHECKMULTISIG NOT if the STRICTENC flag is set.
+                                // See the script_(in)valid tests for details.
+
+                                const bool isEmptySignature = vchSig.empty();
+                                const SignatureMethod signatureMethod = isEmptySignature
+                                    ? SignatureMethod::NONE
+                                    : SignatureMethod::ECDSA;
+                                if ((!isEmptySignature &&
+                                     !CheckTransactionECDSASignatureEncoding(vchSig.GetElement(), flags, serror)) ||
+                                    !CheckPubKeyEncoding(signatureMethod, vchPubKey.GetElement(), flags, serror)) {
+                                    // serror is set
+                                    return false;
                                 }
+
+                                // Check signature
+                                bool fOk = checker.CheckSig(vchSig.GetElement(), vchPubKey.GetElement(),
+                                                            scriptCode, flags & SCRIPT_ENABLE_SIGHASH_FORKID);
+
+                                if (fOk) {
+                                    isig++;
+                                    nSigsCount--;
+                                }
+                                ikey++;
+                                nKeysCount--;
+
+                                // If there are more signatures left than keys left,
+                                // then too many signatures have failed. Exit early,
+                                // without checking any further signatures.
+                                if (nSigsCount > nKeysCount) {
+                                    fSuccess = false;
+                                }
+                            }
+
+                            if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) &&
+                                hasNonEmptySignature) {
+                                return set_error(serror, SCRIPT_ERR_SIG_NULLFAIL);
                             }
                         }
 

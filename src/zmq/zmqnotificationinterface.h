@@ -7,18 +7,37 @@
 
 #include "validationinterface.h"
 #include "txmempool.h"
+#include "mempool_notifier_state.h"
 
 #include <list>
 #include <map>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 
 class CBlockIndex;
 class CZMQAbstractNotifier;
+class CZMQPublishTxInMempoolNotifier;
 
 class CZMQNotificationInterface final : public CValidationInterface {
 public:
     virtual ~CZMQNotificationInterface();
 
     static CZMQNotificationInterface *Create();
+
+    // Startup enables this state after binding the configured publishers.
+    MempoolNotifierState& GetMempoolState() { return mMempoolState; }
+
+    // Start after enabling the state. The pool must outlive this interface;
+    // detach before destroying the pool.
+    void StartMempoolNotifications(CTxMemPool& pool);
+    void StopMempoolNotifications();
+
+    // The event producer must allocate/enqueue positions under the mempool
+    // lock, then call this from an ordered publisher without that lock.
+    bool PublishMempoolTransaction(const uint256& txid,
+                                  MempoolNotifierState::Position position,
+                                  std::optional<MemPoolRemovalReason> reason = std::nullopt);
 
 protected:
     bool Initialize();
@@ -49,6 +68,26 @@ private:
 
     void *pcontext;
     std::list<CZMQAbstractNotifier *> notifiers;
+    MempoolNotifierState mMempoolState;
+    CZMQPublishTxInMempoolNotifier* mMempoolNotifier{nullptr};
+
+    struct MempoolEvent {
+        uint256 txid;
+        MempoolNotifierState::Position position;
+        std::optional<MemPoolRemovalReason> reason;
+    };
+    void QueueMempoolEvent(const uint256& txid,
+                          std::optional<MemPoolRemovalReason> reason) noexcept;
+    void RunMempoolPublisher() noexcept;
+    void FailMempoolNotifications(const char* message) noexcept;
+
+    CTxMemPool* mObservedPool{nullptr};
+    std::mutex mQueueMutex;
+    std::condition_variable mQueueReady;
+    std::deque<MempoolEvent> mQueue;
+    std::thread mPublisherThread;
+    bool mStopping{false};
+    bool mFailed{false};
 };
 
 #endif // BITCOIN_ZMQ_ZMQNOTIFICATIONINTERFACE_H

@@ -12,6 +12,11 @@
 class Config;
 class CScheduler;
 class CWallet;
+class MempoolNotifierState;
+
+// Read-only notification state, or nullptr when ZMQ is unavailable/unconfigured.
+// Its lifetime covers RPC service; shutdown stops RPC before destroying it.
+const MempoolNotifierState* GetMempoolNotifierState();
 
 namespace boost {
 class thread_group;

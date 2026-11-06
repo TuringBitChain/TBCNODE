@@ -109,18 +109,7 @@ contrib/devtools/split-debug.sh
 .clangd
 .cache
 
-AGENT.md
+AGENTS.md
 .venv*
-devfiles
 
-# Local CMake/Ninja build artifacts
-/build-*/
-/cmake-build-*/
-/CMakeCache.txt
-/CMakeFiles/
-/build.ninja
-/.ninja_deps
-/.ninja_log
-/cmake_install.cmake
-/CTestTestfile.cmake
-/compile_commands.json
+devfiles
