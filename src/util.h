@@ -23,7 +23,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <string>
@@ -66,10 +68,16 @@ template <typename... Args> bool error(const char *fmt, const Args &... args) {
 }
 
 void PrintExceptionContinue(const std::exception *pex, const char *pszThread);
+// All supported file-position APIs use signed 64-bit offsets.
+constexpr uint64_t MAX_DISK_FILE_OFFSET =
+    static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+bool SeekFileAbsolute64(FILE *file, uint64_t offset);
+// On failure, offset is left unchanged.
+bool TellFile64(FILE *file, uint64_t &offset);
 void FileCommit(FILE *file);
 bool TruncateFile(FILE *file, uint64_t length);
 int RaiseFileDescriptorLimit(int nMinFD);
-void AllocateFileRange(FILE *file, unsigned int offset, uint64_t length);
+void AllocateFileRange(FILE *file, uint64_t offset, uint64_t length);
 bool RenameOver(fs::path src, fs::path dest);
 bool TryCreateDirectories(const fs::path &p);
 fs::path GetDefaultDataDir();

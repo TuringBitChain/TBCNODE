@@ -12,6 +12,17 @@
 /** Access to info about block files */
 std::unique_ptr<CBlockFileInfoStore> pBlockFileInfoStore = std::make_unique<CBlockFileInfoStore>();
 
+namespace {
+bool AllocationEnd(uint64_t size, uint64_t chunkSize, uint64_t& end)
+{
+    if (size > MAX_DISK_FILE_OFFSET) return false;
+    const uint64_t chunks = size / chunkSize + (size % chunkSize != 0);
+    if (chunks > MAX_DISK_FILE_OFFSET / chunkSize) return false;
+    end = chunks * chunkSize;
+    return true;
+}
+}
+
 void CBlockFileInfoStore::FindNextFileWithEnoughEmptySpace(const Config &config,
     uint64_t nAddSize, unsigned int& nFile)
 {
@@ -75,6 +86,9 @@ bool CBlockFileInfoStore::FindBlockPos(const Config &config, CValidationState &s
     uint64_t nTime, bool& fCheckForPruning, bool fKnown) {
     LOCK(cs_LastBlockFile);
 
+    if (nAddSize > MAX_DISK_FILE_OFFSET) {
+        return state.Error("block file position out of range");
+    }
     unsigned int nFile = fKnown ? pos.nFile : nLastBlockFile;
     if (vinfoBlockFile.size() <= nFile) {
         vinfoBlockFile.resize(nFile + 1);
@@ -82,8 +96,22 @@ bool CBlockFileInfoStore::FindBlockPos(const Config &config, CValidationState &s
 
     if (!fKnown) {
         FindNextFileWithEnoughEmptySpace(config, nAddSize, nFile);
+    }
+    const uint64_t oldSize = vinfoBlockFile[nFile].nSize;
+    const uint64_t start = fKnown ? pos.nPos : oldSize;
+    if (oldSize > MAX_DISK_FILE_OFFSET || start > MAX_DISK_FILE_OFFSET ||
+        nAddSize > MAX_DISK_FILE_OFFSET - start) {
+        return state.Error("block file position out of range");
+    }
+    const uint64_t newSize = std::max(oldSize, start + nAddSize);
+    uint64_t oldEnd{0}, newEnd{0};
+    if (!fKnown && (!AllocationEnd(start, BLOCKFILE_CHUNK_SIZE, oldEnd) ||
+                   !AllocationEnd(newSize, BLOCKFILE_CHUNK_SIZE, newEnd))) {
+        return state.Error("block file allocation out of range");
+    }
+    if (!fKnown) {
         pos.nFile = nFile;
-        pos.nPos = vinfoBlockFile[nFile].nSize;
+        pos.nPos = start;
     }
 
     if ((int)nFile != nLastBlockFile) {
@@ -105,11 +133,8 @@ bool CBlockFileInfoStore::FindBlockPos(const Config &config, CValidationState &s
     }
 
     if (!fKnown) {
-        uint64_t nOldChunks =
-            (pos.nPos + BLOCKFILE_CHUNK_SIZE - 1) / BLOCKFILE_CHUNK_SIZE;
-        uint64_t nNewChunks =
-            (vinfoBlockFile[nFile].nSize + BLOCKFILE_CHUNK_SIZE - 1) /
-            BLOCKFILE_CHUNK_SIZE;
+        uint64_t nOldChunks = oldEnd / BLOCKFILE_CHUNK_SIZE;
+        uint64_t nNewChunks = newEnd / BLOCKFILE_CHUNK_SIZE;
         if (nNewChunks > nOldChunks) {
             if (fPruneMode) {
                 fCheckForPruning = true;
@@ -138,19 +163,25 @@ bool CBlockFileInfoStore::FindBlockPos(const Config &config, CValidationState &s
 
 bool CBlockFileInfoStore::FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos,
     uint64_t nAddSize, bool& fCheckForPruning) {
-    pos.nFile = nFile;
-
     LOCK(cs_LastBlockFile);
 
-    uint64_t nNewSize;
-    pos.nPos = vinfoBlockFile[nFile].nUndoSize;
-    nNewSize = vinfoBlockFile[nFile].nUndoSize += nAddSize;
+    const uint64_t oldSize = vinfoBlockFile[nFile].nUndoSize;
+    if (oldSize > MAX_DISK_FILE_OFFSET || nAddSize > MAX_DISK_FILE_OFFSET - oldSize) {
+        return state.Error("undo file position out of range");
+    }
+    const uint64_t nNewSize = oldSize + nAddSize;
+    uint64_t oldEnd, newEnd;
+    if (!AllocationEnd(oldSize, UNDOFILE_CHUNK_SIZE, oldEnd) ||
+        !AllocationEnd(nNewSize, UNDOFILE_CHUNK_SIZE, newEnd)) {
+        return state.Error("undo file allocation out of range");
+    }
+    pos.nFile = nFile;
+    pos.nPos = oldSize;
+    vinfoBlockFile[nFile].nUndoSize = nNewSize;
     setDirtyFileInfo.insert(nFile);
 
-    uint64_t nOldChunks =
-        (pos.nPos + UNDOFILE_CHUNK_SIZE - 1) / UNDOFILE_CHUNK_SIZE;
-    uint64_t nNewChunks =
-        (nNewSize + UNDOFILE_CHUNK_SIZE - 1) / UNDOFILE_CHUNK_SIZE;
+    uint64_t nOldChunks = oldEnd / UNDOFILE_CHUNK_SIZE;
+    uint64_t nNewChunks = newEnd / UNDOFILE_CHUNK_SIZE;
     if (nNewChunks > nOldChunks) {
         if (fPruneMode) {
             fCheckForPruning = true;
