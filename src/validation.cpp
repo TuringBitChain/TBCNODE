@@ -2860,12 +2860,12 @@ static bool WriteBlockToDisk(
     WriteIndexHeader(fileout, messageStart, GetSerializeSize(fileout, block));    
     
     // Write block
-    long fileOutPos = ftell(fileout.Get());
-    if (fileOutPos < 0) {
-        return error("WriteBlockToDisk: ftell failed");
+    uint64_t fileOutPos;
+    if (!TellFile64(fileout.Get(), fileOutPos)) {
+        return error("WriteBlockToDisk: file position query failed");
     }
 
-    pos.nPos = (unsigned int)fileOutPos;
+    pos.nPos = fileOutPos;
 
     std::vector<uint8_t> data;
     CVectorWriter{SER_DISK, CLIENT_VERSION, data, 0, block};
@@ -2973,7 +2973,7 @@ static bool PopulateBlockIndexBlockDiskMetaData(
 
     SetBlockIndexFileMetaDataIfNotSet(index, CDiskBlockMetaData{hash, size});
 
-    if(fseek(file, index.GetBlockPos().nPos, SEEK_SET) != 0)
+    if(!SeekFileAbsolute64(file, index.GetBlockPos().nPos))
     {
         // this should never happen but for some odd reason we aren't
         // able to rewind the file pointer back to the beginning
@@ -3780,11 +3780,11 @@ bool UndoWriteToDisk(const CBlockUndo &blockundo, CDiskBlockPos &pos,
     WriteIndexHeader(fileout, messageStart, GetSerializeSize(fileout, blockundo));
 
     // Write undo data
-    long fileOutPos = ftell(fileout.Get());
-    if (fileOutPos < 0) {
-        return error("%s: ftell failed", __func__);
+    uint64_t fileOutPos;
+    if (!TellFile64(fileout.Get(), fileOutPos)) {
+        return error("%s: file position query failed", __func__);
     }
-    pos.nPos = (unsigned int)fileOutPos;
+    pos.nPos = fileOutPos;
     fileout << blockundo;
 
     // calculate & write checksum
@@ -6869,7 +6869,7 @@ FILE *CDiskFiles::OpenDiskFile(const CDiskBlockPos &pos, const char *prefix,
         return nullptr;
     }
     if (pos.nPos) {
-        if (fseek(file, pos.nPos, SEEK_SET)) {
+        if (!SeekFileAbsolute64(file, pos.nPos)) {
             LogPrintf("Unable to seek to position %u of %s\n", pos.nPos,
                       path.string());
             fclose(file);

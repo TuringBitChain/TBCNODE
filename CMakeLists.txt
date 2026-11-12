@@ -4,6 +4,26 @@
 
 cmake_minimum_required(VERSION 3.5)
 project(TuringBitChain)
+
+# Keep file offsets 64-bit on POSIX, including 32-bit builds. This must apply
+# consistently before system headers are included in any target.
+if(NOT WIN32)
+    add_definitions(-D_FILE_OFFSET_BITS=64)
+    include(CheckCXXSourceCompiles)
+    set(_saved_required_definitions "${CMAKE_REQUIRED_DEFINITIONS}")
+    list(APPEND CMAKE_REQUIRED_DEFINITIONS -D_FILE_OFFSET_BITS=64)
+    check_cxx_source_compiles("#include <sys/types.h>
+        #include <limits>
+        typedef char Require64BitOffsets[
+            std::numeric_limits<off_t>::is_signed &&
+            std::numeric_limits<off_t>::digits >= 63 ? 1 : -1];
+        int main() { return 0; }" HAVE_64_BIT_FILE_OFFSETS)
+    set(CMAKE_REQUIRED_DEFINITIONS "${_saved_required_definitions}")
+    unset(_saved_required_definitions)
+    if(NOT HAVE_64_BIT_FILE_OFFSETS)
+        message(FATAL_ERROR "TBCNODE requires 64-bit POSIX file offsets")
+    endif()
+endif()
 #Reduce warnings on MSVC, to closer match GCC compiler settings
 if(POLICY CMP0092 AND MSVC)
    cmake_policy(SET CMP0092 NEW)
