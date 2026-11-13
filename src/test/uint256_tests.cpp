@@ -111,6 +111,44 @@ BOOST_AUTO_TEST_CASE(basics) {
     BOOST_CHECK(uint160(OneS) == OneS);
 }
 
+BOOST_AUTO_TEST_CASE(sethex_boundary_inputs) {
+    const std::string uint256_123 = std::string(60, '0') + "0123";
+    const std::string uint256_1234 = std::string(60, '0') + "1234";
+    const std::string uint256_111 = std::string(61, '0') + "111";
+    const std::string uint160_123 = std::string(36, '0') + "0123";
+
+    uint256 value;
+    value.SetHex("");
+    BOOST_CHECK(value.IsNull());
+    value.SetHex("g");
+    BOOST_CHECK(value.IsNull());
+    value.SetHex("0x");
+    BOOST_CHECK(value.IsNull());
+    value.SetHex("0X");
+    BOOST_CHECK(value.IsNull());
+    value.SetHex(" \t ");
+    BOOST_CHECK(value.IsNull());
+
+    value.SetHex("123");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_123);
+    value.SetHex("1234");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_1234);
+    value.SetHex("0x1234");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_1234);
+    value.SetHex("123g");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_123);
+    value.SetHex("111ggg");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_111);
+    value.SetHex("  \t123");
+    BOOST_CHECK_EQUAL(value.GetHex(), uint256_123);
+
+    uint160 small_value;
+    small_value.SetHex("");
+    BOOST_CHECK(small_value.IsNull());
+    small_value.SetHex("123");
+    BOOST_CHECK_EQUAL(small_value.GetHex(), uint160_123);
+}
+
 // <= >= < >
 BOOST_AUTO_TEST_CASE(comparison) {
     uint256 LastL;
