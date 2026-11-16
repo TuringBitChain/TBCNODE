@@ -75,6 +75,29 @@ struct ScopedGlobalBlockFileStore {
     }
 };
 
+// Store historical database values verbatim, without the corrected serializer
+// adding the extended undo size that was absent from the old record.
+struct RawBlockFileInfo {
+    std::vector<uint8_t> bytes;
+
+    template <typename Stream> void Serialize(Stream& stream) const {
+        stream.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    }
+
+    template <typename Stream> void Unserialize(Stream& stream) {
+        bytes.resize(stream.size());
+        stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+    }
+};
+
+RawBlockFileInfo LegacyFileInfoMissingUndoSize() {
+    // Captured from a cleanly stopped old node: a 41-byte undo record at
+    // 2^32 - 16 ended at 4294967321. The legacy field is UINT32_MAX, but
+    // the extended size is missing. No container length prefix is included.
+    return {{0x05, 0x86, 0x69, 0x8e, 0xfe, 0xfe, 0xfe, 0x7f, 0x00, 0x04,
+             0x83, 0xe9, 0xa6, 0xca, 0x5a, 0x85, 0xd6, 0xea, 0x9d, 0x79}};
+}
+
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(undo_file_position_tests, BasicTestingSetup)
@@ -239,9 +262,133 @@ BOOST_AUTO_TEST_CASE(file_info_database_preserves_large_undo_size) {
 
         // A fresh store models loading the persisted size after restart.
         CBlockFileInfoStore reloaded;
-        reloaded.LoadBlockFileInfo(0, db);
+        BOOST_REQUIRE(reloaded.LoadBlockFileInfo(0, db));
         BOOST_CHECK_EQUAL(reloaded.GetBlockFileInfo(0)->nUndoSize, undoSize);
         BOOST_CHECK_EQUAL(reloaded.GetBlockFileInfo(0)->nSize, original.nSize);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(file_info_rejects_legacy_missing_undo_size) {
+    IsolatedDataDir isolation;
+    CBlockTreeDB db(1 << 20, true);
+    const auto legacy = LegacyFileInfoMissingUndoSize();
+    const auto key = std::make_pair('f', 0);
+    BOOST_REQUIRE(db.Write(key, legacy));
+    BOOST_REQUIRE(db.BlockFileInfoExists(0));
+    CBlockFileInfo decoded;
+    BOOST_CHECK(!db.ReadBlockFileInfo(0, decoded));
+
+    CBlockFileInfoStore store;
+    BOOST_CHECK(!store.LoadBlockFileInfo(0, db));
+    BOOST_CHECK_THROW(store.GetBlockFileInfo(0), std::out_of_range);
+    BOOST_CHECK(store.GetAndClearDirtyFileInfo().empty());
+
+    // A rejected upgrade must not silently rewrite the original metadata.
+    RawBlockFileInfo preserved;
+    BOOST_REQUIRE(db.Read(key, preserved));
+    BOOST_CHECK_EQUAL_COLLECTIONS(legacy.bytes.begin(), legacy.bytes.end(),
+                                  preserved.bytes.begin(), preserved.bytes.end());
+}
+
+BOOST_AUTO_TEST_CASE(file_info_load_failure_keeps_previous_state) {
+    IsolatedDataDir isolation;
+    // Reject an early record, the requested last record, and a look-ahead
+    // record after one additional valid record has already been decoded.
+    for (const int badFile : {0, 2, 4}) {
+        BOOST_TEST_CONTEXT("bad file " << badFile) {
+            CBlockTreeDB db(1 << 20, true);
+            CBlockFileInfo initial;
+            initial.AddBlock(3, 100);
+            initial.nSize = 100;
+            initial.nUndoSize = 50;
+            for (const int file : {0, 1}) {
+                BOOST_REQUIRE(db.Write(std::make_pair('f', file), initial));
+            }
+            CBlockFileInfoStore store;
+            BOOST_REQUIRE(store.LoadBlockFileInfo(1, db));
+            CDataStream before(SER_DISK, CLIENT_VERSION);
+            before << *store.GetBlockFileInfo(0) << *store.GetBlockFileInfo(1);
+
+            CBlockFileInfo additional;
+            additional.AddBlock(4, 200);
+            additional.nSize = 200;
+            additional.nUndoSize = 70;
+            for (const int file : {2, 3}) {
+                BOOST_REQUIRE(db.Write(std::make_pair('f', file), additional));
+            }
+            const auto legacy = LegacyFileInfoMissingUndoSize();
+            BOOST_REQUIRE(db.Write(std::make_pair('f', badFile), legacy));
+            BOOST_CHECK(!store.LoadBlockFileInfo(2, db));
+            BOOST_CHECK_EQUAL(store.GetnLastBlockFile(), 1);
+            CDataStream after(SER_DISK, CLIENT_VERSION);
+            after << *store.GetBlockFileInfo(0) << *store.GetBlockFileInfo(1);
+            BOOST_CHECK_EQUAL_COLLECTIONS(before.begin(), before.end(),
+                                          after.begin(), after.end());
+            BOOST_CHECK_THROW(store.GetBlockFileInfo(2), std::out_of_range);
+            BOOST_CHECK(store.GetAndClearDirtyFileInfo().empty());
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(file_info_allows_empty_missing_and_pruned_records) {
+    IsolatedDataDir isolation;
+    CBlockTreeDB db(1 << 20, true);
+    CBlockFileInfoStore store;
+
+    // A new database has neither file zero nor a look-ahead record yet.
+    BOOST_CHECK(!db.BlockFileInfoExists(0));
+    BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nSize, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nUndoSize, 0U);
+    BOOST_CHECK_THROW(store.GetBlockFileInfo(1), std::out_of_range);
+
+    CBlockFileInfo current;
+    current.AddBlock(3, 100);
+    current.nSize = 100;
+    current.nUndoSize = 50;
+    BOOST_REQUIRE(db.Write(std::make_pair('f', 2), current));
+    // Preserve the existing behavior for missing keys within the main range.
+    BOOST_REQUIRE(store.LoadBlockFileInfo(2, db));
+    BOOST_CHECK_EQUAL(store.GetnLastBlockFile(), 2);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nUndoSize, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(1)->nUndoSize, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(2)->nUndoSize, 50U);
+    BOOST_CHECK(!db.BlockFileInfoExists(3));
+    BOOST_CHECK_THROW(store.GetBlockFileInfo(3), std::out_of_range);
+
+    // Pruning leaves a valid SetNull() record, rather than a malformed value.
+    CBlockFileInfo pruned;
+    BOOST_REQUIRE(db.Write(std::make_pair('f', 0), pruned));
+    BOOST_CHECK(db.BlockFileInfoExists(0));
+    BOOST_REQUIRE(store.LoadBlockFileInfo(2, db));
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nBlocks, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nSize, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nUndoSize, 0U);
+    BOOST_CHECK_EQUAL(store.GetBlockFileInfo(2)->nUndoSize, 50U);
+}
+
+BOOST_AUTO_TEST_CASE(file_info_loads_legacy_size_records) {
+    IsolatedDataDir isolation;
+    CBlockTreeDB db(1 << 20, true);
+    const std::array<RawBlockFileInfo, 2> legacy{{
+        // Old node below the marker: nUndoSize = 4294967273.
+        RawBlockFileInfo{{0x05, 0x86, 0x69, 0x8e, 0xfe, 0xfe, 0xfe, 0x69, 0x00, 0x04,
+                          0x83, 0xe9, 0xa6, 0xca, 0x5a, 0x85, 0xd6, 0xea, 0x9e, 0x3f}},
+        // At UINT32_MAX the old writer did include the extended value.
+        RawBlockFileInfo{{0x05, 0x86, 0x69, 0x8e, 0xfe, 0xfe, 0xfe, 0x7f, 0x00, 0x04,
+                          0x83, 0xe9, 0xa6, 0xca, 0x5a, 0x85, 0xd6, 0xea, 0x9e, 0x5c,
+                          0x8e, 0xfe, 0xfe, 0xfe, 0x7f}}
+    }};
+    const std::array<uint64_t, 2> sizes{{4294967273ULL, 4294967295ULL}};
+    for (size_t i = 0; i < legacy.size(); ++i) {
+        BOOST_REQUIRE(db.Write(std::make_pair('f', 0), legacy[i]));
+        CBlockFileInfo decoded;
+        BOOST_REQUIRE(db.ReadBlockFileInfo(0, decoded));
+        BOOST_CHECK_EQUAL(decoded.nUndoSize, sizes[i]);
+        CBlockFileInfoStore store;
+        BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
+        BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nUndoSize, sizes[i]);
+        BOOST_CHECK_EQUAL(store.GetBlockFileInfo(0)->nSize, 1001U);
     }
 }
 
@@ -253,7 +400,7 @@ BOOST_AUTO_TEST_CASE(undo_allocation_range_failure_keeps_metadata) {
         CBlockFileInfo info;
         BOOST_REQUIRE(db.Write(std::make_pair('f', 0), info));
         CBlockFileInfoStore store;
-        store.LoadBlockFileInfo(0, db);
+        BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
         // Exercise the new file-position range guard directly, without
         // imposing additional validation policy on the existing DB loader.
         store.GetBlockFileInfo(0)->nUndoSize = oldSize;
@@ -279,7 +426,7 @@ BOOST_AUTO_TEST_CASE(block_allocation_range_failure_keeps_state) {
         info.nUndoSize = 50;
         BOOST_REQUIRE(db.Write(std::make_pair('f', 0), info));
         CBlockFileInfoStore store;
-        store.LoadBlockFileInfo(0, db);
+        BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
 
         CDiskBlockPos position(0, known ? MAX_DISK_FILE_OFFSET : 99);
         const CDiskBlockPos beforePosition = position;
@@ -319,7 +466,7 @@ BOOST_AUTO_TEST_CASE(block_file_rotation_finalizes_old_tails) {
     BOOST_REQUIRE(db.Write(std::make_pair('f', 1), next));
     ScopedGlobalBlockFileStore globalStore;
     CBlockFileInfoStore& store = *pBlockFileInfoStore;
-    store.LoadBlockFileInfo(0, db);
+    BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
     GlobalConfig config;
     config.SetPreferredBlockFileSize(96);
 
@@ -415,7 +562,7 @@ BOOST_AUTO_TEST_CASE(undo_allocation_crosses_chunk_without_changing_prefix) {
     info.nUndoSize = oldSize;
     BOOST_REQUIRE(db.Write(std::make_pair('f', 0), info));
     CBlockFileInfoStore store;
-    store.LoadBlockFileInfo(0, db);
+    BOOST_REQUIRE(store.LoadBlockFileInfo(0, db));
     const std::array<char, 8> prefix{{'o', 'l', 'd', '-', 'u', 'n', 'd', 'o'}};
     {
         std::unique_ptr<FILE, decltype(&std::fclose)> file(

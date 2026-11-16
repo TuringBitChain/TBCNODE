@@ -137,6 +137,7 @@ public:
         const std::vector<std::pair<int, const CBlockFileInfo *>> &fileInfo,
         int nLastFile, const std::vector<const CBlockIndex *> &blockinfo);
     bool ReadBlockFileInfo(int nFile, CBlockFileInfo &fileinfo);
+    bool BlockFileInfoExists(int nFile) const;
     bool ReadLastBlockFile(int &nFile);
     bool WriteReindexing(bool fReindex);
     bool ReadReindexing(bool &fReindex);

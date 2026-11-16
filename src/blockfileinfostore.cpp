@@ -330,25 +330,38 @@ void CBlockFileInfoStore::FindFilesToPrune(std::set<int> &setFilesToPrune,
         nLastBlockWeCanPrune, count);
 }
 
-void CBlockFileInfoStore::LoadBlockFileInfo(int nLastBlockFile, CBlockTreeDB& blockTreeDb)
+bool CBlockFileInfoStore::LoadBlockFileInfo(int nLastBlockFile, CBlockTreeDB& blockTreeDb)
 {
-    this->nLastBlockFile = nLastBlockFile;
-    vinfoBlockFile.resize(nLastBlockFile + 1);
+    // Do not publish partially decoded metadata if any existing record is invalid.
+    std::vector<CBlockFileInfo> fileInfo(nLastBlockFile + 1);
     LogPrintf("%s: last block file = %i\n", __func__, nLastBlockFile);
     for (int nFile = 0; nFile <= nLastBlockFile; nFile++) {
-        blockTreeDb.ReadBlockFileInfo(nFile, vinfoBlockFile[nFile]);
+        if (!blockTreeDb.ReadBlockFileInfo(nFile, fileInfo[nFile]) &&
+            blockTreeDb.BlockFileInfoExists(nFile)) {
+            return error("%s: invalid metadata for block file %i; "
+                         "rebuild the block database with -reindex",
+                         __func__, nFile);
+        }
     }
-    LogPrintf("%s: last block file info: %s\n", __func__,
-        vinfoBlockFile[nLastBlockFile].ToString());
     for (int nFile = nLastBlockFile + 1; true; nFile++) {
         CBlockFileInfo info;
         if (blockTreeDb.ReadBlockFileInfo(nFile, info)) {
-            vinfoBlockFile.push_back(info);
+            fileInfo.push_back(info);
         }
         else {
+            if (blockTreeDb.BlockFileInfoExists(nFile)) {
+                return error("%s: invalid metadata for block file %i; "
+                             "rebuild the block database with -reindex",
+                             __func__, nFile);
+            }
             break;
         }
     }
+    vinfoBlockFile.swap(fileInfo);
+    this->nLastBlockFile = nLastBlockFile;
+    LogPrintf("%s: last block file info: %s\n", __func__,
+        vinfoBlockFile[nLastBlockFile].ToString());
+    return true;
 }
 
 void CBlockFileInfoStore::Clear()

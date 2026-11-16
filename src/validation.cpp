@@ -6981,7 +6981,9 @@ static bool LoadBlockIndexDB(const CChainParams &chainparams) {
     // Load block file info
     int nLastBlockFileLocal = 0;
     pblocktree->ReadLastBlockFile(nLastBlockFileLocal);
-    pBlockFileInfoStore->LoadBlockFileInfo(nLastBlockFileLocal, *pblocktree);
+    if (!pBlockFileInfoStore->LoadBlockFileInfo(nLastBlockFileLocal, *pblocktree)) {
+        return false;
+    }
 
     // Check presence of blk files
     LogPrintf("Checking all blk files are present...\n");
