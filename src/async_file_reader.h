@@ -9,6 +9,7 @@
 #include <string>
 
 #include "streams.h"
+#include "util.h"
 
 #ifdef _WIN32
 
@@ -36,7 +37,11 @@
             : mFile{std::move(file)}
         {
             assert(mFile);
-            mOffset = ftell(mFile.get());
+            if (!TellFile64(mFile.get(), mOffset))
+            {
+                throw std::ios_base::failure(
+                    "CAsyncFileReader: file position query failed");
+            }
             mFileId = fileno(mFile.get());
             assert(mFileId != -1);
         }
@@ -87,10 +92,20 @@
 
             if(!mReadInProgress)
             {
+                static_assert(std::numeric_limits<off_t>::is_signed &&
+                                  std::numeric_limits<off_t>::digits == 63,
+                              "AIO offsets require a signed 64-bit off_t.");
+                if (mOffset > MAX_DISK_FILE_OFFSET ||
+                    maxSize > MAX_DISK_FILE_OFFSET - mOffset)
+                {
+                    CloseFile();
+                    throw std::ios_base::failure(
+                        "CAsyncFileReader::Read: file position out of range");
+                }
                 memset(&mControllBlock, 0, sizeof(aiocb));
                 mControllBlock.aio_nbytes = maxSize;
                 mControllBlock.aio_fildes = mFileId;
-                mControllBlock.aio_offset = mOffset;
+                mControllBlock.aio_offset = static_cast<off_t>(mOffset);
                 mControllBlock.aio_buf = pch;
 
                 EnqueueReadRequest(mControllBlock);
@@ -154,7 +169,7 @@
 
         std::unique_ptr<FILE, CCloseFile> mFile;
         int mFileId;
-        size_t mOffset;
+        uint64_t mOffset{0};
         aiocb mControllBlock;
         bool mReadInProgress = false;
         bool mEndOfStream = false;

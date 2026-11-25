@@ -161,6 +161,10 @@ bool CBlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo &info) {
     return Read(std::make_pair(DB_BLOCK_FILES, nFile), info);
 }
 
+bool CBlockTreeDB::BlockFileInfoExists(int nFile) const {
+    return Exists(std::make_pair(DB_BLOCK_FILES, nFile));
+}
+
 bool CBlockTreeDB::WriteReindexing(bool fReindexing) {
     if (fReindexing)
         return Write(DB_REINDEX_FLAG, '1');

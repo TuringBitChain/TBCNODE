@@ -17,6 +17,7 @@
 #include "utiltime.h"
 
 #include <cstdarg>
+#include <cerrno>
 #include <regex>
 
 #if (defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__))
@@ -536,6 +537,45 @@ bool TryCreateDirectories(const fs::path &p) {
     return false;
 }
 
+bool SeekFileAbsolute64(FILE *file, uint64_t offset) {
+    if (!file) {
+        errno = EINVAL;
+        return false;
+    }
+    if (offset > MAX_DISK_FILE_OFFSET) {
+        errno = ERANGE;
+        return false;
+    }
+#ifdef WIN32
+    return _fseeki64(file, static_cast<int64_t>(offset), SEEK_SET) == 0;
+#else
+    static_assert(std::numeric_limits<off_t>::is_signed &&
+                      std::numeric_limits<off_t>::digits == 63,
+                  "File offsets require a signed 64-bit off_t.");
+    return fseeko(file, static_cast<off_t>(offset), SEEK_SET) == 0;
+#endif
+}
+
+bool TellFile64(FILE *file, uint64_t &offset) {
+    if (!file) {
+        errno = EINVAL;
+        return false;
+    }
+#ifdef WIN32
+    const int64_t position = _ftelli64(file);
+#else
+    static_assert(std::numeric_limits<off_t>::is_signed &&
+                      std::numeric_limits<off_t>::digits == 63,
+                  "File offsets require a signed 64-bit off_t.");
+    const off_t position = ftello(file);
+#endif
+    if (position < 0) {
+        return false;
+    }
+    offset = static_cast<uint64_t>(position);
+    return true;
+}
+
 void FileCommit(FILE *file) {
     // Harmless if redundantly called.
     fflush(file);
@@ -592,15 +632,21 @@ int RaiseFileDescriptorLimit(int nMinFD) {
  * (corresponding to disk space) it is advisory, and the range specified in the
  * arguments will never contain live data.
  */
-void AllocateFileRange(FILE *file, unsigned int offset, uint64_t length) {
+void AllocateFileRange(FILE *file, uint64_t offset, uint64_t length) {
+    if (offset > MAX_DISK_FILE_OFFSET ||
+        length > MAX_DISK_FILE_OFFSET - offset) {
+        errno = ERANGE;
+        return;
+    }
+    const uint64_t end = offset + length;
 #if defined(WIN32)
     // Windows-specific version.
     HANDLE hFile = (HANDLE)_get_osfhandle(_fileno(file));
     LARGE_INTEGER nFileSize;
-    int64_t nEndPos = (int64_t)offset + length;
-    nFileSize.u.LowPart = nEndPos & 0xFFFFFFFF;
-    nFileSize.u.HighPart = nEndPos >> 32;
-    SetFilePointerEx(hFile, nFileSize, 0, FILE_BEGIN);
+    nFileSize.QuadPart = static_cast<int64_t>(end);
+    if (!SetFilePointerEx(hFile, nFileSize, nullptr, FILE_BEGIN)) {
+        return;
+    }
     SetEndOfFile(hFile);
 #elif defined(__APPLE__)
     // OSX specific version.
@@ -608,7 +654,7 @@ void AllocateFileRange(FILE *file, unsigned int offset, uint64_t length) {
     fst.fst_flags = F_ALLOCATECONTIG;
     fst.fst_posmode = F_PEOFPOSMODE;
     fst.fst_offset = 0;
-    fst.fst_length = (off_t)offset + length;
+    fst.fst_length = static_cast<off_t>(end);
     fst.fst_bytesalloc = 0;
     if (fcntl(fileno(file), F_PREALLOCATE, &fst) == -1) {
         fst.fst_flags = F_ALLOCATEALL;
@@ -617,19 +663,20 @@ void AllocateFileRange(FILE *file, unsigned int offset, uint64_t length) {
     ftruncate(fileno(file), fst.fst_length);
 #elif defined(__linux__)
     // Version using posix_fallocate.
-    off_t nEndPos = (off_t)offset + length;
-    posix_fallocate(fileno(file), 0, nEndPos);
+    posix_fallocate(fileno(file), 0, static_cast<off_t>(end));
 #else
     // Fallback version
     // TODO: just write one byte per block
     static const char buf[65536] = {};
-    fseek(file, offset, SEEK_SET);
-    while (length > 0) {
-        unsigned int now = 65536;
-        if (length < now) now = length;
+    if (!SeekFileAbsolute64(file, offset)) {
+        return;
+    }
+    while (offset < end) {
+        const size_t now = static_cast<size_t>(
+            std::min<uint64_t>(end - offset, sizeof(buf)));
         // Allowed to fail; this function is advisory anyway.
         fwrite(buf, 1, now, file);
-        length -= now;
+        offset += now;
     }
 #endif
 }

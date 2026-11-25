@@ -40,7 +40,7 @@ public:
 
     void FlushBlockFile(bool fFinalize = false);
 
-    void LoadBlockFileInfo(int nLastBlockFile, CBlockTreeDB& blockTreeDb);
+    bool LoadBlockFileInfo(int nLastBlockFile, CBlockTreeDB& blockTreeDb);
 
     // Returns all dirty files infos and clears the set that indicates which are dirty
     std::vector<std::pair<int, const CBlockFileInfo *>> GetAndClearDirtyFileInfo();
